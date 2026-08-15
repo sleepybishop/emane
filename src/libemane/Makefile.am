@@ -8,13 +8,13 @@ libemane_la_CPPFLAGS =  \
  $(AM_CPPFLAGS)         \
  $(libemane_CFLAGS)
 
-libemane_la_DEPENDENCIES = ../../rust/emane-core/target/debug/libemane_core.a
+libemane_la_DEPENDENCIES = $(top_srcdir)/target/debug/libemane_core.a
 
-../../rust/emane-core/target/debug/libemane_core.a:
-	cd ../../rust/emane-core && cargo build
+$(top_srcdir)/target/debug/libemane_core.a:
+	cd $(top_srcdir)/rust/emane-core && cargo build
 
 libemane_la_LIBADD=      \
- ../../rust/emane-core/target/debug/libemane_core.a \
+ $(top_srcdir)/target/debug/libemane_core.a \
  -lrt                    \
  $(libxml2_LIBS)         \
  $(protobuf_LIBS)        \
