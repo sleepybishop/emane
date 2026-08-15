@@ -36,6 +36,10 @@
 
 #include "propagationmodelalgorithm.h"
 
+extern "C" {
+  double emane_rs_tworay_pathloss(double dDistance, double dLocalAlt, double dRemoteAlt);
+}
+
 namespace EMANE
 {
   class TwoRayPropagationModelAlgorithm : public PropagationModelAlgorithm
@@ -63,11 +67,7 @@ namespace EMANE
 
 	  double dRemoteAlt{locationPairInfo.getRemotePOV().getPosition().getAltitudeMeters()};
 
-          dPathloss =
-            (40.0 * log10(dDistance)) -
-            (20.0 *
-             (log10(dLocalAlt < 1.0 ? 1.0 : dLocalAlt) +
-              log10(dRemoteAlt < 1.0 ? 1.0 : dRemoteAlt)));
+          dPathloss = emane_rs_tworay_pathloss(dDistance, dLocalAlt, dRemoteAlt);
         }
 
       return {std::vector<double>(segments.size(),dPathloss < 0 ? 0 : dPathloss),true};
