@@ -34,7 +34,8 @@
 #include "configurationservice.h"
 #include "emane/registrarexception.h"
 
-#include <pcre.h>
+#define PCRE2_CODE_UNIT_WIDTH 8
+#include <pcre2.h>
 
 EMANE::ConfigurationService::ConfigurationService(){}
 
@@ -109,27 +110,30 @@ void EMANE::ConfigurationService::registerAny(BuildId buildId,
   // check the regex is valid if defined
   if(!configurationInfo.getRegexPattern().empty())
     {
-      pcre * pPCRE{};
-      const char * pError{};
-      int iErrorOffset{};
+      pcre2_code * pPCRE{};
+      int iErrorCode{};
+      PCRE2_SIZE iErrorOffset{};
 
-      pPCRE = pcre_compile(configurationInfo.getRegexPattern().c_str(),
-                           0,
-                           &pError,
-                           &iErrorOffset,
-                           0);
+      pPCRE = pcre2_compile(reinterpret_cast<PCRE2_SPTR>(configurationInfo.getRegexPattern().c_str()),
+                            PCRE2_ZERO_TERMINATED,
+                            0,
+                            &iErrorCode,
+                            &iErrorOffset,
+                            nullptr);
 
       if(!pPCRE)
         {
-          throw makeException<RegistrarException>("Bad regex pattern defined for %s: %s (offset:%i) %s",
+          PCRE2_UCHAR buffer[256];
+          pcre2_get_error_message(iErrorCode, buffer, sizeof(buffer));
+          throw makeException<RegistrarException>("Bad regex pattern defined for %s: %s (offset:%zu) %s",
                                                   sName.c_str(),
                                                   configurationInfo.getRegexPattern().c_str(),
                                                   iErrorOffset,
-                                                  pError);
+                                                  reinterpret_cast<char*>(buffer));
         }
       else
         {
-          pcre_free(pPCRE);
+          pcre2_code_free(pPCRE);
         }
 
     }
@@ -251,20 +255,21 @@ EMANE::ConfigurationService::buildUpdates(BuildId buildId,
               if(paramIter.second.size() >= infoIter->second.getMinOccurs() &&
                  paramIter.second.size() <= infoIter->second.getMaxOccurs())
                 {
-                  pcre * pPCRE{};
-                  const char * pError{};
-                  int iErrorOffset{};
+                  pcre2_code * pPCRE{};
+                  int iErrorCode{};
+                  PCRE2_SIZE iErrorOffset{};
 
                   // if regex defined, verify a match
                   const std::string & sRegexPattern = infoIter->second.getRegexPattern();
 
                   if(!sRegexPattern.empty())
                     {
-                      pPCRE = pcre_compile(sRegexPattern.c_str(),
-                                           0,
-                                           &pError,
-                                           &iErrorOffset,
-                                           0);
+                      pPCRE = pcre2_compile(reinterpret_cast<PCRE2_SPTR>(sRegexPattern.c_str()),
+                                            PCRE2_ZERO_TERMINATED,
+                                            0,
+                                            &iErrorCode,
+                                            &iErrorOffset,
+                                            nullptr);
                     }
 
                   std::vector<Any> anys;
@@ -294,14 +299,16 @@ EMANE::ConfigurationService::buildUpdates(BuildId buildId,
 
                           if(pPCRE)
                             {
-                              if(pcre_exec(pPCRE,
-                                           nullptr,
-                                           value.c_str(),
-                                           value.size(),
-                                           0,
-                                           0,
-                                           0,
-                                           0) < 0)
+                              pcre2_match_data *match_data = pcre2_match_data_create_from_pattern(pPCRE, nullptr);
+                              int rc = pcre2_match(pPCRE,
+                                                   reinterpret_cast<PCRE2_SPTR>(value.c_str()),
+                                                   value.size(),
+                                                   0,
+                                                   0,
+                                                   match_data,
+                                                   nullptr);
+                              pcre2_match_data_free(match_data);
+                              if(rc < 0)
                                 {
                                   throw makeException<ConfigurationException>("Regular expression mismatch %s set to %s (%s)",
                                                                               paramIter.first.c_str(),
@@ -325,7 +332,7 @@ EMANE::ConfigurationService::buildUpdates(BuildId buildId,
 
                   if(pPCRE)
                     {
-                      pcre_free(pPCRE);
+                      pcre2_code_free(pPCRE);
                     }
                 }
               else
@@ -448,20 +455,21 @@ void EMANE::ConfigurationService::update(BuildId buildId,
               if(update.second.size() >= infoIter->second.getMinOccurs() &&
                  update.second.size() <= infoIter->second.getMaxOccurs())
                 {
-                  pcre * pPCRE{};
-                  const char * pError{};
-                  int iErrorOffset{};
+                  pcre2_code * pPCRE{};
+                  int iErrorCode{};
+                  PCRE2_SIZE iErrorOffset{};
 
                   // if regex defined, verify a match
                   const std::string & sRegexPattern = infoIter->second.getRegexPattern();
 
                   if(!sRegexPattern.empty())
                     {
-                      pPCRE = pcre_compile(sRegexPattern.c_str(),
-                                           0,
-                                           &pError,
-                                           &iErrorOffset,
-                                           0);
+                      pPCRE = pcre2_compile(reinterpret_cast<PCRE2_SPTR>(sRegexPattern.c_str()),
+                                            PCRE2_ZERO_TERMINATED,
+                                            0,
+                                            &iErrorCode,
+                                            &iErrorOffset,
+                                            nullptr);
                     }
 
                   std::vector<Any> anys;
@@ -495,14 +503,16 @@ void EMANE::ConfigurationService::update(BuildId buildId,
                         {
                           std::string sValue{value.toString()};
 
-                          if(pcre_exec(pPCRE,
-                                       nullptr,
-                                       sValue.c_str(),
-                                       sValue.size(),
-                                       0,
-                                       0,
-                                       0,
-                                       0) < 0)
+                          pcre2_match_data *match_data = pcre2_match_data_create_from_pattern(pPCRE, nullptr);
+                          int rc = pcre2_match(pPCRE,
+                                               reinterpret_cast<PCRE2_SPTR>(sValue.c_str()),
+                                               sValue.size(),
+                                               0,
+                                               0,
+                                               match_data,
+                                               nullptr);
+                          pcre2_match_data_free(match_data);
+                          if(rc < 0)
                             {
                               throw makeException<ConfigurationException>("Regular expression mismatch %s set to %s (%s)",
                                                                           update.first.c_str(),
@@ -515,7 +525,7 @@ void EMANE::ConfigurationService::update(BuildId buildId,
 
                   if(pPCRE)
                     {
-                      pcre_free(pPCRE);
+                      pcre2_code_free(pPCRE);
                     }
                 }
               else

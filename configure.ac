@@ -80,7 +80,7 @@ AC_ARG_VAR([pcap_LIBS], [linker flags for libpcap])
 
 PKG_CHECK_MODULES([libxml2], libxml-2.0)
 PKG_CHECK_MODULES([protobuf], protobuf)
-PKG_CHECK_MODULES([libpcre], libpcre)
+PKG_CHECK_MODULES([libpcre], libpcre2-8)
 PKG_CHECK_MODULES([libuuid], uuid)
 
 AC_CHECK_HEADER(sys/timerfd.h,
