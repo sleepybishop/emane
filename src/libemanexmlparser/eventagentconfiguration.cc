@@ -33,7 +33,7 @@
 
 #include "eventagentconfiguration.h"
 
-#include <libxml/tree.h>
+#include "emanexml.h"
 
 
 EMANE::EventAgentConfiguration::EventAgentConfiguration(

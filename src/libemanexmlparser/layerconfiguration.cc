@@ -39,7 +39,7 @@
 
 #include <cstdlib>
 #include <memory>
-#include <libxml/xmlstring.h>
+#include "emanexml.h"
 
 
 EMANE::LayerConfiguration::LayerConfiguration(std::string sType) : 

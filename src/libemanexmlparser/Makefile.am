@@ -2,11 +2,12 @@ lib_LTLIBRARIES = libemanexmlparser.la
 
 libemanexmlparser_la_CPPFLAGS= \
  -I@top_srcdir@/include        \
- $(AM_CPPFLAGS)                \
- $(libxml2_CFLAGS)
+ $(AM_CPPFLAGS)
+
+libemanexmlparser_la_DEPENDENCIES = $(top_srcdir)/target/debug/libemane_core.a
 
 libemanexmlparser_la_LIBADD= \
- $(libxml2_LIBS)
+ $(top_srcdir)/target/debug/libemane_core.a
 
 libemanexmlparser_la_LDFLAGS= \
  $(AM_LDFLAGS)                \

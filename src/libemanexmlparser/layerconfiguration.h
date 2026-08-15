@@ -41,7 +41,7 @@
 #include <string>
 #include <map>
 
-#include <libxml/tree.h>
+#include "emanexml.h"
 
 namespace EMANE
 {

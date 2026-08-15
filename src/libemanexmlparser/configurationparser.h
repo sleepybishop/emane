@@ -38,8 +38,8 @@
 
 #include <string>
 
-#include <libxml/parser.h>
-#include <libxml/tree.h>
+#include "emanexml.h"
+#include "emanexml.h"
 
 
 namespace EMANE
@@ -75,11 +75,6 @@ namespace EMANE
     xmlDocPtr parse(const std::string &sURI);
     
   private:
-    /**
-     * Parser context for libxml2
-     */
-    xmlParserCtxtPtr pContext_;
-
   };
 }
 

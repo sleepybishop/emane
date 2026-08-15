@@ -32,7 +32,7 @@
  */
 
 #include "eventgeneratorconfiguration.h"
-#include <libxml/tree.h>
+#include "emanexml.h"
 
 
 EMANE::EventGeneratorConfiguration::EventGeneratorConfiguration(

@@ -34,7 +34,7 @@
 #include "platformconfiguration.h"
 #include "configurationparser.h"
 
-#include <libxml/tree.h>
+#include "emanexml.h"
 
 
 EMANE::PlatformConfiguration::PlatformConfiguration(const std::string &sFile)

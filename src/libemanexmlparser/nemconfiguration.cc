@@ -36,7 +36,7 @@
 
 #include "emane/exception.h"
 
-#include <libxml/tree.h>
+#include "emanexml.h"
 
 
 EMANE::NEMConfiguration::NEMConfiguration(xmlNodePtr pNEMNode,
