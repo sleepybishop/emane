@@ -32,7 +32,32 @@
  */
 
 #include "emane/events/pathlossevent.h"
-#include "pathlossevent.pb.h"
+#include <cstring>
+
+extern "C" {
+    struct EmaneRsPathloss {
+        uint32_t nem_id;
+        float forward_pathloss_db;
+        float reverse_pathloss_db;
+    };
+
+    uint8_t* emane_rs_pathloss_event_serialize(
+        const EmaneRsPathloss* pathlosses,
+        size_t num_pathlosses,
+        size_t* out_len
+    );
+
+    void emane_rs_pathloss_event_free_serialize(uint8_t* ptr, size_t len);
+
+    bool emane_rs_pathloss_event_deserialize(
+        const uint8_t* buf,
+        size_t len,
+        EmaneRsPathloss** out_pathlosses,
+        size_t* out_num
+    );
+
+    void emane_rs_pathloss_event_free_deserialize(EmaneRsPathloss* ptr, size_t len);
+}
 
 class EMANE::Events::PathlossEvent::Implementation
 {
@@ -52,20 +77,29 @@ private:
 EMANE::Events::PathlossEvent::PathlossEvent(const Serialization & serialization):
   Event(IDENTIFIER)
 {
-  EMANEMessage::PathlossEvent msg;
+  EmaneRsPathloss* out_pathlosses = nullptr;
+  size_t out_num = 0;
 
-  if(!msg.ParseFromString(serialization))
+  if(!emane_rs_pathloss_event_deserialize(
+      reinterpret_cast<const uint8_t*>(serialization.c_str()),
+      serialization.size(),
+      &out_pathlosses,
+      &out_num))
     {
       throw SerializationException("unable to deserialize PathlossEvent");
     }
 
   Pathlosses pathlosses;
 
-  for(const auto & pathloss : msg.pathlosses())
+  if (out_pathlosses && out_num > 0)
     {
-      pathlosses.push_back({static_cast<EMANE::NEMId>(pathloss.nemid()),
-            pathloss.forwardpathlossdb(),
-            pathloss.reversepathlossdb()});
+      for(size_t i = 0; i < out_num; ++i)
+        {
+          pathlosses.push_back({static_cast<EMANE::NEMId>(out_pathlosses[i].nem_id),
+                out_pathlosses[i].forward_pathloss_db,
+                out_pathlosses[i].reverse_pathloss_db});
+        }
+      emane_rs_pathloss_event_free_deserialize(out_pathlosses, out_num);
     }
 
   pImpl_.reset(new Implementation{pathlosses});
@@ -107,25 +141,33 @@ const EMANE::Events::Pathlosses & EMANE::Events::PathlossEvent::getPathlosses() 
 
 EMANE::Serialization EMANE::Events::PathlossEvent::serialize() const
 {
-  Serialization serialization;
-
-  EMANEMessage::PathlossEvent msg;
-
-  for(auto & pathloss : pImpl_->getPathlosses())
+  const auto & pathlosses = pImpl_->getPathlosses();
+  std::vector<EmaneRsPathloss> rs_pathlosses;
+  rs_pathlosses.reserve(pathlosses.size());
+  
+  for(auto & pathloss : pathlosses)
     {
-      auto pPathlossMessage = msg.add_pathlosses();
-
-      pPathlossMessage->set_nemid(pathloss.getNEMId());
-
-      pPathlossMessage->set_forwardpathlossdb(pathloss.getForwardPathlossdB());
-
-      pPathlossMessage->set_reversepathlossdb(pathloss.getReversePathlossdB());
+      EmaneRsPathloss rs_pathloss;
+      rs_pathloss.nem_id = pathloss.getNEMId();
+      rs_pathloss.forward_pathloss_db = pathloss.getForwardPathlossdB();
+      rs_pathloss.reverse_pathloss_db = pathloss.getReversePathlossdB();
+      rs_pathlosses.push_back(rs_pathloss);
     }
 
-  if(!msg.SerializeToString(&serialization))
+  size_t out_len = 0;
+  uint8_t* ptr = emane_rs_pathloss_event_serialize(
+      rs_pathlosses.empty() ? nullptr : rs_pathlosses.data(),
+      rs_pathlosses.size(),
+      &out_len
+  );
+
+  if(!ptr)
     {
       throw SerializationException("unable to serialize PathlossEvent");
     }
+
+  Serialization serialization(reinterpret_cast<const char*>(ptr), out_len);
+  emane_rs_pathloss_event_free_serialize(ptr, out_len);
 
   return serialization;
 }
