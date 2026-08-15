@@ -32,3 +32,90 @@ pub extern "C" fn emane_rs_freespace_pathloss_single(d_distance: f64, freq_hz: f
     let val = 20.0 * (FSPL_CONST * (freq_hz / 1000000.0) * (d_distance / 1000.0)).log10();
     if val < 0.0 { 0.0 } else { val }
 }
+
+/// Strangler Fig: Phase 1
+/// Stateful Lognormal Fading Algorithm
+use rand::rngs::StdRng;
+use rand::SeedableRng;
+use rand_distr::{Normal, LogNormal, Distribution};
+
+#[repr(C)]
+pub struct LognormalFadingParameters {
+    pub dmu: f64,
+    pub dsigma: f64,
+    pub dlthresh: f64,
+    pub maxpathloss: f64,
+    pub duthresh: f64,
+    pub minpathloss: f64,
+    pub lmean: f64,
+    pub lstddev: f64,
+    pub counter: u32,
+}
+
+pub struct LognormalFadingState {
+    param_counter: u32,
+    reset: bool,
+    depth_dbm: f64,
+    nexttime_microsec: u64,
+    rng: StdRng,
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_lognormal_fading_new() -> *mut LognormalFadingState {
+    Box::into_raw(Box::new(LognormalFadingState {
+        param_counter: 0,
+        reset: true,
+        depth_dbm: 0.0,
+        nexttime_microsec: 0,
+        rng: StdRng::seed_from_u64(5489),
+    }))
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_lognormal_fading_free(state: *mut LognormalFadingState) {
+    if !state.is_null() {
+        unsafe { drop(Box::from_raw(state)); }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_lognormal_fading_process(
+    state_ptr: *mut LognormalFadingState,
+    power_dbm: f64,
+    params: *const LognormalFadingParameters,
+    now_microsec: u64,
+) -> f64 {
+    if state_ptr.is_null() || params.is_null() {
+        return 0.0; // Fallback
+    }
+    
+    let state = unsafe { &mut *state_ptr };
+    let p = unsafe { &*params };
+    
+    if p.counter != state.param_counter {
+        state.reset = true;
+        state.param_counter = p.counter;
+    }
+    
+    if state.reset || now_microsec >= state.nexttime_microsec {
+        let l_dist = Normal::new(p.lmean, p.lstddev).unwrap();
+        let next_ms = l_dist.sample(&mut state.rng) as u64;
+        state.nexttime_microsec = now_microsec + (next_ms * 1000);
+        
+        let d_dist = LogNormal::new(p.dmu, p.dsigma).unwrap();
+        let depth_norm = d_dist.sample(&mut state.rng);
+        
+        if depth_norm <= p.dlthresh {
+            state.depth_dbm = p.maxpathloss;
+        } else if depth_norm >= p.duthresh {
+            state.depth_dbm = p.minpathloss;
+        } else {
+            state.depth_dbm = ((depth_norm - p.dlthresh) / (p.duthresh - p.dlthresh)) * (p.minpathloss - p.maxpathloss) + p.maxpathloss;
+        }
+        state.reset = false;
+    }
+    
+    // DB_TO_MILLIWATT calculation
+    let target_dbm = power_dbm - state.depth_dbm;
+    10.0_f64.powf(target_dbm / 10.0)
+}

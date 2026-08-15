@@ -30,6 +30,26 @@
 #include "emane/utils/conversionutils.h"
 #include <random>
 
+extern "C" {
+  struct LognormalFadingState;
+  
+  struct LognormalFadingParameters {
+    double dmu;
+    double dsigma;
+    double dlthresh;
+    double maxpathloss;
+    double duthresh;
+    double minpathloss;
+    double lmean;
+    double lstddev;
+    unsigned int counter;
+  };
+
+  LognormalFadingState* emane_rs_lognormal_fading_new();
+  void emane_rs_lognormal_fading_free(LognormalFadingState* state);
+  double emane_rs_lognormal_fading_process(LognormalFadingState* state, double power_dbm, const LognormalFadingParameters* params, uint64_t now_microsec);
+}
+
 namespace EMANE
 {
   class LognormalFadingAlgorithm: public FadingAlgorithm
@@ -55,50 +75,16 @@ namespace EMANE
 
     double operator()(double dPowerdBm, double, const void * pParams) override
     {
-      auto pLognormalFadingParameters = reinterpret_cast<const Parameters *>(pParams);
-
-      if(pLognormalFadingParameters->counter_ != param_counter_)
-        {
-          reset_ = true;
-          param_counter_ = pLognormalFadingParameters->counter_;
-	}
+      auto pLognormalFadingParameters = reinterpret_cast<const LognormalFadingParameters *>(pParams);
 
       TimePoint now=Clock::now();
-      if(reset_ || now>=nexttime_)
-        {
-          // start new fading period
-          // ignoring any difference in time from end of last fading period to now
-          nexttime_=now+std::chrono::duration_cast< std::chrono::milliseconds >((DoubleSeconds)ldistribution_(generator_, NormalDistribution::param_type{pLognormalFadingParameters->lmean_, pLognormalFadingParameters->lstddev_}));
-          double depthNorm=ddistribution_(generator_, LognormalDistribution::param_type{pLognormalFadingParameters->dmu_, pLognormalFadingParameters->dsigma_});
-          // convert normalized depth into dBm depth
-          if(depthNorm <= pLognormalFadingParameters->dlthresh_)
-            {
-              depthdBm_ = pLognormalFadingParameters->maxpathloss_;
-            }
-          else if(depthNorm >= pLognormalFadingParameters->duthresh_)
-            {
-              depthdBm_ = pLognormalFadingParameters->minpathloss_;
-            }
-          else
-            {
-              // linear approximation
-              depthdBm_ = ((depthNorm - pLognormalFadingParameters->dlthresh_) / (pLognormalFadingParameters->duthresh_ - pLognormalFadingParameters->dlthresh_)) * (pLognormalFadingParameters->minpathloss_ - pLognormalFadingParameters->maxpathloss_) + pLognormalFadingParameters->maxpathloss_;
-            }
-	  reset_ = false;
-	}
-      return Utils::DB_TO_MILLIWATT(dPowerdBm-depthdBm_);
+      auto now_microsec = std::chrono::time_point_cast<std::chrono::microseconds>(now).time_since_epoch().count();
+
+      return emane_rs_lognormal_fading_process(pState_, dPowerdBm, pLognormalFadingParameters, now_microsec);
     }
 
   private:
-    unsigned int param_counter_ = 0;
-    bool reset_ = true;
-    double depthdBm_;
-    TimePoint nexttime_;
-    std::mt19937 generator_;
-    using  LognormalDistribution = std::lognormal_distribution<>;
-    LognormalDistribution ddistribution_;
-    using  NormalDistribution = std::normal_distribution<>;
-    NormalDistribution ldistribution_;
+    LognormalFadingState* pState_;
   };
 }
 

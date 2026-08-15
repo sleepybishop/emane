@@ -27,7 +27,11 @@
 
 EMANE::LognormalFadingAlgorithm::LognormalFadingAlgorithm(NEMId id,
                                                         PlatformServiceProvider * pPlatformService):
-  FadingAlgorithm{id,pPlatformService}{}
+  FadingAlgorithm{id,pPlatformService},
+  pState_{emane_rs_lognormal_fading_new()}{}
 
 
-EMANE::LognormalFadingAlgorithm::~LognormalFadingAlgorithm(){}
+EMANE::LognormalFadingAlgorithm::~LognormalFadingAlgorithm()
+{
+  emane_rs_lognormal_fading_free(pState_);
+}
