@@ -20,3 +20,15 @@ pub extern "C" fn emane_rs_tworay_pathloss(d_distance: f64, d_local_alt: f64, d_
     
     if pathloss < 0.0 { 0.0 } else { pathloss }
 }
+
+/// Strangler Fig: Phase 1
+/// Calculates the FreeSpace pathloss for a single frequency.
+#[no_mangle]
+pub extern "C" fn emane_rs_freespace_pathloss_single(d_distance: f64, freq_hz: f64) -> f64 {
+    const FSPL_CONST: f64 = 41.916900439033640;
+    if d_distance == 0.0 {
+        return 0.0;
+    }
+    let val = 20.0 * (FSPL_CONST * (freq_hz / 1000000.0) * (d_distance / 1000.0)).log10();
+    if val < 0.0 { 0.0 } else { val }
+}

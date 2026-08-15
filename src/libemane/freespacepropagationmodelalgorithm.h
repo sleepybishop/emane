@@ -36,6 +36,10 @@
 
 #include "propagationmodelalgorithm.h"
 
+extern "C" {
+  double emane_rs_freespace_pathloss_single(double dDistance, double freqHz);
+}
+
 namespace EMANE
 {
   class FreeSpacePropagationModelAlgorithm : public PropagationModelAlgorithm
@@ -47,8 +51,6 @@ namespace EMANE
                                                     const LocationInfo & locationInfo,
                                                     const FrequencySegments & segments) override
     {
-      const double FSPL_CONST{41.916900439033640};
-
       // at least one location is unknown
       if(!locationInfo.isValid())
         {
@@ -65,10 +67,7 @@ namespace EMANE
 
           for(const auto & segment : segments)
             {
-              auto val =
-                20.0 * log10(FSPL_CONST * (segment.getFrequencyHz() / 1000000.0) * (dDistance / 1000.0));
-
-              pathloss[i++] = val < 0 ? 0 : val;
+              pathloss[i++] = emane_rs_freespace_pathloss_single(dDistance, segment.getFrequencyHz());
             }
         }
 
