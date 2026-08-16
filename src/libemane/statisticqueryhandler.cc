@@ -31,7 +31,7 @@
  */
 
 #include "statisticqueryhandler.h"
-#include "statisticservice.h"
+#include "rust_ffi.h"
 #include "emane/serializationexception.h"
 #include "emane/registrarexception.h"
 #include "anyutils.h"
@@ -41,41 +41,57 @@ EMANE::ControlPort::StatisticQueryHandler::process(const EMANERemoteControlPortA
                                                    std::uint32_t u32Sequence,
                                                    std::uint32_t u32Reference)
 {
-  std::vector<std::string> names;
-
+  std::vector<const char*> c_names;
   for(int i = 0; i < statistic.names_size(); ++i)
     {
-      names.push_back(statistic.names(i));
+      c_names.push_back(statistic.names(i).c_str());
     }
 
   EMANERemoteControlPortAPI::Response response;
 
   try
     {
-      auto statisticValues =
-        StatisticServiceSingleton::instance()->queryStatistic(statistic.buildid(),names);
+      FfiStringArray ffiNames{c_names.empty() ? nullptr : c_names.data(), c_names.size()};
+      char err_buf[256] = {0};
+      FfiStatisticQueryResult update = emane_rs_statistic_query(statistic.buildid(), ffiNames, err_buf, sizeof(err_buf));
 
-
-      response.set_type(EMANERemoteControlPortAPI::Response::TYPE_RESPONSE_QUERY);
-
-      auto pQuery = response.mutable_query();
-
-      pQuery->set_type(EMANERemoteControlPortAPI::TYPE_QUERY_STATISTIC);
-
-      auto pStatistic = pQuery->mutable_statistic();
-
-      pStatistic->set_buildid(statistic.buildid());
-
-      for(const auto & entry : statisticValues)
+      if (err_buf[0] != '\0')
         {
-          auto pElement = pStatistic->add_elements();
+          response.set_type(EMANERemoteControlPortAPI::Response::TYPE_RESPONSE_ERROR);
 
-          pElement->set_name(entry.first);
+          auto pError = response.mutable_error();
 
-          auto pValue = pElement->mutable_value();
+          pError->set_type(EMANERemoteControlPortAPI::Response::Error::TYPE_ERROR_PARAMETER);
 
-          convertToAny(pValue,entry.second);
+          pError->set_description(err_buf);
         }
+      else
+        {
+          response.set_type(EMANERemoteControlPortAPI::Response::TYPE_RESPONSE_QUERY);
+
+          auto pQuery = response.mutable_query();
+
+          pQuery->set_type(EMANERemoteControlPortAPI::TYPE_QUERY_STATISTIC);
+
+          auto pStatistic = pQuery->mutable_statistic();
+
+          pStatistic->set_buildid(statistic.buildid());
+
+          for(size_t i = 0; i < update.len; ++i)
+            {
+              const auto & item = update.data[i];
+              auto pElement = pStatistic->add_elements();
+
+              pElement->set_name(item.name);
+
+              auto pValue = pElement->mutable_value();
+              
+              EMANE::Any any = EMANE::convertFfiToAny(item.value);
+              convertToAny(pValue, any);
+            }
+        }
+        
+      emane_rs_statistic_free_query_result(update);
     }
   catch(RegistrarException & exp)
     {

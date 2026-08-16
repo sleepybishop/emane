@@ -31,7 +31,7 @@
  */
 
 #include "statistictablequeryhandler.h"
-#include "statisticservice.h"
+#include "rust_ffi.h"
 #include "emane/serializationexception.h"
 #include "emane/registrarexception.h"
 #include "anyutils.h"
@@ -41,56 +41,72 @@ EMANE::ControlPort::StatisticTableQueryHandler::process(const EMANERemoteControl
                                                         std::uint32_t u32Sequence,
                                                         std::uint32_t u32Reference)
 {
-  std::vector<std::string> names;
-
+  std::vector<const char*> c_names;
   for(int i = 0; i < statisticTable.names_size(); ++i)
     {
-      names.push_back(statisticTable.names(i));
+      c_names.push_back(statisticTable.names(i).c_str());
     }
 
   EMANERemoteControlPortAPI::Response response;
 
   try
     {
-      auto statisticTableInfo =
-        StatisticServiceSingleton::instance()->queryTable(statisticTable.buildid(),names);
+      FfiStringArray ffiNames{c_names.empty() ? nullptr : c_names.data(), c_names.size()};
+      char err_buf[256] = {0};
+      FfiStatisticTableQueryResult update = emane_rs_statistic_query_table(statisticTable.buildid(), ffiNames, err_buf, sizeof(err_buf));
 
-      response.set_type(EMANERemoteControlPortAPI::Response::TYPE_RESPONSE_QUERY);
-
-      auto pQuery = response.mutable_query();
-
-      pQuery->set_type(EMANERemoteControlPortAPI::TYPE_QUERY_STATISTICTABLE);
-
-      auto pStatisticTable = pQuery->mutable_statistictable();
-
-      pStatisticTable->set_buildid(statisticTable.buildid());
-
-      for(const auto & table : statisticTableInfo)
+      if (err_buf[0] != '\0')
         {
-          auto pTable = pStatisticTable->add_tables();
+          response.set_type(EMANERemoteControlPortAPI::Response::TYPE_RESPONSE_ERROR);
 
-          pTable->set_name(table.first);
+          auto pError = response.mutable_error();
 
-          for(const auto & row : table.second.second)
-            {
-              auto pRow = pTable->add_rows();
+          pError->set_type(EMANERemoteControlPortAPI::Response::Error::TYPE_ERROR_PARAMETER);
 
-              for_each(row.begin(),
-                       row.end(),
-                       [pRow](const Any & any)
-                       {
-                         auto pValue = pRow->add_values();
-                         convertToAny(pValue,any);
-                       });
-            }
-
-          std::for_each(table.second.first.begin(),
-                        table.second.first.end(),
-                        [pTable](const std::string & sLabel)
-                        {
-                          pTable->add_labels(sLabel);
-                        });
+          pError->set_description(err_buf);
         }
+      else
+        {
+          response.set_type(EMANERemoteControlPortAPI::Response::TYPE_RESPONSE_QUERY);
+
+          auto pQuery = response.mutable_query();
+
+          pQuery->set_type(EMANERemoteControlPortAPI::TYPE_QUERY_STATISTICTABLE);
+
+          auto pStatisticTable = pQuery->mutable_statistictable();
+
+          pStatisticTable->set_buildid(statisticTable.buildid());
+
+          for(size_t i = 0; i < update.len; ++i)
+            {
+              const auto & tableItem = update.data[i];
+              auto pTable = pStatisticTable->add_tables();
+
+              pTable->set_name(tableItem.name);
+
+              for(size_t l = 0; l < tableItem.labels.len; ++l)
+                {
+                  pTable->add_labels(tableItem.labels.data[l]);
+                }
+
+              size_t num_cols = tableItem.labels.len;
+              size_t num_rows = tableItem.rows_len;
+
+              for(size_t r = 0; r < num_rows; ++r)
+                {
+                  auto pRow = pTable->add_rows();
+                  for(size_t c = 0; c < num_cols; ++c)
+                    {
+                      const auto & ffiAny = tableItem.rows[r].values.data[c];
+                      auto pValue = pRow->add_values();
+                      EMANE::Any any = EMANE::convertFfiToAny(ffiAny);
+                      convertToAny(pValue, any);
+                    }
+                }
+            }
+        }
+        
+      emane_rs_statistic_free_table_query_result(update);
     }
   catch(RegistrarException & exp)
     {

@@ -31,7 +31,7 @@
  */
 
 #include "configurationupdatehandler.h"
-#include "configurationservice.h"
+#include "rust_ffi.h"
 #include "emane/serializationexception.h"
 #include "anyutils.h"
 
@@ -43,7 +43,7 @@ process(const EMANERemoteControlPortAPI::Request::Update::Configuration & config
 {
   bool bUpdate{true};
 
-  ConfigurationUpdate updates;
+  std::vector<std::pair<std::string,std::vector<Any>>> updates;
 
   EMANERemoteControlPortAPI::Response response;
 
@@ -78,13 +78,66 @@ process(const EMANERemoteControlPortAPI::Request::Update::Configuration & config
 
   if(bUpdate)
     {
-      try
-        {
-          ConfigurationServiceSingleton::instance()->update(configuration.buildid(),updates);
+      std::vector<FfiConfigItemUpdate> ffiItems;
+      std::vector<std::vector<FfiAny>> anyArrays(updates.size());
+      std::vector<std::string> stringStorage;
+      
+      for(size_t i = 0; i < updates.size(); ++i) {
+          FfiConfigItemUpdate ffiItem;
+          ffiItem.name = updates[i].first.c_str();
+          anyArrays[i].resize(updates[i].second.size());
+          for(size_t j = 0; j < updates[i].second.size(); ++j) {
+              const auto& any = updates[i].second[j];
+              FfiAny& ffiAny = anyArrays[i][j];
+              
+              ffiAny.any_type = static_cast<int32_t>(any.getType());
+              ffiAny.i64_value = 0;
+              ffiAny.u64_value = 0;
+              ffiAny.d_value = 0.0;
+              ffiAny.s_value = nullptr;
 
+              switch(any.getType()) {
+                  case EMANE::Any::Type::TYPE_INT64:
+                  case EMANE::Any::Type::TYPE_INT32:
+                  case EMANE::Any::Type::TYPE_INT16:
+                  case EMANE::Any::Type::TYPE_INT8:
+                      ffiAny.i64_value = any.asINT64();
+                      break;
+                  case EMANE::Any::Type::TYPE_UINT64:
+                  case EMANE::Any::Type::TYPE_UINT32:
+                  case EMANE::Any::Type::TYPE_UINT16:
+                  case EMANE::Any::Type::TYPE_UINT8:
+                      ffiAny.u64_value = any.asUINT64();
+                      break;
+                  case EMANE::Any::Type::TYPE_FLOAT:
+                  case EMANE::Any::Type::TYPE_DOUBLE:
+                      ffiAny.d_value = any.asDouble();
+                      break;
+                  case EMANE::Any::Type::TYPE_BOOL:
+                      ffiAny.u64_value = any.asBool() ? 1 : 0;
+                      break;
+                  case EMANE::Any::Type::TYPE_INET_ADDR:
+                  case EMANE::Any::Type::TYPE_STRING:
+                      stringStorage.push_back(any.asString());
+                      ffiAny.s_value = stringStorage.back().c_str();
+                      break;
+              }
+          }
+          ffiItem.values.data = anyArrays[i].empty() ? nullptr : anyArrays[i].data();
+          ffiItem.values.len = anyArrays[i].size();
+          ffiItems.push_back(ffiItem);
+      }
+      
+      FfiConfigUpdate ffiUpdate{ffiItems.empty() ? nullptr : ffiItems.data(), ffiItems.size()};
+      char error_buf[256] = {0};
+      
+      bool success = emane_rs_config_update(configuration.buildid(), ffiUpdate, error_buf, sizeof(error_buf));
+
+      if (success)
+        {
           response.set_type(EMANERemoteControlPortAPI::Response::TYPE_RESPONSE_UPDATE);
         }
-      catch(ConfigurationException & exp)
+      else
         {
           response.set_type(EMANERemoteControlPortAPI::Response::TYPE_RESPONSE_ERROR);
 
@@ -92,7 +145,7 @@ process(const EMANERemoteControlPortAPI::Request::Update::Configuration & config
 
           pError->set_type(EMANERemoteControlPortAPI::Response::Error::TYPE_ERROR_PARAMETER);
 
-          pError->set_description(exp.what());
+          pError->set_description(error_buf);
         }
     }
 

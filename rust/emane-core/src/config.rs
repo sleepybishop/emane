@@ -289,12 +289,85 @@ pub extern "C" fn emane_rs_config_free_manifest(manifest: FfiConfigManifest) {
 
 #[no_mangle]
 pub extern "C" fn emane_rs_config_query(build_id: u16, names: FfiStringArray) -> FfiConfigUpdate {
-    // Basic stub that returns empty
-    FfiConfigUpdate { data: std::ptr::null_mut(), len: 0 }
+    let s = get_config_service().lock().unwrap();
+    let store = s.stores.get(&build_id);
+    
+    let mut names_to_query = Vec::new();
+    if !names.data.is_null() && names.len > 0 {
+        let slice = unsafe { std::slice::from_raw_parts(names.data, names.len) };
+        for &c_name in slice {
+            let name_str = unsafe { std::ffi::CStr::from_ptr(c_name).to_string_lossy().into_owned() };
+            names_to_query.push(name_str);
+        }
+    } else {
+        if let Some(st) = store {
+            for k in st.keys() {
+                names_to_query.push(k.clone());
+            }
+        }
+    }
+    
+    let mut vec_items = Vec::new();
+    if let Some(st) = store {
+        for n in &names_to_query {
+            if let Some(info) = st.get(n) {
+                let c_name = std::ffi::CString::new(n.clone()).unwrap().into_raw();
+                
+                let mut vec_vals = Vec::new();
+                for v in &info.values {
+                    let s_val = if v.s_value.is_empty() {
+                        std::ptr::null()
+                    } else {
+                        std::ffi::CString::new(v.s_value.clone()).unwrap().into_raw()
+                    };
+                    vec_vals.push(FfiAny {
+                        any_type: v.any_type,
+                        i64_value: v.i64_value,
+                        u64_value: v.u64_value,
+                        d_value: v.d_value,
+                        s_value: s_val,
+                    });
+                }
+                vec_vals.shrink_to_fit();
+                let len = vec_vals.len();
+                let data = vec_vals.as_ptr();
+                std::mem::forget(vec_vals);
+                
+                vec_items.push(FfiConfigItemUpdate {
+                    name: c_name,
+                    values: FfiAnyArray { data, len },
+                });
+            }
+        }
+    }
+    
+    vec_items.shrink_to_fit();
+    let len = vec_items.len();
+    let data = vec_items.as_ptr();
+    std::mem::forget(vec_items);
+    
+    FfiConfigUpdate { data, len }
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_config_free_update(update: FfiConfigUpdate) {
+    if update.data.is_null() || update.len == 0 { return; }
+    let items = unsafe { Vec::from_raw_parts(update.data as *mut FfiConfigItemUpdate, update.len, update.len) };
+    for item in items {
+        unsafe {
+            if !item.name.is_null() {
+                let _ = std::ffi::CString::from_raw(item.name as *mut c_char);
+            }
+            if !item.values.data.is_null() && item.values.len > 0 {
+                let vals = Vec::from_raw_parts(item.values.data as *mut FfiAny, item.values.len, item.values.len);
+                for v in vals {
+                    if !v.s_value.is_null() {
+                        let _ = std::ffi::CString::from_raw(v.s_value as *mut c_char);
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[no_mangle]

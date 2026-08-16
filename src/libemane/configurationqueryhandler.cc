@@ -32,7 +32,7 @@
  */
 
 #include "configurationqueryhandler.h"
-#include "configurationservice.h"
+#include "rust_ffi.h"
 #include "emane/serializationexception.h"
 #include "emane/registrarexception.h"
 #include "anyutils.h"
@@ -43,20 +43,18 @@ process(const EMANERemoteControlPortAPI::Request::Query::Configuration & configu
         std::uint32_t u32Sequence,
         std::uint32_t u32Reference)
 {
-  std::vector<std::string> names;
-
+  std::vector<const char*> c_names;
   for(int i = 0; i < configuration.names_size(); ++i)
     {
-      names.push_back(configuration.names(i));
+      c_names.push_back(configuration.names(i).c_str());
     }
 
   EMANERemoteControlPortAPI::Response response;
 
   try
     {
-      auto configurationValues =
-        ConfigurationServiceSingleton::instance()->queryConfiguration(configuration.buildid(),
-                                                                      names);
+      FfiStringArray ffiNames{c_names.empty() ? nullptr : c_names.data(), c_names.size()};
+      FfiConfigUpdate update = emane_rs_config_query(configuration.buildid(), ffiNames);
 
       response.set_type(EMANERemoteControlPortAPI::Response::TYPE_RESPONSE_QUERY);
 
@@ -68,19 +66,23 @@ process(const EMANERemoteControlPortAPI::Request::Query::Configuration & configu
 
       pConfiguration->set_buildid(configuration.buildid());
 
-      for(const auto & value : configurationValues)
+      for(size_t i = 0; i < update.len; ++i)
         {
+          const auto & item = update.data[i];
           auto pParameter = pConfiguration->add_parameters();
 
-          pParameter->set_name(value.first);
+          pParameter->set_name(item.name);
 
-          for(const auto & any : value.second)
+          for(size_t j = 0; j < item.values.len; ++j)
             {
+              const auto & ffiAny = item.values.data[j];
               auto pValue = pParameter->add_values();
-
-              convertToAny(pValue,any);
+              EMANE::Any any = EMANE::convertFfiToAny(ffiAny);
+              convertToAny(pValue, any);
             }
         }
+        
+      emane_rs_config_free_update(update);
     }
   catch(RegistrarException & exp)
     {
