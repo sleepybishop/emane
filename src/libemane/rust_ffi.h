@@ -298,3 +298,19 @@ namespace EMANE {
 #endif // __cplusplus
 
 #endif // EMANE_RUST_FFI_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void* emane_rs_nem_queued_layer_new(uint16_t id);
+void emane_rs_nem_queued_layer_free(void* ptr);
+void emane_rs_nem_queued_layer_start(void* ptr);
+void emane_rs_nem_queued_layer_stop(void* ptr);
+void emane_rs_nem_queued_layer_enqueue(void* ptr, void (*execute)(void*), void* context, void (*destroy)(void*));
+void emane_rs_nem_queued_layer_add_fd(void* ptr, int fd, bool is_read, void (*execute)(int, void*), void* context, void (*destroy)(void*));
+void emane_rs_nem_queued_layer_remove_fd(void* ptr, int fd);
+
+#ifdef __cplusplus
+}
+#endif

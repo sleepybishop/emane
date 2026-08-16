@@ -152,3 +152,4 @@ pub extern "C" fn emane_rs_lognormal_fading_process(
     let target_dbm = power_dbm - state.depth_dbm;
     10.0_f64.powf(target_dbm / 10.0)
 }
+pub mod nem_queued_layer;
