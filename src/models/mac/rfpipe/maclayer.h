@@ -37,18 +37,14 @@
 
 #include "emane/maclayerimpl.h"
 #include "emane/mactypes.h"
-#include "emane/flowcontrolmanager.h"
-#include "emane/neighbormetricmanager.h"
-#include "emane/queuemetricmanager.h"
+#include "../../../libemane/rust_ffi.h"
 #include "emane/statisticnumeric.h"
-#include "emane/rfsignaltable.h"
 
 #include "emane/utils/runningaverage.h"
 #include "emane/utils/randomnumberdistribution.h"
 #include "emane/utils/commonlayerstatistics.h"
 
 #include "downstreamqueue.h"
-#include "pcrmanager.h"
 
 #include <memory>
 
@@ -119,26 +115,13 @@ namespace EMANE
         void processConfiguration(const ConfigurationUpdate & update) override;
 
       private:
-        /**
-         *
-         * @brief  the emane rf pipe registration id
-         *
-         */
         static const RegistrationId type_ = REGISTERED_EMANE_MAC_RF_PIPE;
+
+        FfiRfpipeMac* rs_state_;
 
         DownstreamQueue downstreamQueue_;
 
         std::uint64_t u64TxSequenceNumber_;
-
-        FlowControlManager flowControlManager_;
-
-        PCRManager pcrManager_;
-
-        NeighborMetricManager neighborMetricManager_;
-
-        QueueMetricManager queueMetricManager_;
-
-        RFSignalTable rfSignalTable_;
 
         // config items
         bool bPromiscuousMode_;

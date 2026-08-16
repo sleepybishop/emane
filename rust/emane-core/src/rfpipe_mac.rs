@@ -205,3 +205,60 @@ pub extern "C" fn emane_rs_rfpipe_mac_free(ptr: *mut RfpipeMac) {
     }
 }
 
+#[no_mangle]
+pub extern "C" fn emane_rs_rfpipe_mac_configure(
+    ptr: *mut RfpipeMac,
+    promiscuous_mode: bool,
+    data_rate_bps: u64,
+    delay_microseconds: u64,
+    flow_control_enable: bool,
+    radio_metric_enable: bool,
+    flow_control_tokens: u16,
+    pcr_curve_uri: *const std::os::raw::c_char,
+    radio_metric_report_interval_microseconds: u64,
+    neighbor_metric_delete_time_microseconds: u64,
+) {
+    let state = unsafe { &mut *ptr };
+    state.promiscuous_mode = promiscuous_mode;
+    state.data_rate_bps = data_rate_bps;
+    state.delay = Duration::from_micros(delay_microseconds);
+    state.flow_control_enable = flow_control_enable;
+    state.radio_metric_enable = radio_metric_enable;
+    state.flow_control_tokens = flow_control_tokens;
+    
+    if !pcr_curve_uri.is_null() {
+        let c_str = unsafe { std::ffi::CStr::from_ptr(pcr_curve_uri) };
+        if let Ok(s) = c_str.to_str() {
+            state.pcr_curve_uri = s.to_owned();
+        }
+    }
+    
+    state.radio_metric_report_interval = Duration::from_micros(radio_metric_report_interval_microseconds);
+    state.neighbor_metric_delete_time = Duration::from_micros(neighbor_metric_delete_time_microseconds);
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_rfpipe_mac_start(ptr: *mut RfpipeMac) {
+    let state = unsafe { &mut *ptr };
+    if state.flow_control_enable {
+        state.flow_control_manager.start(state.flow_control_tokens);
+    }
+    state.neighbor_metric_manager.set_neighbor_delete_time_microseconds(state.neighbor_metric_delete_time);
+    if !state.pcr_curve_uri.is_empty() {
+        let _ = state.pcr_manager.load(&state.pcr_curve_uri);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_rfpipe_mac_process_flow_control_message(
+    ptr: *mut RfpipeMac,
+    msg_tokens: u16,
+) -> bool {
+    let state = unsafe { &mut *ptr };
+    if state.flow_control_enable {
+        state.flow_control_manager.process_flow_control_message(msg_tokens)
+    } else {
+        false
+    }
+}
+

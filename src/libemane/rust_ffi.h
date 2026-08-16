@@ -163,6 +163,21 @@ extern "C" {
 
     FfiRfpipeMac* emane_rs_rfpipe_mac_new(uint16_t id);
     void emane_rs_rfpipe_mac_free(FfiRfpipeMac* ptr);
+
+    void emane_rs_rfpipe_mac_configure(
+        FfiRfpipeMac* ptr,
+        bool promiscuous_mode,
+        uint64_t data_rate_bps,
+        uint64_t delay_microseconds,
+        bool flow_control_enable,
+        bool radio_metric_enable,
+        uint16_t flow_control_tokens,
+        const char* pcr_curve_uri,
+        uint64_t radio_metric_report_interval_microseconds,
+        uint64_t neighbor_metric_delete_time_microseconds
+    );
+
+    void emane_rs_rfpipe_mac_start(FfiRfpipeMac* ptr);
     
     FfiRfpipeUpstreamAction emane_rs_rfpipe_mac_process_upstream(
         FfiRfpipeMac* ptr,
@@ -195,6 +210,7 @@ extern "C" {
     );
 
     bool emane_rs_rfpipe_mac_flow_control_add_token(FfiRfpipeMac* ptr);
+    bool emane_rs_rfpipe_mac_process_flow_control_message(FfiRfpipeMac* ptr, uint16_t msg_tokens);
 
     // Tdma MAC FFI
     struct FfiTdmaMac;
@@ -209,6 +225,7 @@ extern "C" {
 
     bool emane_rs_tdma_mac_remove_token(FfiTdmaMac* ptr);
     bool emane_rs_tdma_mac_add_token(FfiTdmaMac* ptr);
+    bool emane_rs_tdma_mac_process_flow_control_message(FfiTdmaMac* ptr, uint16_t msg_tokens);
 
 }
 
