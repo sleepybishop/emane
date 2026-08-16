@@ -31,7 +31,81 @@
  */
 
 #include "emane/events/tdmascheduleevent.h"
-#include "tdmascheduleevent.pb.h"
+
+extern "C" {
+    struct EmaneRsTdmaSlotTx {
+        bool has_frequency_hz;
+        uint64_t frequency_hz;
+        bool has_data_rate_bps;
+        uint64_t data_rate_bps;
+        bool has_service_class;
+        uint32_t service_class;
+        bool has_power_dbm;
+        double power_dbm;
+        bool has_destination;
+        uint32_t destination;
+    };
+
+    struct EmaneRsTdmaSlotRx {
+        bool has_frequency_hz;
+        uint64_t frequency_hz;
+    };
+
+    struct EmaneRsTdmaSlot {
+        uint32_t index;
+        int32_t type; // SLOT_TX = 1, SLOT_RX = 2, SLOT_IDLE = 3
+        bool has_tx;
+        EmaneRsTdmaSlotTx tx;
+        bool has_rx;
+        EmaneRsTdmaSlotRx rx;
+    };
+
+    struct EmaneRsTdmaFrame {
+        uint32_t index;
+        bool has_frequency_hz;
+        uint64_t frequency_hz;
+        bool has_data_rate_bps;
+        uint64_t data_rate_bps;
+        bool has_service_class;
+        uint32_t service_class;
+        bool has_power_dbm;
+        double power_dbm;
+        EmaneRsTdmaSlot* slots;
+        size_t num_slots;
+    };
+
+    struct EmaneRsTdmaStructure {
+        uint32_t slots_per_frame;
+        uint32_t frames_per_multi_frame;
+        uint64_t slot_duration_microseconds;
+        uint64_t slot_overhead_microseconds;
+        uint64_t bandwidth_hz;
+    };
+
+    struct EmaneRsTdmaSchedule {
+        EmaneRsTdmaFrame* frames;
+        size_t num_frames;
+        bool has_structure;
+        EmaneRsTdmaStructure structure;
+        bool has_frequency_hz;
+        uint64_t frequency_hz;
+        bool has_data_rate_bps;
+        uint64_t data_rate_bps;
+        bool has_service_class;
+        uint32_t service_class;
+        bool has_power_dbm;
+        double power_dbm;
+    };
+
+    bool emane_rs_tdmaschedule_event_deserialize(
+        const uint8_t* buf,
+        size_t len,
+        EmaneRsTdmaSchedule** out_msg
+    );
+
+    void emane_rs_tdmaschedule_event_free_deserialize(EmaneRsTdmaSchedule* ptr);
+}
+
 
 #include <cstdint>
 #include <tuple>
@@ -42,28 +116,33 @@ public:
   Implementation(const Serialization & serialization):
     bHasStructure_{}
   {
-    EMANEMessage::TDMAScheduleEvent msg{};
-
-    if(!msg.ParseFromString(serialization))
+    EmaneRsTdmaSchedule* msg_ptr = nullptr;
+    if(!emane_rs_tdmaschedule_event_deserialize(
+        reinterpret_cast<const uint8_t*>(serialization.c_str()),
+        serialization.size(),
+        &msg_ptr))
       {
         throw SerializationException("unable to deserialize : TDMAScheduleEvent");
       }
+    
+    // We will use a reference to make replacement easier
+    const EmaneRsTdmaSchedule& msg = *msg_ptr;
 
     std::uint32_t u32FramesPerMultiFrame{};
     std::uint32_t u32SlotsPerFrame{};
 
-    if(msg.has_structure())
+    if(msg.has_structure)
       {
-        const auto & structure = msg.structure();
+        const auto & structure = msg.structure;
 
-        u32FramesPerMultiFrame = structure.framespermultiframe();
-        u32SlotsPerFrame = structure.slotsperframe();
+        u32FramesPerMultiFrame = structure.frames_per_multi_frame;
+        u32SlotsPerFrame = structure.slots_per_frame;
 
-        structure_ = SlotStructure{structure.bandwidthhz(),
+        structure_ = SlotStructure{structure.bandwidth_hz,
                                    u32FramesPerMultiFrame,
                                    u32SlotsPerFrame,
-                                   Microseconds{structure.slotdurationmicroseconds()},
-                                   Microseconds{structure.slotoverheadmicroseconds()}};
+                                   Microseconds{structure.slot_duration_microseconds},
+                                   Microseconds{structure.slot_overhead_microseconds}};
 
         bHasStructure_ = true;
 
@@ -82,9 +161,10 @@ public:
           }
       }
 
-    for(const auto & frame :msg.frames())
+    for(size_t _f = 0; _f < msg.num_frames; ++_f)
       {
-        std::uint32_t u32FrameIndex = frame.index();
+        const auto& frame = msg.frames[_f];
+        std::uint32_t u32FrameIndex = frame.index;
 
         if(bHasStructure_ && u32FrameIndex >= u32FramesPerMultiFrame)
           {
@@ -94,7 +174,7 @@ public:
 
         std::set<std::uint32_t> presentSlots{};
 
-        for(const auto & slot : frame.slots())
+        for(size_t _s = 0; _s < frame.num_slots; ++_s)
           {
             SlotInfo::Type type{SlotInfo::Type::IDLE};
             std::uint64_t u64FrequencyHz{};
@@ -103,7 +183,8 @@ public:
             double dPowerdBm{};
             NEMId destination{};
 
-            std::uint32_t u32SlotIndex = slot.index();
+            const auto& slot = frame.slots[_s];
+            std::uint32_t u32SlotIndex = slot.index;
 
             if(bHasStructure_ && u32SlotIndex >= u32SlotsPerFrame)
               {
@@ -114,25 +195,25 @@ public:
 
             presentSlots.insert(u32SlotIndex);
 
-            switch(slot.type())
+            switch(slot.type)
               {
-              case EMANEMessage::TDMAScheduleEvent::Frame::Slot::SLOT_TX:
+              case 1:
                 {
-                  const auto & tx = slot.tx();
+                  const auto & tx = slot.tx;
 
                   type = SlotInfo::Type::TX;
 
-                  if(tx.has_frequencyhz())
+                  if(tx.has_frequency_hz)
                     {
-                      u64FrequencyHz = tx.frequencyhz();
+                      u64FrequencyHz = tx.frequency_hz;
                     }
-                  else if(frame.has_frequencyhz())
+                  else if(frame.has_frequency_hz)
                     {
-                      u64FrequencyHz = frame.frequencyhz();
+                      u64FrequencyHz = frame.frequency_hz;
                     }
-                  else if(msg.has_frequencyhz())
+                  else if(msg.has_frequency_hz)
                     {
-                      u64FrequencyHz = msg.frequencyhz();
+                      u64FrequencyHz = msg.frequency_hz;
                     }
                   else
                     {
@@ -141,17 +222,17 @@ public:
                                                                   u32SlotIndex);
                     }
 
-                  if(tx.has_dataratebps())
+                  if(tx.has_data_rate_bps)
                     {
-                      u64DataRatebps = tx.dataratebps();
+                      u64DataRatebps = tx.data_rate_bps;
                     }
-                  else if(frame.has_dataratebps())
+                  else if(frame.has_data_rate_bps)
                     {
-                      u64DataRatebps = frame.dataratebps();
+                      u64DataRatebps = frame.data_rate_bps;
                     }
-                  else if(msg.has_dataratebps())
+                  else if(msg.has_data_rate_bps)
                     {
-                      u64DataRatebps = msg.dataratebps();
+                      u64DataRatebps = msg.data_rate_bps;
                     }
                   else
                     {
@@ -161,17 +242,17 @@ public:
                     }
 
 
-                  if(tx.has_serviceclass())
+                  if(tx.has_service_class)
                     {
-                      u8ServiceClass = tx.serviceclass();
+                      u8ServiceClass = tx.service_class;
                     }
-                  else if(frame.has_serviceclass())
+                  else if(frame.has_service_class)
                     {
-                      u8ServiceClass = frame.serviceclass();
+                      u8ServiceClass = frame.service_class;
                     }
-                  else if(msg.has_serviceclass())
+                  else if(msg.has_service_class)
                     {
-                      u8ServiceClass = msg.serviceclass();
+                      u8ServiceClass = msg.service_class;
                     }
                   else
                     {
@@ -181,17 +262,17 @@ public:
                     }
 
 
-                  if(tx.has_powerdbm())
+                  if(tx.has_power_dbm)
                     {
-                      dPowerdBm = tx.powerdbm();
+                      dPowerdBm = tx.power_dbm;
                     }
-                  else if(frame.has_powerdbm())
+                  else if(frame.has_power_dbm)
                     {
-                      dPowerdBm = frame.powerdbm();
+                      dPowerdBm = frame.power_dbm;
                     }
-                  else if(msg.has_powerdbm())
+                  else if(msg.has_power_dbm)
                     {
-                      dPowerdBm = msg.powerdbm();
+                      dPowerdBm = msg.power_dbm;
                     }
                   else
                     {
@@ -201,30 +282,30 @@ public:
                     }
 
 
-                  if(tx.has_destination())
+                  if(tx.has_destination)
                     {
-                      destination = tx.destination();
+                      destination = tx.destination;
                     }
                 }
                 break;
 
-              case EMANEMessage::TDMAScheduleEvent::Frame::Slot::SLOT_RX:
+              case 2:
                 {
-                  const auto & rx = slot.rx();
+                  const auto & rx = slot.rx;
 
                   type = SlotInfo::Type::RX;
 
-                  if(rx.has_frequencyhz())
+                  if(rx.has_frequency_hz)
                     {
-                      u64FrequencyHz = rx.frequencyhz();
+                      u64FrequencyHz = rx.frequency_hz;
                     }
-                  else if(frame.has_frequencyhz())
+                  else if(frame.has_frequency_hz)
                     {
-                      u64FrequencyHz = frame.frequencyhz();
+                      u64FrequencyHz = frame.frequency_hz;
                     }
-                  else if(msg.has_frequencyhz())
+                  else if(msg.has_frequency_hz)
                     {
-                      u64FrequencyHz = msg.frequencyhz();
+                      u64FrequencyHz = msg.frequency_hz;
                     }
                   else
                     {
@@ -235,7 +316,7 @@ public:
                 }
                 break;
 
-              case EMANEMessage::TDMAScheduleEvent::Frame::Slot::SLOT_IDLE:
+              case 3:
                 type = SlotInfo::Type::IDLE;
                 break;
               }
@@ -277,13 +358,13 @@ public:
                   {
                     std::uint64_t u64FrequencyHz{};
 
-                    if(frame.has_frequencyhz())
+                    if(frame.has_frequency_hz)
                       {
-                        u64FrequencyHz = frame.frequencyhz();
+                        u64FrequencyHz = frame.frequency_hz;
                       }
-                    else if(msg.has_frequencyhz())
+                    else if(msg.has_frequency_hz)
                       {
-                        u64FrequencyHz = msg.frequencyhz();
+                        u64FrequencyHz = msg.frequency_hz;
                       }
                     else
                       {
@@ -302,6 +383,8 @@ public:
               }
           }
       }
+
+    emane_rs_tdmaschedule_event_free_deserialize(msg_ptr);
   }
 
   const SlotInfos & getSlotInfos() const

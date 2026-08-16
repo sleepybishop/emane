@@ -1,111 +1,125 @@
-/*
- * Copyright (c) 2013-2014,2016 - Adjacent Link LLC, Bridgewater,
- * New Jersey
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
-
+#include <vector>
 #include "emane/events/locationevent.h"
-#include "locationevent.pb.h"
+#include <cstring>
+
+extern "C" {
+    struct EmaneRsPosition {
+        double latitude_degrees;
+        double longitude_degrees;
+        double altitude_meters;
+    };
+
+    struct EmaneRsVelocity {
+        double azimuth_degrees;
+        double elevation_degrees;
+        double magnitude_meters_per_second;
+    };
+
+    struct EmaneRsOrientation {
+        double roll_degrees;
+        double pitch_degrees;
+        double yaw_degrees;
+    };
+
+    struct EmaneRsLocation {
+        uint32_t nem_id;
+        EmaneRsPosition position;
+        bool has_velocity;
+        EmaneRsVelocity velocity;
+        bool has_orientation;
+        EmaneRsOrientation orientation;
+    };
+
+    uint8_t* emane_rs_location_event_serialize(
+        const EmaneRsLocation* items,
+        size_t num_items,
+        size_t* out_len
+    );
+
+    void emane_rs_location_event_free_serialize(uint8_t* ptr, size_t len);
+
+    bool emane_rs_location_event_deserialize(
+        const uint8_t* buf,
+        size_t len,
+        EmaneRsLocation** out_items,
+        size_t* out_num
+    );
+
+    void emane_rs_location_event_free_deserialize(EmaneRsLocation* ptr, size_t len);
+}
 
 class EMANE::Events::LocationEvent::Implementation
 {
 public:
-  Implementation(const Locations & locations):
-    locations_{locations}{}
+  Implementation(const Locations & items):
+    items_{items}{}
 
   const Locations & getLocations() const
   {
-    return locations_;
+    return items_;
   }
 
 private:
-  Locations locations_;
+  Locations items_;
 };
 
 EMANE::Events::LocationEvent::LocationEvent(const Serialization & serialization):
   Event(IDENTIFIER)
 {
-  EMANEMessage::LocationEvent msg;
+  EmaneRsLocation* out_items = nullptr;
+  size_t out_num = 0;
 
-  if(!msg.ParseFromString(serialization))
+  if(!emane_rs_location_event_deserialize(
+      reinterpret_cast<const uint8_t*>(serialization.c_str()),
+      serialization.size(),
+      &out_items,
+      &out_num))
     {
-      throw SerializationException("unable to deserialize : LocationEvent");
+      throw SerializationException("unable to deserialize LocationEvent");
     }
 
-  Locations locations;
+  Locations items;
 
-  for(const auto & location : msg.locations())
+  if (out_items && out_num > 0)
     {
-      const auto & positionMessage = location.position();
-      NEMId nemId{static_cast<EMANE::NEMId>(location.nemid())};
-
-      Position position{positionMessage.latitudedegrees(),
-          positionMessage.longitudedegrees(),
-          positionMessage.altitudemeters()};
-
-      // optional
-      Velocity velocity{};
-
-      // optional
-      Orientation orientation{};
-
-      if(location.has_velocity())
+      for(size_t i = 0; i < out_num; ++i)
         {
-          const auto & velocityMessage = location.velocity();
+          Position pos(out_items[i].position.latitude_degrees,
+                       out_items[i].position.longitude_degrees,
+                       out_items[i].position.altitude_meters);
+                       
+          Orientation ori(0,0,0);
+          bool has_ori = out_items[i].has_orientation;
+          if (has_ori) {
+              ori = Orientation(out_items[i].orientation.roll_degrees,
+                                out_items[i].orientation.pitch_degrees,
+                                out_items[i].orientation.yaw_degrees);
+          }
+          
+          Velocity vel(0,0,0);
+          bool has_vel = out_items[i].has_velocity;
+          if (has_vel) {
+              vel = Velocity(out_items[i].velocity.azimuth_degrees,
+                             out_items[i].velocity.elevation_degrees,
+                             out_items[i].velocity.magnitude_meters_per_second);
+          }
 
-          velocity = Velocity{velocityMessage.azimuthdegrees(),
-                              velocityMessage.elevationdegrees(),
-                              velocityMessage.magnitudemeterspersecond()};
+          items.push_back(Location(
+                static_cast<EMANE::NEMId>(out_items[i].nem_id),
+                pos,
+                {ori, has_ori},
+                {vel, has_vel}
+          ));
         }
-
-      if(location.has_orientation())
-        {
-          const auto & orientationMessage = location.orientation();
-
-          orientation = Orientation{orientationMessage.rolldegrees(),
-                                    orientationMessage.pitchdegrees(),
-                                    orientationMessage.yawdegrees()};
-        }
-
-      locations.push_back({nemId,
-            position,
-              {orientation,location.has_orientation()},
-                {velocity,location.has_velocity()}});
+      emane_rs_location_event_free_deserialize(out_items, out_num);
     }
 
-  pImpl_.reset(new Implementation{locations});
+  pImpl_.reset(new Implementation{items});
 }
 
-EMANE::Events::LocationEvent::LocationEvent(const Locations & locations):
+EMANE::Events::LocationEvent::LocationEvent(const Locations & items):
   Event{IDENTIFIER},
-  pImpl_{new Implementation{locations}}{}
+  pImpl_{new Implementation{items}}{}
 
 EMANE::Events::LocationEvent::LocationEvent(const LocationEvent & rhs):
   Event{IDENTIFIER},
@@ -139,51 +153,61 @@ const EMANE::Events::Locations & EMANE::Events::LocationEvent::getLocations() co
 
 EMANE::Serialization EMANE::Events::LocationEvent::serialize() const
 {
-  Serialization serialization;
-
-  EMANEMessage::LocationEvent msg;
-
-  for(auto & location : pImpl_->getLocations())
+  const auto & items = pImpl_->getLocations();
+  std::vector<EmaneRsLocation> rs_items;
+  rs_items.reserve(items.size());
+  
+  for(auto & item : items)
     {
-      auto pLocationMessage = msg.add_locations();
+      EmaneRsLocation rs_item;
+      rs_item.nem_id = item.getNEMId();
+      
+      const auto & pos = item.getPosition();
+      rs_item.position.latitude_degrees = pos.getLatitudeDegrees();
+      rs_item.position.longitude_degrees = pos.getLongitudeDegrees();
+      rs_item.position.altitude_meters = pos.getAltitudeMeters();
+      
+      const auto & ori_pair = item.getOrientation();
+      rs_item.has_orientation = ori_pair.second;
+      if (rs_item.has_orientation) {
+          rs_item.orientation.roll_degrees = ori_pair.first.getRollDegrees();
+          rs_item.orientation.pitch_degrees = ori_pair.first.getPitchDegrees();
+          rs_item.orientation.yaw_degrees = ori_pair.first.getYawDegrees();
+      } else {
+          rs_item.orientation.roll_degrees = 0.0;
+          rs_item.orientation.pitch_degrees = 0.0;
+          rs_item.orientation.yaw_degrees = 0.0;
+      }
+      
+      const auto & vel_pair = item.getVelocity();
+      rs_item.has_velocity = vel_pair.second;
+      if (rs_item.has_velocity) {
+          rs_item.velocity.azimuth_degrees = vel_pair.first.getAzimuthDegrees();
+          rs_item.velocity.elevation_degrees = vel_pair.first.getElevationDegrees();
+          rs_item.velocity.magnitude_meters_per_second = vel_pair.first.getMagnitudeMetersPerSecond();
+      } else {
+          rs_item.velocity.azimuth_degrees = 0.0;
+          rs_item.velocity.elevation_degrees = 0.0;
+          rs_item.velocity.magnitude_meters_per_second = 0.0;
+      }
 
-      pLocationMessage->set_nemid(location.getNEMId());
-
-      auto pPositionMessage = pLocationMessage->mutable_position();
-
-      const auto & position = location.getPosition();
-
-      pPositionMessage->set_latitudedegrees(position.getLatitudeDegrees());
-      pPositionMessage->set_longitudedegrees(position.getLongitudeDegrees());
-      pPositionMessage->set_altitudemeters(position.getAltitudeMeters());
-
-      auto optionalVelocity = location.getVelocity();
-
-      if(optionalVelocity.second)
-        {
-          auto pVelocityMessage = pLocationMessage->mutable_velocity();
-
-          pVelocityMessage->set_azimuthdegrees(optionalVelocity.first.getAzimuthDegrees());
-          pVelocityMessage->set_elevationdegrees(optionalVelocity.first.getElevationDegrees());
-          pVelocityMessage->set_magnitudemeterspersecond(optionalVelocity.first.getMagnitudeMetersPerSecond());
-        }
-
-      auto optionalOrientation = location.getOrientation();
-
-      if(optionalOrientation.second)
-        {
-          auto pOrientationMessage = pLocationMessage->mutable_orientation();
-
-          pOrientationMessage->set_yawdegrees(optionalOrientation.first.getYawDegrees());
-          pOrientationMessage->set_pitchdegrees(optionalOrientation.first.getPitchDegrees());
-          pOrientationMessage->set_rolldegrees(optionalOrientation.first.getRollDegrees());
-        }
+      rs_items.push_back(rs_item);
     }
 
-  if(!msg.SerializeToString(&serialization))
+  size_t out_len = 0;
+  uint8_t* ptr = emane_rs_location_event_serialize(
+      rs_items.empty() ? nullptr : rs_items.data(),
+      rs_items.size(),
+      &out_len
+  );
+
+  if(!ptr)
     {
-      throw SerializationException("unable to serialize : LocationEvent");
+      throw SerializationException("unable to serialize LocationEvent");
     }
+
+  Serialization serialization(reinterpret_cast<const char*>(ptr), out_len);
+  emane_rs_location_event_free_serialize(ptr, out_len);
 
   return serialization;
 }

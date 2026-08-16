@@ -1,94 +1,101 @@
-/*
- * Copyright (c) 2025 - Adjacent Link LLC, Bridgewater, New Jersey
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
-
+#include <vector>
 #include "emane/events/pathlossexevent.h"
-#include "pathlossexevent.pb.h"
+#include <cstring>
+
+extern "C" {
+    struct EmaneRsPathlossExEntry {
+        uint64_t frequency_hz;
+        float pathloss_db;
+    };
+
+    struct EmaneRsPathlossEx {
+        uint32_t nem_id;
+        const EmaneRsPathlossExEntry* entries;
+        size_t num_entries;
+    };
+
+    uint8_t* emane_rs_pathlossex_event_serialize(
+        const EmaneRsPathlossEx* items,
+        size_t num_items,
+        size_t* out_len
+    );
+
+    void emane_rs_pathlossex_event_free_serialize(uint8_t* ptr, size_t len);
+
+    bool emane_rs_pathlossex_event_deserialize(
+        const uint8_t* buf,
+        size_t len,
+        EmaneRsPathlossEx** out_items,
+        size_t* out_num
+    );
+
+    void emane_rs_pathlossex_event_free_deserialize(EmaneRsPathlossEx* ptr, size_t len);
+}
 
 class EMANE::Events::PathlossExEvent::Implementation
 {
 public:
-  Implementation(PathlossExs && pathlossExs):
-    pathlossExs_{std::move(pathlossExs)}{}
-
-  Implementation(const PathlossExs & pathlossExs):
-    pathlossExs_{pathlossExs}{}
+  Implementation(const PathlossExs & items):
+    items_{items}{}
 
   const PathlossExs & getPathlossExs() const
   {
-    return pathlossExs_;
+    return items_;
   }
 
 private:
-  PathlossExs pathlossExs_;
+  PathlossExs items_;
 };
 
 EMANE::Events::PathlossExEvent::PathlossExEvent(const Serialization & serialization):
   Event(IDENTIFIER)
 {
-  EMANEMessage::PathlossExEvent msg;
+  EmaneRsPathlossEx* out_items = nullptr;
+  size_t out_num = 0;
 
-  if(!msg.ParseFromString(serialization))
+  if(!emane_rs_pathlossex_event_deserialize(
+      reinterpret_cast<const uint8_t*>(serialization.c_str()),
+      serialization.size(),
+      &out_items,
+      &out_num))
     {
       throw SerializationException("unable to deserialize PathlossExEvent");
     }
 
-  PathlossExs pathlossExs{};
+  PathlossExs items;
 
-  for(const auto & pathloss : msg.pathlosses())
+  if (out_items && out_num > 0)
     {
-      PathlossEx::FrequencyPathlossMap frequencyPathlossMap{};
-
-      for(const auto & entry : pathloss.entries())
+      for(size_t i = 0; i < out_num; ++i)
         {
-          frequencyPathlossMap.emplace(entry.frequencyhz(),entry.pathlossdb());
+          PathlossEx::FrequencyPathlossMap fpMap;
+          if (out_items[i].entries && out_items[i].num_entries > 0)
+            {
+              for (size_t j = 0; j < out_items[i].num_entries; ++j)
+                {
+                  fpMap.insert({out_items[i].entries[j].frequency_hz, out_items[i].entries[j].pathloss_db});
+                }
+            }
+          items.push_back({
+                static_cast<EMANE::NEMId>(out_items[i].nem_id),
+                std::move(fpMap)
+          });
         }
-
-      pathlossExs.emplace_back(static_cast<NEMId>(pathloss.nemid()),
-                               std::move(frequencyPathlossMap));
+      emane_rs_pathlossex_event_free_deserialize(out_items, out_num);
     }
 
-  pImpl_.reset(new Implementation{std::move(pathlossExs)});
+  pImpl_.reset(new Implementation{items});
 }
 
-EMANE::Events::PathlossExEvent::PathlossExEvent(const PathlossExs & pathlossExs):
+EMANE::Events::PathlossExEvent::PathlossExEvent(const PathlossExs & items):
   Event{IDENTIFIER},
-  pImpl_{new Implementation{pathlossExs}}{}
+  pImpl_{new Implementation{items}}{}
 
 EMANE::Events::PathlossExEvent::PathlossExEvent(const PathlossExEvent & rhs):
   Event{IDENTIFIER},
   pImpl_{new Implementation{rhs.getPathlossExs()}}{}
 
-EMANE::Events::PathlossExEvent &
-EMANE::Events::PathlossExEvent::operator=(const PathlossExEvent & rhs)
+EMANE::Events::PathlossExEvent & EMANE::Events::PathlossExEvent::operator=(const PathlossExEvent & rhs)
 {
   pImpl_.reset(new Implementation{rhs.getPathlossExs()});
   return *this;
@@ -101,8 +108,7 @@ EMANE::Events::PathlossExEvent::PathlossExEvent(PathlossExEvent && rval):
   rval.pImpl_.swap(pImpl_);
 }
 
-EMANE::Events::PathlossExEvent &
-EMANE::Events::PathlossExEvent::operator=(PathlossExEvent && rval)
+EMANE::Events::PathlossExEvent & EMANE::Events::PathlossExEvent::operator=(PathlossExEvent && rval)
 {
   rval.pImpl_.swap(pImpl_);
   return *this;
@@ -110,37 +116,50 @@ EMANE::Events::PathlossExEvent::operator=(PathlossExEvent && rval)
 
 EMANE::Events::PathlossExEvent::~PathlossExEvent(){}
 
-const EMANE::Events::PathlossExs &
-EMANE::Events::PathlossExEvent::getPathlossExs() const
+const EMANE::Events::PathlossExs & EMANE::Events::PathlossExEvent::getPathlossExs() const
 {
   return pImpl_->getPathlossExs();
 }
 
 EMANE::Serialization EMANE::Events::PathlossExEvent::serialize() const
 {
-  Serialization serialization;
-
-  EMANEMessage::PathlossExEvent msg;
-
-  for(const auto & pathloss : pImpl_->getPathlossExs())
+  const auto & items = pImpl_->getPathlossExs();
+  std::vector<EmaneRsPathlossEx> rs_items;
+  std::vector<std::vector<EmaneRsPathlossExEntry>> rs_entries(items.size());
+  rs_items.reserve(items.size());
+  
+  size_t idx = 0;
+  for(auto & item : items)
     {
-      auto pPathlossMessage = msg.add_pathlosses();
-
-      pPathlossMessage->set_nemid(pathloss.getNEMId());
-
-      for(const auto & entry : pathloss.getFrequencyPathlossMap())
+      const auto & fpMap = item.getFrequencyPathlossMap();
+      rs_entries[idx].reserve(fpMap.size());
+      for (const auto & entry : fpMap)
         {
-          auto pEntryMessage = pPathlossMessage->add_entries();
-
-          pEntryMessage->set_frequencyhz(entry.first);
-          pEntryMessage->set_pathlossdb(entry.second);
+          rs_entries[idx].push_back({entry.first, entry.second});
         }
+
+      EmaneRsPathlossEx rs_item;
+      rs_item.nem_id = item.getNEMId();
+      rs_item.entries = rs_entries[idx].empty() ? nullptr : rs_entries[idx].data();
+      rs_item.num_entries = rs_entries[idx].size();
+      rs_items.push_back(rs_item);
+      ++idx;
     }
 
-  if(!msg.SerializeToString(&serialization))
+  size_t out_len = 0;
+  uint8_t* ptr = emane_rs_pathlossex_event_serialize(
+      rs_items.empty() ? nullptr : rs_items.data(),
+      rs_items.size(),
+      &out_len
+  );
+
+  if(!ptr)
     {
       throw SerializationException("unable to serialize PathlossExEvent");
     }
+
+  Serialization serialization(reinterpret_cast<const char*>(ptr), out_len);
+  emane_rs_pathlossex_event_free_serialize(ptr, out_len);
 
   return serialization;
 }
