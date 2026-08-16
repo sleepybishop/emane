@@ -1,80 +1,84 @@
-/*
- * Copyright (c) 2013-2014,2016 - Adjacent Link LLC, Bridgewater,
- * New Jersey
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
-
 #include "emane/events/antennaprofileevent.h"
-#include "antennaprofileevent.pb.h"
+#include <cstring>
+
+extern "C" {
+    struct EmaneRsAntennaProfile {
+        uint32_t nem_id;
+        uint32_t profile_id;
+        double antenna_azimuth_degrees;
+        double antenna_elevation_degrees;
+    };
+
+    uint8_t* emane_rs_antennaprofile_event_serialize(
+        const EmaneRsAntennaProfile* items,
+        size_t num_items,
+        size_t* out_len
+    );
+
+    void emane_rs_antennaprofile_event_free_serialize(uint8_t* ptr, size_t len);
+
+    bool emane_rs_antennaprofile_event_deserialize(
+        const uint8_t* buf,
+        size_t len,
+        EmaneRsAntennaProfile** out_items,
+        size_t* out_num
+    );
+
+    void emane_rs_antennaprofile_event_free_deserialize(EmaneRsAntennaProfile* ptr, size_t len);
+}
 
 class EMANE::Events::AntennaProfileEvent::Implementation
 {
 public:
-  Implementation(const AntennaProfiles & profiles):
-    profiles_{profiles}{}
+  Implementation(const AntennaProfiles & items):
+    items_{items}{}
 
   const AntennaProfiles & getAntennaProfiles() const
   {
-    return profiles_;
+    return items_;
   }
 
 private:
-  AntennaProfiles profiles_;
+  AntennaProfiles items_;
 };
 
 EMANE::Events::AntennaProfileEvent::AntennaProfileEvent(const Serialization & serialization):
   Event(IDENTIFIER)
 {
-  EMANEMessage::AntennaProfileEvent msg;
+  EmaneRsAntennaProfile* out_items = nullptr;
+  size_t out_num = 0;
 
-  if(!msg.ParseFromString(serialization))
+  if(!emane_rs_antennaprofile_event_deserialize(
+      reinterpret_cast<const uint8_t*>(serialization.c_str()),
+      serialization.size(),
+      &out_items,
+      &out_num))
     {
-      throw SerializationException("unable to deserialize : AntennaProfileEvent");
+      throw SerializationException("unable to deserialize AntennaProfileEvent");
     }
 
-  AntennaProfiles profiles;
+  AntennaProfiles items;
 
-  for(const auto & profile : msg.profiles())
+  if (out_items && out_num > 0)
     {
-      profiles.push_back({static_cast<EMANE::NEMId>(profile.nemid()),
-            static_cast<EMANE::AntennaProfileId>(profile.profileid()),
-            profile.antennaazimuthdegrees(),
-            profile.antennaelevationdegrees()});
+      for(size_t i = 0; i < out_num; ++i)
+        {
+          items.emplace_back(
+                static_cast<EMANE::NEMId>(out_items[i].nem_id),
+                static_cast<EMANE::AntennaProfileId>(out_items[i].profile_id),
+                out_items[i].antenna_azimuth_degrees,
+                out_items[i].antenna_elevation_degrees
+          );
+        }
+      emane_rs_antennaprofile_event_free_deserialize(out_items, out_num);
     }
 
-  pImpl_.reset(new Implementation{profiles});
+  pImpl_.reset(new Implementation{items});
 }
 
-EMANE::Events::AntennaProfileEvent::AntennaProfileEvent(const AntennaProfiles & profiles):
+EMANE::Events::AntennaProfileEvent::AntennaProfileEvent(const AntennaProfiles & items):
   Event{IDENTIFIER},
-  pImpl_{new Implementation{profiles}}{}
+  pImpl_{new Implementation{items}}{}
 
 EMANE::Events::AntennaProfileEvent::AntennaProfileEvent(const AntennaProfileEvent & rhs):
   Event{IDENTIFIER},
@@ -108,27 +112,34 @@ const EMANE::Events::AntennaProfiles & EMANE::Events::AntennaProfileEvent::getAn
 
 EMANE::Serialization EMANE::Events::AntennaProfileEvent::serialize() const
 {
-  Serialization serialization;
-
-  EMANEMessage::AntennaProfileEvent msg;
-
-  for(auto & profile : pImpl_->getAntennaProfiles())
+  const auto & items = pImpl_->getAntennaProfiles();
+  std::vector<EmaneRsAntennaProfile> rs_items;
+  rs_items.reserve(items.size());
+  
+  for(auto & item : items)
     {
-      auto pAntennaProfileMessage = msg.add_profiles();
-
-      pAntennaProfileMessage->set_nemid(profile.getNEMId());
-
-      pAntennaProfileMessage->set_profileid(profile.getAntennaProfileId());
-
-      pAntennaProfileMessage->set_antennaazimuthdegrees(profile.getAntennaAzimuthDegrees());
-
-      pAntennaProfileMessage->set_antennaelevationdegrees(profile.getAntennaElevationDegrees());
+      EmaneRsAntennaProfile rs_item;
+      rs_item.nem_id = item.getNEMId();
+      rs_item.profile_id = item.getAntennaProfileId();
+      rs_item.antenna_azimuth_degrees = item.getAntennaAzimuthDegrees();
+      rs_item.antenna_elevation_degrees = item.getAntennaElevationDegrees();
+      rs_items.push_back(rs_item);
     }
 
-  if(!msg.SerializeToString(&serialization))
+  size_t out_len = 0;
+  uint8_t* ptr = emane_rs_antennaprofile_event_serialize(
+      rs_items.empty() ? nullptr : rs_items.data(),
+      rs_items.size(),
+      &out_len
+  );
+
+  if(!ptr)
     {
-      throw SerializationException("unable to serialize : AntennaProfileEvent");
+      throw SerializationException("unable to serialize AntennaProfileEvent");
     }
+
+  Serialization serialization(reinterpret_cast<const char*>(ptr), out_len);
+  emane_rs_antennaprofile_event_free_serialize(ptr, out_len);
 
   return serialization;
 }
