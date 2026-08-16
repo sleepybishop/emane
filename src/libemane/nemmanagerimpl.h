@@ -75,28 +75,44 @@ namespace EMANE
         throw() override;
 
     private:
-      using PlatformNEMMap = std::map<NEMId,std::unique_ptr<NEM>>;
-
-      PlatformNEMMap platformNEMMap_;
-
+      void* pRsNemManager_;
       ControlPort::Service controlPortService_;
-
-      INETAddr OTAManagerGroupAddr_;
-      std::string sOTAManagerGroupDevice_;
-      std::uint8_t u8OTAManagerTTL_;
-      std::uint32_t u32OTAManagerMTU_;
-      bool bOTAManagerChannelLoopback_;
-      bool bOTAManagerChannelEnable_;
-      Seconds OTAManagerPartCheckThreshold_;
-      Seconds OTAManagerPartTimeoutThreshold_;
-
-      INETAddr eventServiceGroupAddr_;
-      std::string sEventServiceDevice_;
-      std::uint8_t u8EventServiceTTL_;
-      INETAddr controlPortAddr_;
-      std::string sAntennaProfileManifestURI_;
-      std::string sSpectralMaskManifestURI_;
+      
+      // Keep static pointers for C callbacks
+      static NEMManagerImpl* pInstance_;
+      
+    public:
+      static NEMManagerImpl* instance() { return pInstance_; }
+      ControlPort::Service& getControlPortService() { return controlPortService_; }
     };
+
+    extern "C" {
+        void emane_c_nem_start(void* nem_ptr);
+        void emane_c_nem_post_start(void* nem_ptr);
+        void emane_c_nem_stop(void* nem_ptr);
+        void emane_c_nem_destroy(void* nem_ptr);
+        void emane_c_control_port_open(const char* port_str);
+        void emane_c_control_port_close();
+        void emane_c_load_antenna_profile(const char* uri);
+        void emane_c_load_spectral_mask(const char* uri);
+        void emane_c_ota_manager_open(
+            const char* addr,
+            const char* device,
+            bool loopback,
+            std::uint8_t ttl,
+            const std::uint8_t* uuid,
+            std::uint32_t mtu,
+            std::uint16_t part_check_thresh,
+            std::uint16_t part_timeout_thresh
+        );
+        void emane_c_event_service_open(
+            const char* addr,
+            const char* device,
+            std::uint8_t ttl,
+            const std::uint8_t* uuid
+        );
+    }
+
   }
 }
 

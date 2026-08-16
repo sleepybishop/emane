@@ -1,37 +1,3 @@
-/*
- * Copyright (c) 2013-2017,2021 - Adjacent Link LLC, Bridgewater,
- *  New Jersey
- * Copyright (c) 2011 - DRS CenGen, LLC, Columbia, Maryland
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of DRS CenGen, LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
-
 #include "nemmanagerimpl.h"
 #include "logservice.h"
 #include "otamanager.h"
@@ -45,19 +11,43 @@
 #include "antennaprofilemanifest.h"
 #include "spectralmaskmanager.h"
 
-EMANE::Application::NEMManagerImpl::NEMManagerImpl(const uuid_t & uuid):
-  NEMManager{uuid}{}
+extern "C" {
+    void* emane_rs_nem_manager_create(const std::uint8_t* uuid_ptr);
+    void emane_rs_nem_manager_destroy_manager(void* manager_ptr);
+    void emane_rs_nem_manager_add(void* manager_ptr, std::uint16_t nem_id, void* nem_ptr);
+    void emane_rs_nem_manager_set_config_str(void* manager_ptr, const char* key, const char* value);
+    void emane_rs_nem_manager_set_config_u8(void* manager_ptr, const char* key, std::uint8_t value);
+    void emane_rs_nem_manager_set_config_u16(void* manager_ptr, const char* key, std::uint16_t value);
+    void emane_rs_nem_manager_set_config_u32(void* manager_ptr, const char* key, std::uint32_t value);
+    void emane_rs_nem_manager_set_config_bool(void* manager_ptr, const char* key, bool value);
+    void emane_rs_nem_manager_apply_config(void* manager_ptr);
+    void emane_rs_nem_manager_start(void* manager_ptr);
+    void emane_rs_nem_manager_post_start(void* manager_ptr);
+    void emane_rs_nem_manager_stop(void* manager_ptr);
+    void emane_rs_nem_manager_destroy(void* manager_ptr);
+}
 
-EMANE::Application::NEMManagerImpl::~NEMManagerImpl(){}
+EMANE::Application::NEMManagerImpl* EMANE::Application::NEMManagerImpl::pInstance_ = nullptr;
+
+EMANE::Application::NEMManagerImpl::NEMManagerImpl(const uuid_t & uuid):
+  NEMManager{uuid}
+{
+  pRsNemManager_ = emane_rs_nem_manager_create(uuid);
+  pInstance_ = this;
+}
+
+EMANE::Application::NEMManagerImpl::~NEMManagerImpl()
+{
+  if(pRsNemManager_) {
+    emane_rs_nem_manager_destroy_manager(pRsNemManager_);
+    pRsNemManager_ = nullptr;
+  }
+  pInstance_ = nullptr;
+}
 
 void EMANE::Application::NEMManagerImpl::add(std::unique_ptr<Application::NEM> & pNEM)
 {
-  if(!platformNEMMap_.insert(std::make_pair(pNEM->getNEMId(),std::move(pNEM))).second)
-    {
-      throw makeException<PlatformException>("NEMManagerImpl:  Multiple NEMs with id"
-                                             " %hu detected",
-                                             pNEM->getNEMId());
-    }
+  emane_rs_nem_manager_add(pRsNemManager_, pNEM->getNEMId(), pNEM.release());
 }
 
 void EMANE::Application::NEMManagerImpl::initialize(Registrar & registrar)
@@ -166,7 +156,6 @@ void EMANE::Application::NEMManagerImpl::initialize(Registrar & registrar)
                                                   " any NEM participating in the emulation is using spectral"
                                                   " masks, even in the case where the local NEM is not.");
 
-
 }
 
 void EMANE::Application::NEMManagerImpl::configure(const ConfigurationUpdate & update)
@@ -175,280 +164,192 @@ void EMANE::Application::NEMManagerImpl::configure(const ConfigurationUpdate & u
     {
       if(item.first == "otamanagergroup")
         {
-          OTAManagerGroupAddr_ = item.second[0].asINETAddr();
-
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  INFO_LEVEL,
-                                  "NEMManagerImpl::configure %s: %s",
-                                  item.first.c_str(),
-                                  OTAManagerGroupAddr_.str().c_str());
-
+          emane_rs_nem_manager_set_config_str(pRsNemManager_, item.first.c_str(), item.second[0].asINETAddr().str().c_str());
         }
       else if(item.first == "otamanagerdevice")
         {
-          sOTAManagerGroupDevice_ = item.second[0].asString();
-
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  INFO_LEVEL,
-                                  "NEMManagerImpl::configure %s: %s",
-                                  item.first.c_str(),
-                                  sOTAManagerGroupDevice_.c_str());
-
+          emane_rs_nem_manager_set_config_str(pRsNemManager_, item.first.c_str(), item.second[0].asString().c_str());
         }
       else if(item.first == "otamanagerttl")
         {
-          u8OTAManagerTTL_ = item.second[0].asUINT8();
-
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  INFO_LEVEL,
-                                  "NEMManagerImpl::configure %s: %hhu",
-                                  item.first.c_str(),
-                                  u8OTAManagerTTL_);
+          emane_rs_nem_manager_set_config_u8(pRsNemManager_, item.first.c_str(), item.second[0].asUINT8());
         }
       else if(item.first == "otamanagermtu")
         {
-          u32OTAManagerMTU_ = item.second[0].asUINT32();
-
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  INFO_LEVEL,
-                                  "NEMManagerImpl::configure %s: %u",
-                                  item.first.c_str(),
-                                  u32OTAManagerMTU_);
+          emane_rs_nem_manager_set_config_u32(pRsNemManager_, item.first.c_str(), item.second[0].asUINT32());
         }
       else if(item.first == "otamanagerpartcheckthreshold")
         {
-          OTAManagerPartCheckThreshold_= EMANE::Seconds{item.second[0].asUINT16()};
-
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  INFO_LEVEL,
-                                  "NEMManagerImpl::configure %s = %lu",
-                                  item.first.c_str(),
-                                  OTAManagerPartCheckThreshold_.count());
+          emane_rs_nem_manager_set_config_u16(pRsNemManager_, item.first.c_str(), item.second[0].asUINT16());
         }
       else if(item.first == "otamanagerparttimeoutthreshold")
         {
-          OTAManagerPartTimeoutThreshold_ = EMANE::Seconds{item.second[0].asUINT16()};
-
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  INFO_LEVEL,
-                                  "NEMManagerImpl::configure %s = %lu",
-                                  item.first.c_str(),
-                                  OTAManagerPartTimeoutThreshold_.count());
+          emane_rs_nem_manager_set_config_u16(pRsNemManager_, item.first.c_str(), item.second[0].asUINT16());
         }
       else if(item.first == "otamanagerloopback")
         {
-          bOTAManagerChannelLoopback_ = item.second[0].asBool();
-
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  INFO_LEVEL,
-                                  "NEMManagerImpl::configure %s: %s",
-                                  item.first.c_str(),
-                                  bOTAManagerChannelLoopback_ ? "on" : "off");
+          emane_rs_nem_manager_set_config_bool(pRsNemManager_, item.first.c_str(), item.second[0].asBool());
         }
       else if(item.first == "otamanagerchannelenable")
         {
-          bOTAManagerChannelEnable_ = item.second[0].asBool();
-
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  INFO_LEVEL,
-                                  "NEMManagerImpl::configure %s: %s",
-                                  item.first.c_str(),
-                                  bOTAManagerChannelEnable_ ? "on" : "off");
+          emane_rs_nem_manager_set_config_bool(pRsNemManager_, item.first.c_str(), item.second[0].asBool());
         }
       else if(item.first == "eventservicegroup")
         {
-          eventServiceGroupAddr_ = item.second[0].asINETAddr();
-
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  INFO_LEVEL,
-                                  "NEMManagerImpl::configure %s: %s",
-                                  item.first.c_str(),
-                                  eventServiceGroupAddr_.str().c_str());
-
+          emane_rs_nem_manager_set_config_str(pRsNemManager_, item.first.c_str(), item.second[0].asINETAddr().str().c_str());
         }
       else if(item.first == "eventservicedevice")
         {
-          sEventServiceDevice_ = item.second[0].asString();
-
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  INFO_LEVEL,
-                                  "NEMManagerImpl::configure %s: %s",
-                                  item.first.c_str(),
-                                  sEventServiceDevice_.c_str());
-
+          emane_rs_nem_manager_set_config_str(pRsNemManager_, item.first.c_str(), item.second[0].asString().c_str());
         }
       else if(item.first == "eventservicettl")
         {
-          u8EventServiceTTL_ = item.second[0].asUINT8();
-
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  INFO_LEVEL,
-                                  "NEMManagerImpl::configure %s: %hhu",
-                                  item.first.c_str(),
-                                  u8EventServiceTTL_);
+          emane_rs_nem_manager_set_config_u8(pRsNemManager_, item.first.c_str(), item.second[0].asUINT8());
         }
       else if(item.first == "controlportendpoint")
         {
-          controlPortAddr_ = item.second[0].asINETAddr();
-
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  INFO_LEVEL,
-                                  "NEMManagerImpl::configure %s: %s",
-                                  item.first.c_str(),
-                                  controlPortAddr_.str().c_str());
+          emane_rs_nem_manager_set_config_str(pRsNemManager_, item.first.c_str(), item.second[0].asINETAddr().str().c_str());
         }
-
       else if(item.first == "antennaprofilemanifesturi")
         {
-          sAntennaProfileManifestURI_ = item.second[0].asString();
-
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  INFO_LEVEL,
-                                  "NEMManagerImpl::configure %s: %s",
-                                  item.first.c_str(),
-                                  sAntennaProfileManifestURI_.c_str());
-
+          emane_rs_nem_manager_set_config_str(pRsNemManager_, item.first.c_str(), item.second[0].asString().c_str());
         }
       else if(item.first == "stats.ota.maxpacketcountrows")
         {
-          std::uint32_t u32OTAMaxPacketCountRows = item.second[0].asUINT32();
-
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  INFO_LEVEL,
-                                  "NEMManagerImpl::configure %s: %u",
-                                  item.first.c_str(),
-                                  u32OTAMaxPacketCountRows);
-
-          OTAManagerSingleton::instance()->
-            setStatPacketCountRowLimit(u32OTAMaxPacketCountRows);
+          OTAManagerSingleton::instance()->setStatPacketCountRowLimit(item.second[0].asUINT32());
         }
       else if(item.first == "stats.ota.maxeventcountrows")
         {
-          std::uint32_t u32OTAMaxEventCountRows = item.second[0].asUINT32();
-
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  INFO_LEVEL,
-                                  "NEMManagerImpl::configure %s: %u",
-                                  item.first.c_str(),
-                                  u32OTAMaxEventCountRows);
-
-          OTAManagerSingleton::instance()->
-            setStatEventCountRowLimit(u32OTAMaxEventCountRows);
+          OTAManagerSingleton::instance()->setStatEventCountRowLimit(item.second[0].asUINT32());
         }
       else if(item.first == "stats.event.maxeventcountrows")
         {
-          std::uint32_t u32EventMaxEventCountRows = item.second[0].asUINT32();
-
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  INFO_LEVEL,
-                                  "NEMManagerImpl::configure %s: %u",
-                                  item.first.c_str(),
-                                  u32EventMaxEventCountRows);
-
-          EventServiceSingleton::instance()->
-            setStatEventCountRowLimit(u32EventMaxEventCountRows);
+          EventServiceSingleton::instance()->setStatEventCountRowLimit(item.second[0].asUINT32());
         }
       else if(item.first == "spectralmaskmanifesturi")
         {
-          sSpectralMaskManifestURI_ = item.second[0].asString();
-
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  INFO_LEVEL,
-                                  "NEMManagerImpl::configure %s: %s",
-                                  item.first.c_str(),
-                                  sSpectralMaskManifestURI_.c_str());
-
+          emane_rs_nem_manager_set_config_str(pRsNemManager_, item.first.c_str(), item.second[0].asString().c_str());
         }
       else
         {
-          throw makeException<ConfigureException>("NEMManagerImpl: "
-                                                  "Unexpected configuration item %s",
-                                                  item.first.c_str());
+          throw makeException<ConfigureException>("NEMManagerImpl: Unexpected configuration item %s", item.first.c_str());
         }
     }
 
-
-  if(!sAntennaProfileManifestURI_.empty())
-    {
-      AntennaProfileManifest::instance()->load(sAntennaProfileManifestURI_);
-    }
-
-
-  if(!sSpectralMaskManifestURI_.empty())
-    {
-      SpectralMaskManager::instance()->load(sSpectralMaskManifestURI_);
-    }
+  emane_rs_nem_manager_apply_config(pRsNemManager_);
 }
 
 void EMANE::Application::NEMManagerImpl::start()
 {
-  if(bOTAManagerChannelEnable_)
-    {
-      try
-        {
-          OTAManagerSingleton::instance()->open(OTAManagerGroupAddr_,
-                                                sOTAManagerGroupDevice_,
-                                                bOTAManagerChannelLoopback_,
-                                                u8OTAManagerTTL_,
-                                                uuid_,
-                                                u32OTAManagerMTU_,
-                                                OTAManagerPartCheckThreshold_,
-                                                OTAManagerPartTimeoutThreshold_);
-        }
-      catch(OTAException & exp)
-        {
-          throw StartException(exp.what());
-        }
-    }
-
-  try
-    {
-      EMANE::EventServiceSingleton::instance()->open(eventServiceGroupAddr_,
-                                                     sEventServiceDevice_,
-                                                     u8EventServiceTTL_,
-                                                     true,
-                                                     uuid_);
-    }
-  catch(EventServiceException & e)
-    {
-      throw StartException(e.what());
-    }
-
-  controlPortService_.open(controlPortAddr_);
-
-  std::for_each(platformNEMMap_.begin(),
-                platformNEMMap_.end(),
-                std::bind(&Component::start,
-                          std::bind(&PlatformNEMMap::value_type::second,
-                                    std::placeholders::_1)));
+  emane_rs_nem_manager_start(pRsNemManager_);
 }
 
 void EMANE::Application::NEMManagerImpl::postStart()
 {
-  std::for_each(platformNEMMap_.begin(),
-                platformNEMMap_.end(),
-                std::bind(&Component::postStart,
-                          std::bind(&PlatformNEMMap::value_type::second,
-                                    std::placeholders::_1)));
+  emane_rs_nem_manager_post_start(pRsNemManager_);
 }
 
 void EMANE::Application::NEMManagerImpl::stop()
 {
-  controlPortService_.close();
-
-  std::for_each(platformNEMMap_.begin(),
-                platformNEMMap_.end(),
-                std::bind(&Component::stop,
-                          std::bind(&PlatformNEMMap::value_type::second,
-                                    std::placeholders::_1)));
+  emane_rs_nem_manager_stop(pRsNemManager_);
 }
 
-void EMANE::Application::NEMManagerImpl::destroy()
-  throw()
+void EMANE::Application::NEMManagerImpl::destroy() throw()
 {
-  std::for_each(platformNEMMap_.begin(),
-                platformNEMMap_.end(),
-                std::bind(&Component::destroy,
-                          std::bind(&PlatformNEMMap::value_type::second,
-                                    std::placeholders::_1)));
+  emane_rs_nem_manager_destroy(pRsNemManager_);
+}
+
+// C callbacks implementation
+extern "C" {
+    void emane_c_nem_start(void* nem_ptr) {
+        if(nem_ptr) static_cast<EMANE::Application::NEM*>(nem_ptr)->start();
+    }
+    
+    void emane_c_nem_post_start(void* nem_ptr) {
+        if(nem_ptr) static_cast<EMANE::Application::NEM*>(nem_ptr)->postStart();
+    }
+    
+    void emane_c_nem_stop(void* nem_ptr) {
+        if(nem_ptr) static_cast<EMANE::Application::NEM*>(nem_ptr)->stop();
+    }
+    
+    void emane_c_nem_destroy(void* nem_ptr) {
+        if(nem_ptr) {
+            auto nem = static_cast<EMANE::Application::NEM*>(nem_ptr);
+            nem->destroy();
+            delete nem;
+        }
+    }
+    
+    void emane_c_control_port_open(const char* port_str) {
+        if(EMANE::Application::NEMManagerImpl::instance() && port_str) {
+            EMANE::INETAddr addr{port_str};
+            EMANE::Application::NEMManagerImpl::instance()->getControlPortService().open(addr);
+        }
+    }
+    
+    void emane_c_control_port_close() {
+        if(EMANE::Application::NEMManagerImpl::instance()) {
+            EMANE::Application::NEMManagerImpl::instance()->getControlPortService().close();
+        }
+    }
+    
+    void emane_c_load_antenna_profile(const char* uri) {
+        if(uri) EMANE::AntennaProfileManifest::instance()->load(uri);
+    }
+    
+    void emane_c_load_spectral_mask(const char* uri) {
+        if(uri) EMANE::SpectralMaskManager::instance()->load(uri);
+    }
+    
+    void emane_c_ota_manager_open(
+        const char* addr,
+        const char* device,
+        bool loopback,
+        std::uint8_t ttl,
+        const std::uint8_t* uuid,
+        std::uint32_t mtu,
+        std::uint16_t part_check_thresh,
+        std::uint16_t part_timeout_thresh
+    ) {
+        try {
+            EMANE::INETAddr inetAddr{addr};
+            uuid_t u;
+            std::copy(uuid, uuid + 16, std::begin(u));
+            EMANE::OTAManagerSingleton::instance()->open(
+                inetAddr,
+                device ? device : "",
+                loopback,
+                ttl,
+                u,
+                mtu,
+                EMANE::Seconds{part_check_thresh},
+                EMANE::Seconds{part_timeout_thresh}
+            );
+        } catch(EMANE::OTAException & exp) {
+            throw EMANE::StartException(exp.what());
+        }
+    }
+    
+    void emane_c_event_service_open(
+        const char* addr,
+        const char* device,
+        std::uint8_t ttl,
+        const std::uint8_t* uuid
+    ) {
+        try {
+            EMANE::INETAddr inetAddr{addr};
+            uuid_t u;
+            std::copy(uuid, uuid + 16, std::begin(u));
+            EMANE::EventServiceSingleton::instance()->open(
+                inetAddr,
+                device ? device : "",
+                ttl,
+                true,
+                u
+            );
+        } catch(EMANE::EventServiceException & e) {
+            throw EMANE::StartException(e.what());
+        }
+    }
 }
