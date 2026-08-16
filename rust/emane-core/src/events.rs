@@ -288,3 +288,90 @@ pub extern "C" fn emane_rs_commeffect_event_free_deserialize(ptr: *mut EmaneRsCo
         }
     }
 }
+
+#[repr(C)]
+pub struct EmaneRsFadingSelection {
+    pub nem_id: u32,
+    pub model: i32,
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_fadingselection_event_serialize(
+    items: *const EmaneRsFadingSelection,
+    num_items: usize,
+    out_len: *mut usize,
+) -> *mut u8 {
+    let mut msg = emane_message::FadingSelectionEvent::default();
+    
+    if num_items > 0 && !items.is_null() {
+        let slice = unsafe { slice::from_raw_parts(items, num_items) };
+        for p in slice {
+            msg.entries.push(emane_message::fading_selection_event::Entry {
+                nem_id: p.nem_id,
+                model: p.model,
+            });
+        }
+    }
+    
+    let mut buf = Vec::with_capacity(msg.encoded_len());
+    if msg.encode(&mut buf).is_ok() {
+        let mut boxed = buf.into_boxed_slice();
+        unsafe { *out_len = boxed.len() };
+        let ptr = boxed.as_mut_ptr();
+        std::mem::forget(boxed);
+        ptr
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_fadingselection_event_free_serialize(ptr: *mut u8, len: usize) {
+    if !ptr.is_null() {
+        unsafe {
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)));
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_fadingselection_event_deserialize(
+    buf: *const u8,
+    len: usize,
+    out_items: *mut *mut EmaneRsFadingSelection,
+    out_num: *mut usize,
+) -> bool {
+    if buf.is_null() || len == 0 {
+        return false;
+    }
+    
+    let slice = unsafe { slice::from_raw_parts(buf, len) };
+    if let Ok(msg) = emane_message::FadingSelectionEvent::decode(slice) {
+        let mut vec = Vec::with_capacity(msg.entries.len());
+        for p in msg.entries {
+            vec.push(EmaneRsFadingSelection {
+                nem_id: p.nem_id,
+                model: p.model,
+            });
+        }
+        
+        let mut boxed = vec.into_boxed_slice();
+        unsafe { 
+            *out_num = boxed.len();
+            *out_items = boxed.as_mut_ptr();
+        }
+        std::mem::forget(boxed);
+        true
+    } else {
+        false
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_fadingselection_event_free_deserialize(ptr: *mut EmaneRsFadingSelection, len: usize) {
+    if !ptr.is_null() {
+        unsafe {
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)));
+        }
+    }
+}

@@ -1,94 +1,80 @@
-/*
- * Copyright (c) 2017 - Adjacent Link LLC, Bridgewater, New Jersey
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
-
 #include "emane/events/fadingselectionevent.h"
+#include <cstring>
 
-#include "fadingselectionevent.pb.h"
+extern "C" {
+    struct EmaneRsFadingSelection {
+        uint32_t nem_id;
+        uint32_t model;
+    };
+
+    uint8_t* emane_rs_fadingselection_event_serialize(
+        const EmaneRsFadingSelection* items,
+        size_t num_items,
+        size_t* out_len
+    );
+
+    void emane_rs_fadingselection_event_free_serialize(uint8_t* ptr, size_t len);
+
+    bool emane_rs_fadingselection_event_deserialize(
+        const uint8_t* buf,
+        size_t len,
+        EmaneRsFadingSelection** out_items,
+        size_t* out_num
+    );
+
+    void emane_rs_fadingselection_event_free_deserialize(EmaneRsFadingSelection* ptr, size_t len);
+}
 
 class EMANE::Events::FadingSelectionEvent::Implementation
 {
 public:
-  Implementation(const FadingSelections & selections):
-    selections_{selections}{}
+  Implementation(const FadingSelections & items):
+    items_{items}{}
 
   const FadingSelections & getFadingSelections() const
   {
-    return selections_;
+    return items_;
   }
 
 private:
-  FadingSelections selections_;
+  FadingSelections items_;
 };
 
 EMANE::Events::FadingSelectionEvent::FadingSelectionEvent(const Serialization & serialization):
   Event(IDENTIFIER)
 {
-  EMANEMessage::FadingSelectionEvent msg;
+  EmaneRsFadingSelection* out_items = nullptr;
+  size_t out_num = 0;
 
-  if(!msg.ParseFromString(serialization))
+  if(!emane_rs_fadingselection_event_deserialize(
+      reinterpret_cast<const uint8_t*>(serialization.c_str()),
+      serialization.size(),
+      &out_items,
+      &out_num))
     {
-      throw SerializationException("unable to deserialize : FadingSelectionEvent");
+      throw SerializationException("unable to deserialize FadingSelectionEvent");
     }
 
-  FadingSelections selections;
+  FadingSelections items;
 
-  for(const auto & entry : msg.entries())
+  if (out_items && out_num > 0)
     {
-      FadingModel fadingModel{};
-
-      switch(entry.model())
+      for(size_t i = 0; i < out_num; ++i)
         {
-        case EMANEMessage::FadingSelectionEvent::TYPE_NONE:
-          fadingModel = FadingModel::NONE;
-          break;
-        case EMANEMessage::FadingSelectionEvent::TYPE_NAKAGAMI:
-          fadingModel = FadingModel::NAKAGAMI;
-          break;
-        case EMANEMessage::FadingSelectionEvent::TYPE_LOGNORMAL:
-          fadingModel = FadingModel::LOGNORMAL;
-          break;
-        default:
-          break;
+          items.push_back({
+                static_cast<EMANE::NEMId>(out_items[i].nem_id),
+                static_cast<EMANE::Events::FadingModel>(out_items[i].model)
+          });
         }
-
-      selections.push_back({static_cast<EMANE::NEMId>(entry.nemid()),fadingModel});
+      emane_rs_fadingselection_event_free_deserialize(out_items, out_num);
     }
 
-  pImpl_.reset(new Implementation{selections});
+  pImpl_.reset(new Implementation{items});
 }
 
-EMANE::Events::FadingSelectionEvent::FadingSelectionEvent(const FadingSelections & selections):
+EMANE::Events::FadingSelectionEvent::FadingSelectionEvent(const FadingSelections & items):
   Event{IDENTIFIER},
-  pImpl_{new Implementation{selections}}{}
+  pImpl_{new Implementation{items}}{}
 
 EMANE::Events::FadingSelectionEvent::FadingSelectionEvent(const FadingSelectionEvent & rhs):
   Event{IDENTIFIER},
@@ -122,37 +108,32 @@ const EMANE::Events::FadingSelections & EMANE::Events::FadingSelectionEvent::get
 
 EMANE::Serialization EMANE::Events::FadingSelectionEvent::serialize() const
 {
-  Serialization serialization;
-
-  EMANEMessage::FadingSelectionEvent msg;
-
-  for(auto & selection : pImpl_->getFadingSelections())
+  const auto & items = pImpl_->getFadingSelections();
+  std::vector<EmaneRsFadingSelection> rs_items;
+  rs_items.reserve(items.size());
+  
+  for(auto & item : items)
     {
-      auto pFadingSelectionMessage = msg.add_entries();
-
-      pFadingSelectionMessage->set_nemid(selection.getNEMId());
-
-      switch(selection.getFadingModel())
-        {
-        case FadingModel::NONE:
-          pFadingSelectionMessage->set_model(EMANEMessage::FadingSelectionEvent::TYPE_NONE);
-          break;
-        case FadingModel::NAKAGAMI:
-          pFadingSelectionMessage->set_model(EMANEMessage::FadingSelectionEvent::TYPE_NAKAGAMI);
-          break;
-        case FadingModel::LOGNORMAL:
-          pFadingSelectionMessage->set_model(EMANEMessage::FadingSelectionEvent::TYPE_LOGNORMAL);
-          break;
-        default:
-          throw SerializationException("unable to serialize : FadingSelectionEvent unknown model");
-          break;
-        }
+      EmaneRsFadingSelection rs_item;
+      rs_item.nem_id = item.getNEMId();
+      rs_item.model = static_cast<uint32_t>(item.getFadingModel());
+      rs_items.push_back(rs_item);
     }
 
-  if(!msg.SerializeToString(&serialization))
+  size_t out_len = 0;
+  uint8_t* ptr = emane_rs_fadingselection_event_serialize(
+      rs_items.empty() ? nullptr : rs_items.data(),
+      rs_items.size(),
+      &out_len
+  );
+
+  if(!ptr)
     {
-      throw SerializationException("unable to serialize : FadingSelectionEvent");
+      throw SerializationException("unable to serialize FadingSelectionEvent");
     }
+
+  Serialization serialization(reinterpret_cast<const char*>(ptr), out_len);
+  emane_rs_fadingselection_event_free_serialize(ptr, out_len);
 
   return serialization;
 }
