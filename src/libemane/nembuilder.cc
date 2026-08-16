@@ -33,6 +33,7 @@
  */
 #include "nemmanagerimpl.h"
 #include "emane/application/nembuilder.h"
+#include "configurationservice.h"
 #include "emane/buildexception.h"
 #include "timerserviceproxy.h"
 #include "maclayer.h"

@@ -73,7 +73,7 @@ namespace
 EMANE::EventStatisticPublisher::EventStatisticPublisher(const std::string & sPrefix):
   rowLimit_{0}
 {
-  auto statisticRegistrar = StatisticRegistrarProxy{*StatisticServiceSingleton::instance(),0};
+  auto statisticRegistrar = StatisticRegistrarProxy{0};
 
   pNumEventsTx_ =
     statisticRegistrar.registerNumeric<std::uint64_t>("num" + sPrefix +"EventsTx",

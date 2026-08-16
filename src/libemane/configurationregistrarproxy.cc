@@ -1,40 +1,35 @@
-/*
- * Copyright (c) 2013 - Adjacent Link LLC, Bridgewater, New Jersey
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
-
 #include "configurationregistrarproxy.h"
+#include "emane/registrarexception.h"
+#include <cstring>
 
-EMANE::ConfigurationRegistrarProxy::ConfigurationRegistrarProxy(ConfigurationService & service,
-                                                                BuildId buildId):
-  service_(service),
+extern "C" {
+    void emane_rs_config_register_numeric_any(uint16_t build_id, const char* name, int32_t type, uint64_t properties, const void* values_ptr, size_t values_len, const char* usage, const void* min_ptr, const void* max_ptr, size_t min_occurs, size_t max_occurs, const char* regex_pattern, char* err_buf, size_t err_len);
+    void emane_rs_config_register_non_numeric_any(uint16_t build_id, const char* name, int32_t type, uint64_t properties, const void* values_ptr, size_t values_len, const char* usage, size_t min_occurs, size_t max_occurs, const char* regex_pattern, char* err_buf, size_t err_len);
+    void emane_rs_config_register_validator(uint16_t build_id, void* validator, char* err_buf, size_t err_len);
+    
+    // We reuse the FfiAnyOwned struct from configuration.rs but map it via C++ here.
+    struct CppFfiAny {
+        int32_t any_type;
+        int64_t i64_value;
+        uint64_t u64_value;
+        double d_value;
+        const char* s_value;
+    };
+}
+
+namespace {
+    CppFfiAny makeFfiAny(const EMANE::Any& val) {
+        CppFfiAny ffi{};
+        ffi.any_type = static_cast<int32_t>(val.getType());
+        if (ffi.any_type == static_cast<int32_t>(EMANE::Any::Type::TYPE_INT64)) ffi.i64_value = val.asINT64();
+        else if (ffi.any_type == static_cast<int32_t>(EMANE::Any::Type::TYPE_UINT64)) ffi.u64_value = val.asUINT64();
+        else if (ffi.any_type == static_cast<int32_t>(EMANE::Any::Type::TYPE_DOUBLE)) ffi.d_value = val.asDouble();
+        else if (ffi.any_type == static_cast<int32_t>(EMANE::Any::Type::TYPE_STRING)) ffi.s_value = val.asString().c_str();
+        return ffi;
+    }
+}
+
+EMANE::ConfigurationRegistrarProxy::ConfigurationRegistrarProxy(BuildId buildId):
   buildId_{buildId}{}
 
 void EMANE::ConfigurationRegistrarProxy::registerNumericAny(const std::string & sName,
@@ -48,17 +43,16 @@ void EMANE::ConfigurationRegistrarProxy::registerNumericAny(const std::string & 
                                                             std::size_t maxOccurs,
                                                             const std::string & sRegexPattern)
 {
-  service_.registerNumericAny(buildId_,
-                              sName,
-                              type,
-                              properties,
-                              values,
-                              sUsage,
-                              minValue,
-                              maxValue,
-                              minOccurs,
-                              maxOccurs,
-                              sRegexPattern);
+    std::vector<CppFfiAny> ffi_values;
+    for (const auto& v : values) ffi_values.push_back(makeFfiAny(v));
+    CppFfiAny min_ffi = makeFfiAny(minValue);
+    CppFfiAny max_ffi = makeFfiAny(maxValue);
+    
+    char err_buf[256] = {0};
+    emane_rs_config_register_numeric_any(buildId_, sName.c_str(), static_cast<int32_t>(type), static_cast<uint64_t>(properties), ffi_values.empty() ? nullptr : ffi_values.data(), ffi_values.size(), sUsage.c_str(), &min_ffi, &max_ffi, minOccurs, maxOccurs, sRegexPattern.c_str(), err_buf, sizeof(err_buf));
+    if (err_buf[0] != '\0') {
+        throw makeException<RegistrarException>("%s", err_buf);
+    }
 }
 
 void EMANE::ConfigurationRegistrarProxy::registerNonNumericAny(const std::string & sName,
@@ -70,18 +64,22 @@ void EMANE::ConfigurationRegistrarProxy::registerNonNumericAny(const std::string
                                                                std::size_t maxOccurs,
                                                                const std::string & sRegexPattern)
 {
-  service_.registerNonNumericAny(buildId_,
-                                 sName,
-                                 type,
-                                 properties,
-                                 values,
-                                 sUsage,
-                                 minOccurs,
-                                 maxOccurs,
-                                 sRegexPattern);
+    std::vector<CppFfiAny> ffi_values;
+    for (const auto& v : values) ffi_values.push_back(makeFfiAny(v));
+    
+    char err_buf[256] = {0};
+    emane_rs_config_register_non_numeric_any(buildId_, sName.c_str(), static_cast<int32_t>(type), static_cast<uint64_t>(properties), ffi_values.empty() ? nullptr : ffi_values.data(), ffi_values.size(), sUsage.c_str(), minOccurs, maxOccurs, sRegexPattern.c_str(), err_buf, sizeof(err_buf));
+    if (err_buf[0] != '\0') {
+        throw makeException<RegistrarException>("%s", err_buf);
+    }
 }
 
 void EMANE::ConfigurationRegistrarProxy::registerValidator(ConfigurationValidator validator)
 {
-  service_.registerValidator(buildId_,validator);
+    char err_buf[256] = {0};
+    auto pValidator = new ConfigurationValidator(validator);
+    emane_rs_config_register_validator(buildId_, pValidator, err_buf, sizeof(err_buf));
+    if (err_buf[0] != '\0') {
+        throw makeException<RegistrarException>("%s", err_buf);
+    }
 }

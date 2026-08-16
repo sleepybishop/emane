@@ -33,6 +33,7 @@
  */
 
 #include "emane/application/transportbuilder.h"
+#include "configurationservice.h"
 #include "emane/buildexception.h"
 #include "transportmanagerimpl.h"
 #include "transportadapterimpl.h"

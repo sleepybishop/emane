@@ -33,6 +33,7 @@
  */
 
 #include "emane/application/eventgeneratorbuilder.h"
+#include "configurationservice.h"
 #include "emane/buildexception.h"
 #include "eventgeneratorfactorymanager.h"
 #include "eventgeneratormanagerimpl.h"

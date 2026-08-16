@@ -75,7 +75,7 @@ namespace
 EMANE::OTAStatisticPublisher::OTAStatisticPublisher():
   rowLimit_{0}
 {
-  auto statisticRegistrar = StatisticRegistrarProxy{*StatisticServiceSingleton::instance(),0};
+  auto statisticRegistrar = StatisticRegistrarProxy{0};
 
   pNumOTAChannelDownstreamPackets_ =
     statisticRegistrar.registerNumeric<std::uint64_t>("numOTAChannelDownstreamPackets",
