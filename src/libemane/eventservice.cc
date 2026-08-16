@@ -23,6 +23,9 @@ extern "C" {
     bool emane_rs_event_service_register_event(uint16_t build_id, uint16_t event_id);
     void emane_rs_event_service_process_event_message(uint16_t nem_id, uint16_t event_id, const char* data, size_t len, uint16_t ignore_nem);
     void emane_rs_event_service_route_local_event(uint16_t build_id, uint16_t nem_id, uint16_t event_id, const char* data, size_t len);
+    bool emane_rs_event_service_mcast_open(const char* addr, const char* device, int ttl, bool loopback);
+    int emane_rs_event_service_mcast_send(const char* data, size_t len, const char* addr);
+    int emane_rs_event_service_mcast_recv(char* buf, size_t max_len);
 
     void emane_c_event_service_user_process_event(void* p_user, uint16_t event_id, const char* data, size_t len) {
         auto user = static_cast<EMANE::EventServiceUser*>(p_user);
@@ -80,13 +83,14 @@ void EMANE::EventService::open(const INETAddr & eventChannelAddress,
 
       bOpen_ = true;
 
+      eventChannelAddress_ = eventChannelAddress;
       const char * device{sDevice.empty() ? nullptr : sDevice.c_str()};
 
-      try
-        {
-          mcast_.open(eventChannelAddress,true,device,iTTL,loopbackEnable);
-        }
-      catch(SocketException & exp)
+      if (!emane_rs_event_service_mcast_open(
+              eventChannelAddress.str().c_str(),
+              device,
+              iTTL,
+              loopbackEnable))
         {
           std::stringstream sstream;
           sstream
@@ -104,8 +108,6 @@ void EMANE::EventService::open(const INETAddr & eventChannelAddress,
             <<" * Multicast device "
             <<sDevice
             <<" does not exist or is not up."
-            <<std::endl
-            <<exp.what()
             <<std::endl
             <<std::ends;
 
@@ -180,11 +182,10 @@ void EMANE::EventService::sendEvent(BuildId buildId,
 
           std::uint16_t u16Length = HTONS(sSerialization.size());
 
-          Utils::VectorIO vectorIO{
-            {reinterpret_cast<char *>(&u16Length),sizeof(u16Length)},
-              {const_cast<char *>(sSerialization.c_str()),sSerialization.size()}};
+          std::string buf(reinterpret_cast<char*>(&u16Length), sizeof(u16Length));
+          buf.append(sSerialization);
 
-          if(mcast_.send(&vectorIO[0],static_cast<int>(vectorIO.size())) == -1)
+          if(emane_rs_event_service_mcast_send(buf.data(), buf.size(), eventChannelAddress_.str().c_str()) == -1)
             {
               LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
                                       ERROR_LEVEL,
@@ -235,7 +236,7 @@ void  EMANE::EventService::process()
 
   while(1)
     {
-      if((len = mcast_.recv(buf,sizeof(buf),0)) > 0)
+      if((len = emane_rs_event_service_mcast_recv(reinterpret_cast<char*>(buf), sizeof(buf))) > 0)
         {
           LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
                                   DEBUG_LEVEL,

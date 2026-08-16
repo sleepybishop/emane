@@ -103,7 +103,7 @@ namespace EMANE
 
     EventServiceUserMap eventServiceUserMap_;
 
-    MulticastSocket mcast_;
+    INETAddr eventChannelAddress_;
     std::thread thread_;
 
     bool bOpen_;

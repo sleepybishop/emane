@@ -91,3 +91,119 @@ pub extern "C" fn emane_rs_event_service_process_event_message(
     }
 }
 
+use std::net::{UdpSocket, Ipv4Addr, SocketAddr};
+use std::os::unix::io::AsRawFd;
+use socket2::{Socket, Domain, Type, Protocol};
+
+fn get_event_socket() -> &'static Mutex<Option<UdpSocket>> {
+    static EVENT_SOCKET: OnceLock<Mutex<Option<UdpSocket>>> = OnceLock::new();
+    EVENT_SOCKET.get_or_init(|| Mutex::new(None))
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_event_service_mcast_open(
+    addr: *const c_char,
+    device: *const c_char,
+    ttl: i32,
+    loopback: bool,
+) -> bool {
+    let addr_str = unsafe { std::ffi::CStr::from_ptr(addr) }.to_string_lossy();
+    let sock_addr: SocketAddr = match addr_str.parse() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    
+    let domain = if sock_addr.is_ipv4() { Domain::IPV4 } else { Domain::IPV6 };
+    let socket = match Socket::new(domain, Type::DGRAM, Some(Protocol::UDP)) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    
+    if let Err(_) = socket.set_reuse_address(true) { return false; }
+    
+    if sock_addr.is_ipv4() {
+        if let Err(_) = socket.set_multicast_ttl_v4(ttl as u32) { return false; }
+        if let Err(_) = socket.set_multicast_loop_v4(loopback) { return false; }
+        
+        let ip = match sock_addr.ip() {
+            std::net::IpAddr::V4(ip) => ip,
+            _ => return false,
+        };
+        if let Err(_) = socket.bind(&socket2::SockAddr::from(sock_addr)) { return false; }
+        if let Err(_) = socket.join_multicast_v4(&ip, &Ipv4Addr::new(0, 0, 0, 0)) { return false; }
+    } else {
+        if let Err(_) = socket.set_multicast_loop_v6(loopback) { return false; }
+        if let Err(_) = socket.bind(&socket2::SockAddr::from(sock_addr)) { return false; }
+        let ip = match sock_addr.ip() {
+            std::net::IpAddr::V6(ip) => ip,
+            _ => return false,
+        };
+        if let Err(_) = socket.join_multicast_v6(&ip, 0) { return false; }
+    }
+    
+    if !device.is_null() {
+        let dev_str = unsafe { std::ffi::CStr::from_ptr(device) };
+        let bytes = dev_str.to_bytes();
+        if bytes.len() > 0 {
+            let mut dev_name = [0u8; libc::IFNAMSIZ];
+            let len = std::cmp::min(bytes.len(), libc::IFNAMSIZ - 1);
+            dev_name[..len].copy_from_slice(&bytes[..len]);
+            unsafe {
+                if libc::setsockopt(
+                    socket.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_BINDTODEVICE,
+                    dev_name.as_ptr() as *const libc::c_void,
+                    len as libc::socklen_t,
+                ) < 0 {
+                    return false;
+                }
+            }
+        }
+    }
+    
+    let udp_socket: UdpSocket = socket.into();
+    *get_event_socket().lock().unwrap() = Some(udp_socket);
+    
+    true
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_event_service_mcast_send(
+    data: *const c_char,
+    len: usize,
+    addr: *const c_char,
+) -> i32 {
+    let addr_str = unsafe { std::ffi::CStr::from_ptr(addr) }.to_string_lossy();
+    let sock_addr: SocketAddr = match addr_str.parse() {
+        Ok(a) => a,
+        Err(_) => return -1,
+    };
+    
+    let slice = unsafe { std::slice::from_raw_parts(data as *const u8, len) };
+    if let Some(sock) = &*get_event_socket().lock().unwrap() {
+        match sock.send_to(slice, sock_addr) {
+            Ok(n) => n as i32,
+            Err(_) => -1,
+        }
+    } else {
+        -1
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_event_service_mcast_recv(
+    buf: *mut c_char,
+    max_len: usize,
+) -> i32 {
+    if let Some(sock) = &*get_event_socket().lock().unwrap() {
+        let slice = unsafe { std::slice::from_raw_parts_mut(buf as *mut u8, max_len) };
+        match sock.recv(slice) {
+            Ok(n) => n as i32,
+            Err(_) => -1,
+        }
+    } else {
+        -1
+    }
+}
+
