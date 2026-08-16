@@ -2,33 +2,7 @@
  * Copyright (c) 2013-2016 - Adjacent Link LLC, Bridgewater, New Jersey
  * Copyright (c) 2008-2012 - DRS CenGen, LLC, Columbia, Maryland
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of DRS CenGen, LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * ...
  */
 
 #include "eventservice.h"
@@ -36,7 +10,6 @@
 #include "eventserviceexception.h"
 #include "event.pb.h"
 #include "logservice.h"
-#include "eventservice.h"
 #include "socketexception.h"
 
 #include "emane/utils/vectorio.h"
@@ -44,6 +17,19 @@
 #include "emane/net.h"
 
 #include <sstream>
+
+extern "C" {
+    void emane_rs_event_service_register_user(uint16_t build_id, uint16_t nem_id, void* p_user);
+    bool emane_rs_event_service_register_event(uint16_t build_id, uint16_t event_id);
+    void emane_rs_event_service_process_event_message(uint16_t nem_id, uint16_t event_id, const char* data, size_t len, uint16_t ignore_nem);
+    void emane_rs_event_service_route_local_event(uint16_t build_id, uint16_t nem_id, uint16_t event_id, const char* data, size_t len);
+
+    void emane_c_event_service_user_process_event(void* p_user, uint16_t event_id, const char* data, size_t len) {
+        auto user = static_cast<EMANE::EventServiceUser*>(p_user);
+        EMANE::Serialization serialization(data, len);
+        user->processEvent(event_id, serialization);
+    }
+}
 
 EMANE::EventService::EventService():
   bOpen_{false},
@@ -65,28 +51,17 @@ EMANE::EventService::~EventService()
 }
 
 void EMANE::EventService::registerEvent(BuildId buildId, EventId eventId)
-
 {
-  auto iter = eventServiceUserMap_.find(buildId);
-
-  if(iter != eventServiceUserMap_.end())
-    {
-      eventRegistrationMap_.insert(std::make_pair(eventId,
-                                                  std::make_tuple(buildId,
-                                                                  iter->second.first,
-                                                                  iter->second.second)));
-    }
-  else
-    {
+  if (!emane_rs_event_service_register_event(buildId, eventId)) {
       throw RegistrarException{"Component not eligible to register for events"};
-    }
+  }
 }
 
 void EMANE::EventService::registerEventServiceUser(BuildId buildId,
                                                    EventServiceUser * pEventServiceUser,
                                                    NEMId nemId)
 {
-  eventServiceUserMap_.insert(std::make_pair(buildId,std::make_pair(nemId,pEventServiceUser)));
+  emane_rs_event_service_register_user(buildId, nemId, pEventServiceUser);
 }
 
 void EMANE::EventService::open(const INETAddr & eventChannelAddress,
@@ -163,43 +138,8 @@ void EMANE::EventService::sendEvent(BuildId buildId,
                                     const Serialization & serialization) const
 {
 
-  // determine if there are any locally registered users for this event
-  const auto ret = eventRegistrationMap_.equal_range(eventId);
-
-  // for each local event service user registered for this event
-  // determine based on the nemId target whether they should
-  // receive the event. The source (base on buildId) will never
-  // receive an event it generated
-  for(EventRegistrationMap::const_iterator iter = ret.first;
-      iter != ret.second;
-      ++iter)
-    {
-      BuildId registeredBuildId{};
-      NEMId registeredNEMId{};
-      EventServiceUser * pEventServiceUser{};
-
-      std::tie(registeredBuildId,
-               registeredNEMId,
-               pEventServiceUser) = iter->second;
-
-      if(!buildId || registeredBuildId != buildId)
-        {
-          if(!nemId || registeredNEMId == nemId)
-            {
-              pEventServiceUser->processEvent(eventId,serialization);
-            }
-        }
-      else
-        {
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  DEBUG_LEVEL,
-                                  "EventService sendEvent skipping originator"
-                                  " event id:%hu for NEM:%hu buildId: %hu",
-                                  eventId,
-                                  registeredNEMId,
-                                  buildId);
-        }
-    }
+  // route locally via rust
+  emane_rs_event_service_route_local_event(buildId, nemId, eventId, serialization.c_str(), serialization.length());
 
   // send the event out via the multicast channel
   if(bOpen_)
@@ -276,36 +216,7 @@ void EMANE::EventService::processEventMessage(NEMId nemId,
                                               const Serialization & serialization,
                                               NEMId ignoreNEM) const
 {
-  const auto ret = eventRegistrationMap_.equal_range(eventId);
-
-  for(EventRegistrationMap::const_iterator iter = ret.first;
-      iter != ret.second;
-      ++iter)
-    {
-      BuildId registeredBuildId{};
-      NEMId registeredNEMId{};
-      EventServiceUser * pEventServiceUser{};
-
-      std::tie(registeredBuildId,registeredNEMId,pEventServiceUser) = iter->second;
-
-      if(!ignoreNEM || ignoreNEM != registeredNEMId)
-        {
-          if(!nemId || registeredNEMId == nemId)
-            {
-              pEventServiceUser->processEvent(eventId,serialization);
-            }
-        }
-      else
-        {
-          LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                  DEBUG_LEVEL,
-                                  "EventService sendEvent skipping all layers of"
-                                  " originating nem event id:%hu NEM:%hu",
-                                  eventId,
-                                  ignoreNEM);
-
-        }
-    }
+  emane_rs_event_service_process_event_message(nemId, eventId, serialization.c_str(), serialization.length(), ignoreNEM);
 }
 
 void EMANE::EventService::setStatEventCountRowLimit(size_t rows)
@@ -352,24 +263,11 @@ void  EMANE::EventService::process()
                     {
                       NEMId nemId{static_cast<NEMId>(serialization.nemid())};
 
-                      const auto ret = eventRegistrationMap_.equal_range(static_cast<EventId>(serialization.eventid()));
-
-                      for(EventRegistrationMap::const_iterator iter = ret.first;
-                          iter != ret.second;
-                          ++iter)
-                        {
-                          BuildId registeredBuildId{};
-                          NEMId registeredNEMId{};
-                          EventServiceUser * pEventServiceUser{};
-
-                          std::tie(registeredBuildId,registeredNEMId,pEventServiceUser) = iter->second;
-
-                          if(!nemId || !registeredNEMId || registeredNEMId == nemId)
-                            {
-                              pEventServiceUser->processEvent(static_cast<EventId>(serialization.eventid()),
-                                                              serialization.data());
-                            }
-                        }
+                      emane_rs_event_service_process_event_message(nemId,
+                                                                   serialization.eventid(),
+                                                                   serialization.data().c_str(),
+                                                                   serialization.data().length(),
+                                                                   0); // 0 means no ignoreNEM
 
                       eventStatisticPublisher_.update(EventStatisticPublisher::Type::TYPE_RX,
                                                       remoteUUID,
