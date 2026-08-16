@@ -87,12 +87,14 @@ Implementation(NEMId id,
       pScheduler,
       &packetStatusPublisher_,
       &neighborMetricManager_},
-  flowControlManager_{*pRadioModel},
+  rs_state_{emane_rs_tdma_mac_new(id)},
   u64ScheduleIndex_{}{}
 
 
 EMANE::Models::TDMA::BaseModel::Implementation::~Implementation()
-{}
+{
+  emane_rs_tdma_mac_free(rs_state_);
+}
 
 
 void
@@ -370,7 +372,7 @@ EMANE::Models::TDMA::BaseModel::Implementation::postStart()
   if(bFlowControlEnable_)
     {
       // start flow control
-      flowControlManager_.start(u16FlowControlTokens_);
+      emane_rs_tdma_mac_set_flow_control(rs_state_, bFlowControlEnable_, u16FlowControlTokens_);
 
       LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
                               DEBUG_LEVEL,
@@ -407,7 +409,7 @@ EMANE::Models::TDMA::BaseModel::Implementation::stop()
   if(bFlowControlEnable_)
     {
       // stop the flow control manager
-      flowControlManager_.stop();
+      emane_rs_tdma_mac_set_flow_control(rs_state_, false, 0);
     }
 
   pQueueManager_->stop();
@@ -803,7 +805,7 @@ void EMANE::Models::TDMA::BaseModel::Implementation::processDownstreamControl(co
                                         id_,
                                         __func__);
 
-                flowControlManager_.processFlowControlMessage(pFlowControlControlMessage);
+                emane_rs_tdma_mac_process_flow_control_message(rs_state_, pFlowControlControlMessage->getTokens());
               }
             else
               {
@@ -832,7 +834,7 @@ void EMANE::Models::TDMA::BaseModel::Implementation::processDownstreamControl(co
 
                   if(bFlowControlEnable_)
                     {
-                      flowControlManager_.processFlowControlMessage(pFlowControlControlMessage.get());
+                      emane_rs_tdma_mac_process_flow_control_message(rs_state_, pFlowControlControlMessage->getTokens());
                     }
                   else
                     {
@@ -865,16 +867,16 @@ void EMANE::Models::TDMA::BaseModel::Implementation::processDownstreamPacket(Dow
   // check flow control
   if(bFlowControlEnable_)
     {
-      auto status = flowControlManager_.removeToken();
+      bool status_second = emane_rs_tdma_mac_remove_token(rs_state_);
 
-      if(status.second == false)
+      if(status_second == false)
         {
           LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
                                   ERROR_LEVEL,
                                   "MACI %03hu TDMA::BaseModel::%s: failed to remove token, drop packet (tokens:%hu)",
                                   id_,
                                   __func__,
-                                  status.first);
+                                  0);
 
           const auto & pktInfo = pkt.getPacketInfo();
 
@@ -898,16 +900,16 @@ void EMANE::Models::TDMA::BaseModel::Implementation::processDownstreamPacket(Dow
     {
       for(size_t i = 0; i < packetsDropped; ++i)
         {
-          auto status = flowControlManager_.addToken();
+          bool status_second = emane_rs_tdma_mac_add_token(rs_state_, 1);
 
-          if(!status.second)
+          if(!status_second)
             {
               LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
                                       ERROR_LEVEL,
                                       "MACI %03hu TDMA::BaseModel:::%s: failed to add token (tokens:%hu)",
                                       id_,
                                       __func__,
-                                      status.first);
+                                      0);
             }
         }
     }
@@ -1129,16 +1131,16 @@ void EMANE::Models::TDMA::BaseModel::Implementation::sendDownstreamPacket(double
 
           if(bFlowControlEnable_ && completedPackets)
             {
-              auto status = flowControlManager_.addToken(completedPackets);
+              bool status_second = emane_rs_tdma_mac_add_token(rs_state_, completedPackets);
 
-              if(!status.second)
+              if(!status_second)
                 {
                   LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
                                           ERROR_LEVEL,
                                           "MACI %03hu TDMA::BaseModel::%s: failed to add token (tokens:%hu)",
                                           id_,
                                           __func__,
-                                          status.first);
+                                          0);
 
                 }
             }

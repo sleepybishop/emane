@@ -35,7 +35,7 @@
 #define EMANETDMABASEMODELIMPL_HEADER_
 
 #include "emane/maclayerimpl.h"
-#include "emane/flowcontrolmanager.h"
+#include "../../../libemane/rust_ffi.h"
 #include "emane/neighbormetricmanager.h"
 #include "emane/models/tdma/basemodel.h"
 #include "emane/models/tdma/scheduler.h"
@@ -134,7 +134,7 @@ namespace EMANE
         PacketStatusPublisherImpl packetStatusPublisher_;
         NeighborMetricManager neighborMetricManager_;
         ReceiveManager receiveManager_;
-        FlowControlManager flowControlManager_;
+        FfiTdmaMac * rs_state_;
         std::uint64_t u64ScheduleIndex_;
         AggregationStatusPublisher aggregationStatusPublisher_;
 

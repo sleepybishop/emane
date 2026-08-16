@@ -60,10 +60,10 @@ pub extern "C" fn emane_rs_tdma_mac_remove_token(ptr: *mut TdmaMac) -> bool {
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_tdma_mac_add_token(ptr: *mut TdmaMac) -> bool {
+pub extern "C" fn emane_rs_tdma_mac_add_token(ptr: *mut TdmaMac, count: u16) -> bool {
     let state = unsafe { &mut *ptr };
     if state.flow_control_enable {
-        let (_, success, _) = state.flow_control_manager.add_token(1);
+        let (_, success, _) = state.flow_control_manager.add_token(count);
         success
     } else {
         true

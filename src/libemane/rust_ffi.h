@@ -224,7 +224,7 @@ extern "C" {
     );
 
     bool emane_rs_tdma_mac_remove_token(FfiTdmaMac* ptr);
-    bool emane_rs_tdma_mac_add_token(FfiTdmaMac* ptr);
+    bool emane_rs_tdma_mac_add_token(FfiTdmaMac* mac, uint16_t count);
     bool emane_rs_tdma_mac_process_flow_control_message(FfiTdmaMac* ptr, uint16_t msg_tokens);
 
 }
