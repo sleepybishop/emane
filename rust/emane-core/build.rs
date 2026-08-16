@@ -44,7 +44,8 @@ fn main() {
             "../../src/libemane/remotecontrolportapi.proto",
             "../../src/libemane/tdmascheduleevent.proto",
             "../../src/models/mac/tdma/tdmabasemodelmessage.proto",
+            "../../src/models/mac/rfpipe/rfpipemacheader.proto",
         ],
-        &["../../src/libemane/", "../../src/models/mac/tdma/"],
+        &["../../src/libemane/", "../../src/models/mac/tdma/", "../../src/models/mac/rfpipe/"],
     ).expect("Failed to compile protobuf files!");
 }
