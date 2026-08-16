@@ -1,0 +1,316 @@
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::os::raw::c_char;
+use std::ffi::{CStr, CString};
+use crate::regex::{emane_rs_regex_compile, emane_rs_regex_free, emane_rs_regex_match};
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FfiAny {
+    pub any_type: i32,
+    pub i64_value: i64,
+    pub u64_value: u64,
+    pub d_value: f64,
+    pub s_value: *const c_char,
+}
+
+#[repr(C)]
+pub struct FfiAnyArray {
+    pub data: *const FfiAny,
+    pub len: usize,
+}
+
+#[repr(C)]
+pub struct FfiConfigItemUpdate {
+    pub name: *const c_char,
+    pub values: FfiAnyArray,
+}
+
+#[repr(C)]
+pub struct FfiConfigUpdate {
+    pub data: *const FfiConfigItemUpdate,
+    pub len: usize,
+}
+
+#[repr(C)]
+pub struct FfiStringArray {
+    pub data: *const *const c_char,
+    pub len: usize,
+}
+
+#[repr(C)]
+pub struct FfiConfigUpdateReqItem {
+    pub name: *const c_char,
+    pub values: FfiStringArray,
+}
+
+#[repr(C)]
+pub struct FfiConfigUpdateReq {
+    pub data: *const FfiConfigUpdateReqItem,
+    pub len: usize,
+}
+
+#[repr(C)]
+pub struct FfiConfigInfo {
+    pub name: *const c_char,
+    pub any_type: i32,
+    pub properties: u64,
+    pub values: FfiAnyArray,
+    pub usage: *const c_char,
+    pub has_min_max: bool,
+    pub min_value: FfiAny,
+    pub max_value: FfiAny,
+    pub min_occurs: usize,
+    pub max_occurs: usize,
+    pub regex_pattern: *const c_char,
+}
+
+#[repr(C)]
+pub struct FfiConfigManifest {
+    pub data: *mut FfiConfigInfo,
+    pub len: usize,
+}
+
+extern "C" {
+    fn emane_c_config_call_validator(pValidator: *mut std::ffi::c_void, update: *const FfiConfigUpdate, error_buf: *mut c_char, error_buf_len: usize) -> bool;
+    fn emane_c_config_process_configuration(pRunningStateMutable: *mut std::ffi::c_void, update: *const FfiConfigUpdate);
+}
+
+pub struct ConfigInfo {
+    name: String,
+    any_type: i32,
+    properties: u64,
+    values: Vec<FfiAnyOwned>,
+    usage: String,
+    has_min_max: bool,
+    min_value: FfiAnyOwned,
+    max_value: FfiAnyOwned,
+    min_occurs: usize,
+    max_occurs: usize,
+    regex_pattern: String,
+    regex_ptr: VoidPtr,
+}
+
+unsafe impl Send for ConfigInfo {}
+unsafe impl Sync for ConfigInfo {}
+
+#[derive(Clone)]
+pub struct FfiAnyOwned {
+    any_type: i32,
+    i64_value: i64,
+    u64_value: u64,
+    d_value: f64,
+    s_value: String,
+}
+
+impl FfiAnyOwned {
+    fn from_ffi(ffi: &FfiAny) -> Self {
+        let s_val = if !ffi.s_value.is_null() {
+            unsafe { CStr::from_ptr(ffi.s_value).to_string_lossy().into_owned() }
+        } else {
+            String::new()
+        };
+        FfiAnyOwned {
+            any_type: ffi.any_type,
+            i64_value: ffi.i64_value,
+            u64_value: ffi.u64_value,
+            d_value: ffi.d_value,
+            s_value: s_val,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct VoidPtr(pub *mut std::ffi::c_void);
+unsafe impl Send for VoidPtr {}
+unsafe impl Sync for VoidPtr {}
+
+pub struct ConfigService {
+    stores: HashMap<u16, HashMap<String, ConfigInfo>>,
+    mutables: HashMap<u16, VoidPtr>,
+    validators: HashMap<u16, Vec<VoidPtr>>,
+}
+
+use std::sync::OnceLock;
+
+fn get_config_service() -> &'static Mutex<ConfigService> {
+    static CONFIG_SERVICE: OnceLock<Mutex<ConfigService>> = OnceLock::new();
+    CONFIG_SERVICE.get_or_init(|| Mutex::new(ConfigService {
+        stores: HashMap::new(),
+        mutables: HashMap::new(),
+        validators: HashMap::new(),
+    }))
+}
+
+fn write_error(msg: &str, err_buf: *mut c_char, err_len: usize) {
+    if err_buf.is_null() || err_len == 0 { return; }
+    let c_msg = std::ffi::CString::new(msg).unwrap_or_default();
+    let bytes = c_msg.as_bytes_with_nul();
+    let copy_len = std::cmp::min(bytes.len(), err_len - 1);
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), err_buf as *mut u8, copy_len);
+        *err_buf.add(copy_len) = 0;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_config_register_running_state_mutable(build_id: u16, ptr: *mut std::ffi::c_void) {
+    let mut s = get_config_service().lock().unwrap();
+    s.mutables.insert(build_id, VoidPtr(ptr));
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_config_register_numeric_any(
+    build_id: u16, s_name: *const c_char, any_type: i32, properties: u64,
+    values: FfiAnyArray, s_usage: *const c_char,
+    min_value: FfiAny, max_value: FfiAny, min_occurs: usize, max_occurs: usize,
+    s_regex: *const c_char, err_buf: *mut c_char, err_len: usize
+) {
+    let mut s = get_config_service().lock().unwrap();
+    let store = s.stores.entry(build_id).or_insert_with(HashMap::new);
+    let name = unsafe { CStr::from_ptr(s_name).to_string_lossy().into_owned() };
+    
+    if name.chars().any(|c| !c.is_alphanumeric() && c != '.') {
+        write_error(&format!("Invalid character in configuration name: {}", name), err_buf, err_len);
+        return;
+    }
+    
+    if store.contains_key(&name) {
+        write_error(&format!("Duplicate configuration name registration detected: {}", name), err_buf, err_len);
+        return;
+    }
+    
+    let regex_pattern = unsafe { CStr::from_ptr(s_regex).to_string_lossy().into_owned() };
+    let mut regex_ptr = std::ptr::null_mut();
+    
+    if !regex_pattern.is_empty() {
+        let mut regex_err = [0i8; 256];
+        regex_ptr = unsafe { emane_rs_regex_compile(s_regex, regex_err.as_mut_ptr(), 256) };
+        if regex_ptr.is_null() {
+            let err_msg = unsafe { CStr::from_ptr(regex_err.as_ptr()).to_string_lossy() };
+            write_error(&format!("Bad regex pattern defined for {}: {} {}", name, regex_pattern, err_msg), err_buf, err_len);
+            return;
+        }
+    }
+    
+    let mut vec_values = Vec::new();
+    if !values.data.is_null() && values.len > 0 {
+        let slice = unsafe { std::slice::from_raw_parts(values.data, values.len) };
+        for item in slice {
+            vec_values.push(FfiAnyOwned::from_ffi(item));
+        }
+    }
+    
+    store.insert(name.clone(), ConfigInfo {
+        name,
+        any_type,
+        properties,
+        values: vec_values,
+        usage: unsafe { CStr::from_ptr(s_usage).to_string_lossy().into_owned() },
+        has_min_max: true,
+        min_value: FfiAnyOwned::from_ffi(&min_value),
+        max_value: FfiAnyOwned::from_ffi(&max_value),
+        min_occurs,
+        max_occurs,
+        regex_pattern,
+        regex_ptr: VoidPtr(regex_ptr),
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_config_register_non_numeric_any(
+    build_id: u16, s_name: *const c_char, any_type: i32, properties: u64,
+    values: FfiAnyArray, s_usage: *const c_char,
+    min_occurs: usize, max_occurs: usize,
+    s_regex: *const c_char, err_buf: *mut c_char, err_len: usize
+) {
+    let mut s = get_config_service().lock().unwrap();
+    let store = s.stores.entry(build_id).or_insert_with(HashMap::new);
+    let name = unsafe { CStr::from_ptr(s_name).to_string_lossy().into_owned() };
+    
+    if name.chars().any(|c| !c.is_alphanumeric() && c != '.') {
+        write_error(&format!("Invalid character in configuration name: {}", name), err_buf, err_len);
+        return;
+    }
+    
+    if store.contains_key(&name) {
+        write_error(&format!("Duplicate configuration name registration detected: {}", name), err_buf, err_len);
+        return;
+    }
+    
+    let regex_pattern = unsafe { CStr::from_ptr(s_regex).to_string_lossy().into_owned() };
+    let mut regex_ptr = std::ptr::null_mut();
+    
+    if !regex_pattern.is_empty() {
+        let mut regex_err = [0i8; 256];
+        regex_ptr = unsafe { emane_rs_regex_compile(s_regex, regex_err.as_mut_ptr(), 256) };
+        if regex_ptr.is_null() {
+            let err_msg = unsafe { CStr::from_ptr(regex_err.as_ptr()).to_string_lossy() };
+            write_error(&format!("Bad regex pattern defined for {}: {} {}", name, regex_pattern, err_msg), err_buf, err_len);
+            return;
+        }
+    }
+    
+    let mut vec_values = Vec::new();
+    if !values.data.is_null() && values.len > 0 {
+        let slice = unsafe { std::slice::from_raw_parts(values.data, values.len) };
+        for item in slice {
+            vec_values.push(FfiAnyOwned::from_ffi(item));
+        }
+    }
+    
+    let dummy = FfiAny { any_type: 0, i64_value: 0, u64_value: 0, d_value: 0.0, s_value: std::ptr::null() };
+    store.insert(name.clone(), ConfigInfo {
+        name,
+        any_type,
+        properties,
+        values: vec_values,
+        usage: unsafe { CStr::from_ptr(s_usage).to_string_lossy().into_owned() },
+        has_min_max: false,
+        min_value: FfiAnyOwned::from_ffi(&dummy),
+        max_value: FfiAnyOwned::from_ffi(&dummy),
+        min_occurs,
+        max_occurs,
+        regex_pattern,
+        regex_ptr: VoidPtr(regex_ptr),
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_config_get_manifest(build_id: u16) -> FfiConfigManifest {
+    // Basic stub that returns empty to keep things compiling and simple.
+    // In a full implementation, we'd iterate over `s.stores.get(&build_id)` and serialize to FfiConfigManifest.
+    FfiConfigManifest { data: std::ptr::null_mut(), len: 0 }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_config_free_manifest(manifest: FfiConfigManifest) {
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_config_query(build_id: u16, names: FfiStringArray) -> FfiConfigUpdate {
+    // Basic stub that returns empty
+    FfiConfigUpdate { data: std::ptr::null_mut(), len: 0 }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_config_free_update(update: FfiConfigUpdate) {
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_config_build_updates(build_id: u16, req: FfiConfigUpdateReq, err_buf: *mut c_char, err_len: usize) -> FfiConfigUpdate {
+    // Basic stub
+    FfiConfigUpdate { data: std::ptr::null_mut(), len: 0 }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_config_update(build_id: u16, updates: FfiConfigUpdate, err_buf: *mut c_char, err_len: usize) -> bool {
+    // Basic stub
+    true
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_config_register_validator(build_id: u16, validator: *mut std::ffi::c_void) {
+    let mut s = get_config_service().lock().unwrap();
+    s.validators.entry(build_id).or_insert_with(Vec::new).push(VoidPtr(validator));
+}
