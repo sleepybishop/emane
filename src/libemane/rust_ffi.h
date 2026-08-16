@@ -139,6 +139,13 @@ extern "C" {
     FfiNEMLayerComponentMap emane_rs_buildid_get_nem_layer_component_map();
     void emane_rs_buildid_free_nem_layer_component_map(FfiNEMLayerComponentMap map);
 
+    // Bypass MAC FFI
+    struct FfiBypassMac;
+    FfiBypassMac* emane_rs_bypass_mac_new(uint16_t type);
+    void emane_rs_bypass_mac_free(FfiBypassMac* ptr);
+    bool emane_rs_bypass_mac_process_upstream(FfiBypassMac* ptr, uint16_t hdr_type);
+    uint16_t emane_rs_bypass_mac_process_downstream(FfiBypassMac* ptr);
+
 }
 
 #ifdef __cplusplus

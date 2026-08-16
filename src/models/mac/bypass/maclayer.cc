@@ -33,6 +33,7 @@
 
 #include "maclayer.h"
 #include "emane/configureexception.h"
+#include "../../../libemane/rust_ffi.h"
 
 namespace {
   const std::uint16_t DROP_CODE_REGISTRATION_ID = 1;
@@ -44,12 +45,14 @@ EMANE::Models::Bypass::MACLayer::MACLayer(NEMId id,
                                           PlatformServiceProvider* pPlatformService,
                                           RadioServiceProvider * pRadioServiceProvider):
   MACLayerImplementor{id, pPlatformService, pRadioServiceProvider},
-  u16SequenceNumber_{},
+  rs_state_{emane_rs_bypass_mac_new(type_)},
   commonLayerStatistics_{STATISTIC_TABLE_LABELS}
 {}
 
 EMANE::Models::Bypass::MACLayer::~MACLayer()
-{}
+{
+  emane_rs_bypass_mac_free(rs_state_);
+}
 
 void EMANE::Models::Bypass::MACLayer::processUpstreamControl(const ControlMessages &)
 {
@@ -78,7 +81,7 @@ void EMANE::Models::Bypass::MACLayer::processUpstreamPacket(const CommonMACHeade
 
   commonLayerStatistics_.processInbound(pkt);
 
-  if(hdr.getRegistrationId() != type_)
+  if(!emane_rs_bypass_mac_process_upstream(rs_state_, hdr.getRegistrationId()))
     {
       LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
                               ERROR_LEVEL, 
@@ -132,8 +135,9 @@ void EMANE::Models::Bypass::MACLayer::processDownstreamPacket(DownstreamPacket &
   commonLayerStatistics_.processOutbound(pkt, 
                                          std::chrono::duration_cast<Microseconds>(Clock::now() - beginTime));
 
+  uint16_t seq = emane_rs_bypass_mac_process_downstream(rs_state_);
   // pass the pkt downstream
-  sendDownstreamPacket(CommonMACHeader{type_, u16SequenceNumber_++}, pkt);
+  sendDownstreamPacket(CommonMACHeader{type_, seq}, pkt);
 }
 
 void EMANE::Models::Bypass::MACLayer::initialize(Registrar & registrar)

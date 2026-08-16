@@ -37,6 +37,9 @@
 #include "emane/maclayerimpl.h"
 #include "emane/mactypes.h"
 #include "emane/utils/commonlayerstatistics.h"
+#include <cstdint>
+
+struct FfiBypassMac;
 
 namespace EMANE
 {
@@ -100,7 +103,7 @@ namespace EMANE
       private:
         static const EMANE::RegistrationId type_ = EMANE::REGISTERED_EMANE_MAC_BYPASS;
  
-        std::uint16_t u16SequenceNumber_;
+        ::FfiBypassMac* rs_state_;
 
         Utils::CommonLayerStatistics commonLayerStatistics_;
       };
