@@ -91,6 +91,8 @@ namespace EMANE
 
     void setStatEventCountRowLimit(size_t rows);
 
+    void updateStat(int type, const unsigned char* uuid_data, EventId eventId) const;
+
   protected:
     EventService();
 

@@ -168,42 +168,101 @@ pub extern "C" fn emane_rs_event_service_mcast_open(
     true
 }
 
+use prost::Message;
+use crate::protobufs::emane_message::Event;
+use crate::protobufs::emane_message::event::{Data, data::Serialization};
+
+extern "C" {
+    fn emane_c_event_service_update_stat(type_: i32, uuid: *const u8, event_id: u16);
+}
+
 #[no_mangle]
-pub extern "C" fn emane_rs_event_service_mcast_send(
+pub extern "C" fn emane_rs_event_service_send_event_multicast(
+    uuid: *const u8,
+    event_id: u16,
+    nem_id: u16,
     data: *const c_char,
     len: usize,
+    seq_num: u64,
     addr: *const c_char,
-) -> i32 {
-    let addr_str = unsafe { std::ffi::CStr::from_ptr(addr) }.to_string_lossy();
-    let sock_addr: SocketAddr = match addr_str.parse() {
-        Ok(a) => a,
-        Err(_) => return -1,
-    };
+) {
+    let mut msg = Event::default();
     
-    let slice = unsafe { std::slice::from_raw_parts(data as *const u8, len) };
-    if let Some(sock) = &*get_event_socket().lock().unwrap() {
-        match sock.send_to(slice, sock_addr) {
-            Ok(n) => n as i32,
-            Err(_) => -1,
+    let mut serialization = Serialization::default();
+    serialization.nem_id = nem_id as u32;
+    serialization.event_id = event_id as u32;
+    serialization.data = unsafe { std::slice::from_raw_parts(data as *const u8, len) }.to_vec();
+    
+    let mut data_msg = Data::default();
+    data_msg.serializations.push(serialization);
+    
+    msg.data = data_msg;
+    msg.uuid = unsafe { std::slice::from_raw_parts(uuid, 16) }.to_vec();
+    msg.sequence_number = seq_num;
+    
+    let mut buf = Vec::new();
+    if msg.encode(&mut buf).is_ok() {
+        let msg_len = buf.len() as u16;
+        let mut final_buf = msg_len.to_be_bytes().to_vec();
+        final_buf.extend_from_slice(&buf);
+        
+        let addr_str = unsafe { std::ffi::CStr::from_ptr(addr) }.to_string_lossy();
+        if let Ok(sock_addr) = addr_str.parse::<SocketAddr>() {
+            if let Some(sock) = &*get_event_socket().lock().unwrap() {
+                if sock.send_to(&final_buf, sock_addr).is_ok() {
+                    unsafe {
+                        emane_c_event_service_update_stat(0, uuid, event_id); // TYPE_TX
+                    }
+                }
+            }
         }
-    } else {
-        -1
     }
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_event_service_mcast_recv(
-    buf: *mut c_char,
-    max_len: usize,
-) -> i32 {
-    if let Some(sock) = &*get_event_socket().lock().unwrap() {
-        let slice = unsafe { std::slice::from_raw_parts_mut(buf as *mut u8, max_len) };
-        match sock.recv(slice) {
-            Ok(n) => n as i32,
-            Err(_) => -1,
+pub extern "C" fn emane_rs_event_service_process_loop(local_uuid: *const u8) {
+    let local_uuid_slice = unsafe { std::slice::from_raw_parts(local_uuid, 16) };
+    
+    let sock = if let Some(s) = &*get_event_socket().lock().unwrap() {
+        match s.try_clone() {
+            Ok(cloned) => cloned,
+            Err(_) => return,
         }
     } else {
-        -1
+        return;
+    };
+    
+    let mut recv_buf = [0u8; 65536];
+    loop {
+        match sock.recv(&mut recv_buf) {
+            Ok(len) if len > 2 => {
+                let packet_len = u16::from_be_bytes([recv_buf[0], recv_buf[1]]) as usize;
+                if len - 2 == packet_len {
+                    if let Ok(msg) = Event::decode(&recv_buf[2..len]) {
+                        if msg.uuid != local_uuid_slice {
+                            for serialization in msg.data.serializations {
+                                let recv_nem_id = serialization.nem_id as u16;
+                                let recv_event_id = serialization.event_id as u16;
+                                
+                                emane_rs_event_service_process_event_message(
+                                    recv_nem_id,
+                                    recv_event_id,
+                                    serialization.data.as_ptr() as *const c_char,
+                                    serialization.data.len(),
+                                    0
+                                );
+                                
+                                unsafe {
+                                    emane_c_event_service_update_stat(1, msg.uuid.as_ptr(), recv_event_id); // TYPE_RX
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(_) => continue,
+            Err(_) => break, // socket closed or error
+        }
     }
 }
 
