@@ -86,19 +86,8 @@ namespace EMANE
     using NEMTransportAdapterBuildIdMap = std::map<NEMId, BuildId>;
     using EventGeneratorBuildIds = std::vector<BuildId>;
     using EventAgentBuildIds = std::vector<BuildId>;
-
-    BuildId buildId_;
-    BuildId nemManagerBuildId_;
-    BuildId transportManagerBuildId_;
-    BuildId eventGeneratorManagerBuildId_;
-    BuildId eventAgentManagerBuildId_;
     
     NEMLayerComponentBuildIdMap NEMLayerComponentBuildIdMap_;
-    NEMTransportAdapterBuildIdMap NEMTransportAdapterBuildIdMap_;
-    NEMTransportBuildIdMap NEMTransportBuildIdMap_;
-    NEMBuildIdMap NEMBuildIdMap_;
-    EventGeneratorBuildIds eventGeneratorBuildIds_;
-    EventAgentBuildIds eventAgentBuildIds_;
 
     BuildId assignBuildId(Buildable *pBuildable);
   };

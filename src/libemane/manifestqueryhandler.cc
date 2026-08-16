@@ -33,13 +33,14 @@
 
 #include "manifestqueryhandler.h"
 #include "buildidservice.h"
+#include "rust_ffi.h"
 #include "emane/serializationexception.h"
 
 std::string
 EMANE::ControlPort::ManifestQueryHandler::process(std::uint32_t u32Sequence,
                                                   std::uint32_t u32Reference)
 {
-  auto componentMap = BuildIdServiceSingleton::instance()->getNEMLayerComponentBuildIdMap();
+  FfiNEMLayerComponentMap ffiMap = emane_rs_buildid_get_nem_layer_component_map();
 
   EMANERemoteControlPortAPI::Response response;
 
@@ -54,19 +55,21 @@ EMANE::ControlPort::ManifestQueryHandler::process(std::uint32_t u32Sequence,
   using Component = EMANERemoteControlPortAPI::Response::Query::Manifest::NEM::Component;
 
 
-  for(const auto & nem : componentMap)
+  for (size_t i = 0; i < ffiMap.len; ++i)
     {
+      const auto & nem_list = ffiMap.nems[i];
       auto pNEM = pManifest->add_nems();
 
-      pNEM->set_id(nem.first);
+      pNEM->set_id(nem_list.nem_id);
 
-      for(const auto & component : nem.second)
+      for (size_t j = 0; j < nem_list.len; ++j)
         {
+          const auto & comp = nem_list.components[j];
           auto pComponent = pNEM->add_components();
 
-          pComponent->set_buildid(std::get<0>(component));
+          pComponent->set_buildid(comp.build_id);
 
-          ComponentType componentType{std::get<1>(component)};
+          ComponentType componentType{static_cast<ComponentType>(comp.layer_type)};
 
           pComponent->set_type(componentType == ComponentType::COMPONENT_PHYILAYER ?
                                Component::TYPE_COMPONENT_PHY :
@@ -76,9 +79,14 @@ EMANE::ControlPort::ManifestQueryHandler::process(std::uint32_t u32Sequence,
                                Component::TYPE_COMPONENT_SHIM:
                                Component::TYPE_COMPONENT_TRANSPORT);
 
-          pComponent->set_plugin(std::get<2>(component));
+          if (comp.plugin_name != nullptr)
+            {
+              pComponent->set_plugin(comp.plugin_name);
+            }
         }
     }
+
+  emane_rs_buildid_free_nem_layer_component_map(ffiMap);
 
   response.set_reference(u32Reference);
 

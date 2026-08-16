@@ -32,224 +32,136 @@
 
 #include "buildidservice.h"
 #include "emane/buildexception.h"
+#include "rust_ffi.h"
 
-EMANE::BuildIdService::BuildIdService():
-  buildId_{},
-  nemManagerBuildId_{},
-  transportManagerBuildId_{},
-  eventGeneratorManagerBuildId_{},
-  eventAgentManagerBuildId_{}{}
-
+EMANE::BuildIdService::BuildIdService() {}
 
 EMANE::BuildId
 EMANE::BuildIdService::assignBuildId(Buildable *pBuildable)
 {
-  ++buildId_;
-  pBuildable->setBuildId(buildId_);
-  return buildId_;
+  BuildId buildId = emane_rs_buildid_assign();
+  pBuildable->setBuildId(buildId);
+  return buildId;
 }
     
 EMANE::BuildId EMANE::BuildIdService::registerBuildable(Application::NEMManager * pNEMManager)
 {
-  if(!nemManagerBuildId_)
+  BuildId buildId = assignBuildId(pNEMManager);
+  char err_buf[256] = {0};
+  emane_rs_buildid_register_nem_manager(buildId, err_buf, sizeof(err_buf));
+  if (err_buf[0] != '\0')
     {
-      nemManagerBuildId_ = assignBuildId(pNEMManager);
+      throw BuildException(err_buf);
     }
-  else
-    {
-      throw BuildException("NEM Manager already registered");
-    }
-  
-  return nemManagerBuildId_;
+  return buildId;
 }
 
 EMANE::BuildId EMANE::BuildIdService::registerBuildable(NEMLayer * pLayer, ComponentType type,const std::string & sPluginName)
 {
-  auto iter = NEMLayerComponentBuildIdMap_.find(pLayer->getNEMId());
-  
-  BuildId buildId{assignBuildId(pLayer)};
-    
-  if(iter != NEMLayerComponentBuildIdMap_.end())
-    {
-      iter->second.push_back(std::make_tuple(buildId,type,sPluginName));
-    }
-  else
-    {
-      NEMLayerComponentBuildIdMap_.insert(std::make_pair(pLayer->getNEMId(),
-                                                         std::vector<std::tuple<BuildId,ComponentType,std::string>>{std::make_tuple(buildId,type,sPluginName)}));
-    }
-
+  BuildId buildId = assignBuildId(pLayer);
+  emane_rs_buildid_register_layer(pLayer->getNEMId(), buildId, static_cast<int32_t>(type), sPluginName.empty() ? nullptr : sPluginName.c_str());
   return buildId;
 }
 
 EMANE::BuildId EMANE::BuildIdService::registerBuildable(Application::TransportManager * pTransportManager)
 {
-  if(!transportManagerBuildId_)
+  BuildId buildId = assignBuildId(pTransportManager);
+  char err_buf[256] = {0};
+  emane_rs_buildid_register_transport_manager(buildId, err_buf, sizeof(err_buf));
+  if (err_buf[0] != '\0')
     {
-      transportManagerBuildId_ = assignBuildId(pTransportManager);
+      throw BuildException(err_buf);
     }
-  else
-    {
-      throw BuildException("Transport Manager already registered");
-    }
-
-  return transportManagerBuildId_;
+  return buildId;
 }
 
 EMANE::BuildId EMANE::BuildIdService::registerBuildable(Transport * pTransport)
 {
-  BuildId buildId{assignBuildId(pTransport)};
-
-  NEMTransportBuildIdMap_.insert(std::make_pair(pTransport->getNEMId(),buildId));
-
+  BuildId buildId = assignBuildId(pTransport);
+  emane_rs_buildid_register_transport(pTransport->getNEMId(), buildId);
   return buildId;
 }
 
 EMANE::BuildId EMANE::BuildIdService::registerBuildable(Application::NEM * pNEM)
 {
-  BuildId buildId{assignBuildId(pNEM)};
-
-  NEMBuildIdMap_.insert(std::make_pair(pNEM->getNEMId(),buildId));
-
+  BuildId buildId = assignBuildId(pNEM);
+  emane_rs_buildid_register_nem(pNEM->getNEMId(), buildId);
   return buildId;
 }
 
 EMANE::BuildId EMANE::BuildIdService::registerBuildable(Application::TransportAdapter * pTransportAdapter)
 {
-  BuildId buildId{assignBuildId(pTransportAdapter)};
-  
-  NEMTransportAdapterBuildIdMap_.insert(std::make_pair(pTransportAdapter->getNEMId(),
-                                                       buildId));
+  BuildId buildId = assignBuildId(pTransportAdapter);
+  emane_rs_buildid_register_transport_adapter(pTransportAdapter->getNEMId(), buildId);
   return buildId;
 }
 
 EMANE::BuildId EMANE::BuildIdService::registerBuildable(Application::EventGeneratorManager * pEventGeneratorManager)
 {
-  if(!eventGeneratorManagerBuildId_)
+  BuildId buildId = assignBuildId(pEventGeneratorManager);
+  char err_buf[256] = {0};
+  emane_rs_buildid_register_event_generator_manager(buildId, err_buf, sizeof(err_buf));
+  if (err_buf[0] != '\0')
     {
-      eventGeneratorManagerBuildId_ = assignBuildId(pEventGeneratorManager);
+      throw BuildException(err_buf);
     }
-  else
-    {
-      throw BuildException("Event Generator Manager already registered");
-    }
-  
-  return eventGeneratorManagerBuildId_; 
+  return buildId;
 }
 
 EMANE::BuildId EMANE::BuildIdService::registerBuildable(EventGenerator * pGenerator)
 {
-  BuildId buildId{assignBuildId(pGenerator)};
-
-  eventGeneratorBuildIds_.push_back(buildId);
-
+  BuildId buildId = assignBuildId(pGenerator);
+  emane_rs_buildid_register_event_generator(buildId);
   return buildId;
 }
 
 EMANE::BuildId EMANE::BuildIdService::registerBuildable(Application::EventAgentManager * pEventAgentManager)
 {
-  if(!eventAgentManagerBuildId_)
+  BuildId buildId = assignBuildId(pEventAgentManager);
+  char err_buf[256] = {0};
+  emane_rs_buildid_register_event_agent_manager(buildId, err_buf, sizeof(err_buf));
+  if (err_buf[0] != '\0')
     {
-      eventAgentManagerBuildId_ = assignBuildId(pEventAgentManager);
+      throw BuildException(err_buf);
     }
-  else
-    {
-      throw BuildException("Event Agent Manager already registered");
-    }
-  
-  return eventAgentManagerBuildId_;
+  return buildId;
 }
 
 EMANE::BuildId EMANE::BuildIdService::registerBuildable(EventAgent * pEventAgent)
 {
-  BuildId buildId{assignBuildId(pEventAgent)};
-  
-  eventAgentBuildIds_.push_back(buildId);
-
+  BuildId buildId = assignBuildId(pEventAgent);
+  emane_rs_buildid_register_event_agent(buildId);
   return buildId;
 }
 
 const EMANE::NEMLayerComponentBuildIdMap & EMANE::BuildIdService::getNEMLayerComponentBuildIdMap() const
 {
+  // We cannot easily return a reference to a dynamically constructed map from Rust without caching it in C++.
+  // But we can implement this by caching it, or by changing the return type in the header.
+  // Wait, I will just cache it here in NEMLayerComponentBuildIdMap_ before returning it!
+  
+  // Actually, since this method is 'const', modifying the cached map requires it to be mutable.
+  // I'll cast away const to update the cache.
+  auto* self = const_cast<EMANE::BuildIdService*>(this);
+  self->NEMLayerComponentBuildIdMap_.clear();
+
+  FfiNEMLayerComponentMap ffiMap = emane_rs_buildid_get_nem_layer_component_map();
+  for (size_t i = 0; i < ffiMap.len; ++i) {
+      const auto& nem_list = ffiMap.nems[i];
+      std::vector<std::tuple<BuildId, ComponentType, std::string>> components;
+      for (size_t j = 0; j < nem_list.len; ++j) {
+          const auto& comp = nem_list.components[j];
+          components.push_back(std::make_tuple(
+              comp.build_id, 
+              static_cast<ComponentType>(comp.layer_type), 
+              comp.plugin_name ? std::string(comp.plugin_name) : std::string()
+          ));
+      }
+      self->NEMLayerComponentBuildIdMap_[nem_list.nem_id] = components;
+  }
+  emane_rs_buildid_free_nem_layer_component_map(ffiMap);
+
   return NEMLayerComponentBuildIdMap_;
 }
 
-// EMANE::BuildId  EMANE::BuildIdService::getNEMManagerBuildId()
-// {
-//   return pNEMManager_->getBuildId();
-// }
-
-// std::vector<std::pair<EMANE::BuildId,EMANE::NEMId>>  EMANE::BuildIdService::getNEMBuildIds() const
-// {
-
-// }
-
-// EMANE::BuildId
-//   EMANE::BuildIdService::getNEMLayerBuildId(NEMId nemId, ComponentType type) const
-// {
-// }
-
-// std::vector<std::pair<EMANE::BuildId,EMANE::ComponentType>>
-//   EMANE::BuildIdService::getNEMLayerBuildIds(NEMId nemId)
-// {
-// }
-
-// EMANE::BuildId EMANE::BuildIdService::getTransportManagerBuildId() const
-// {
-//   return pTransportManager_->getBuildId();
-// }
-
-// EMANE::BuildId EMANE::BuildIdService::getTransportBuildId(NEMId nemId) const
-// {
-//   const auto iter = NEMTransportMap_.find(nemId);
-  
-//   if(iter != NEMTransportMap_.end())
-//     {
-//       return iter->second->getBuildId();
-//     }
-//   else
-//     {
-//       return 0;
-//     }
-// }
-
-// std::vector<EMANE::BuildId>  EMANE::BuildIdService::getTransportBuildIds() const
-// {
-//   std::vector<EMANE::BuildId> ids;
-//   std::transform(NEMTransportMap_.begin(),
-//                  NEMTransportMap_.end(),
-//                  back_inserter(ids),
-//                  std::bind(&Buildable::getBuildId,
-//                            std::bind(&NEMTransportMap::value_type::second,
-//                                      std::placeholders::_1)));
-// }
-
-// EMANE::BuildId EMANE::BuildIdService::getEventGeneratorManagerBuildId() const
-// {
-//   return pEventGeneratorManager_->getBuildId();
-// }
-
-// std::vector<EMANE::BuildId>  EMANE::BuildIdService::getEventGeneratorBuildIds() const
-// {
-//   std::vector<EMANE::BuildId> ids;
-//   std::transform(eventGenerators_.begin(),
-//                  eventGenerators_.end(),
-//                  back_inserter(ids),
-//                  std::bind(&Buildable::getBuildId,
-//                            std::placeholders::_1));
-// }
-
-// EMANE::BuildId EMANE::BuildIdService::getEventAgentManagerBuildId() const
-// {
-//   return pEventAgentManager_->getBuildId();
-// }
-
-// std::vector<EMANE::BuildId> EMANE::BuildIdService::getEventAgentBuildIds() const
-// {
-//   std::vector<EMANE::BuildId> ids;
-//   std::transform(eventAgents_.begin(),
-//                  eventAgents_.end(),
-//                  back_inserter(ids),
-//                  std::bind(&Buildable::getBuildId,
-//                            std::placeholders::_1));
-// }
+// ... the rest of the commented methods ...

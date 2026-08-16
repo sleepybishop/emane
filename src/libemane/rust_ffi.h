@@ -106,6 +106,39 @@ extern "C" {
     FfiStatisticTableQueryResult emane_rs_statistic_query_table(uint16_t build_id, FfiStringArray names, char* err_buf, size_t err_len);
     void emane_rs_statistic_free_table_query_result(FfiStatisticTableQueryResult res);
 
+    // BuildId FFI
+    struct FfiNEMLayerComponent {
+        uint16_t build_id;
+        int32_t layer_type;
+        const char* plugin_name;
+    };
+
+    struct FfiNEMLayerComponentList {
+        uint16_t nem_id;
+        FfiNEMLayerComponent* components;
+        size_t len;
+    };
+
+    struct FfiNEMLayerComponentMap {
+        FfiNEMLayerComponentList* nems;
+        size_t len;
+    };
+
+    uint16_t emane_rs_buildid_assign();
+    void emane_rs_buildid_register_nem_manager(uint16_t build_id, char* err_buf, size_t err_len);
+    void emane_rs_buildid_register_transport_manager(uint16_t build_id, char* err_buf, size_t err_len);
+    void emane_rs_buildid_register_event_generator_manager(uint16_t build_id, char* err_buf, size_t err_len);
+    void emane_rs_buildid_register_event_agent_manager(uint16_t build_id, char* err_buf, size_t err_len);
+    void emane_rs_buildid_register_layer(uint16_t nem_id, uint16_t build_id, int32_t layer_type, const char* plugin_name);
+    void emane_rs_buildid_register_transport(uint16_t nem_id, uint16_t build_id);
+    void emane_rs_buildid_register_nem(uint16_t nem_id, uint16_t build_id);
+    void emane_rs_buildid_register_transport_adapter(uint16_t nem_id, uint16_t build_id);
+    void emane_rs_buildid_register_event_generator(uint16_t build_id);
+    void emane_rs_buildid_register_event_agent(uint16_t build_id);
+    
+    FfiNEMLayerComponentMap emane_rs_buildid_get_nem_layer_component_map();
+    void emane_rs_buildid_free_nem_layer_component_map(FfiNEMLayerComponentMap map);
+
 }
 
 #ifdef __cplusplus
