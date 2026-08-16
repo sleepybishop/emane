@@ -43,7 +43,8 @@ fn main() {
             "../../src/libemane/radiotorouter.proto",
             "../../src/libemane/remotecontrolportapi.proto",
             "../../src/libemane/tdmascheduleevent.proto",
+            "../../src/models/mac/tdma/tdmabasemodelmessage.proto",
         ],
-        &["../../src/libemane/"],
+        &["../../src/libemane/", "../../src/models/mac/tdma/"],
     ).expect("Failed to compile protobuf files!");
 }
