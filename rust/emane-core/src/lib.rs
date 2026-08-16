@@ -15,6 +15,8 @@ pub mod neighbor_metric_manager;
 pub mod pcr_manager;
 pub mod queue_metric_manager;
 pub mod rf_signal_table;
+pub mod rfpipe_mac;
+pub mod tdma_mac;
 pub mod rfpipe_message;
 pub mod tdma_message;
 

@@ -146,6 +146,70 @@ extern "C" {
     bool emane_rs_bypass_mac_process_upstream(FfiBypassMac* ptr, uint16_t hdr_type);
     uint16_t emane_rs_bypass_mac_process_downstream(FfiBypassMac* ptr);
 
+    // Rfpipe MAC FFI
+    struct FfiRfpipeMac;
+
+    struct FfiRfpipeUpstreamAction {
+        uint8_t action; // 0 = drop, 1 = send_upstream
+        uint16_t drop_code;
+    };
+
+    struct FfiRfpipeDownstreamAction {
+        uint8_t action; // 0 = drop, 1 = enqueue
+        uint16_t drop_code;
+        uint64_t duration_microseconds;
+        uint64_t delay_microseconds;
+    };
+
+    FfiRfpipeMac* emane_rs_rfpipe_mac_new(uint16_t id);
+    void emane_rs_rfpipe_mac_free(FfiRfpipeMac* ptr);
+    
+    FfiRfpipeUpstreamAction emane_rs_rfpipe_mac_process_upstream(
+        FfiRfpipeMac* ptr,
+        double sinr,
+        size_t pkt_length,
+        uint16_t src,
+        uint16_t dst,
+        uint64_t sequence_number,
+        double noise_floor_db,
+        uint64_t start_of_reception_microseconds,
+        uint64_t duration_microseconds,
+        uint64_t data_rate,
+        uint64_t frequency_hz,
+        double rx_power_dbm,
+        double receiver_sensitivity_db
+    );
+
+    FfiRfpipeDownstreamAction emane_rs_rfpipe_mac_process_downstream(
+        FfiRfpipeMac* ptr,
+        size_t pkt_length
+    );
+
+    void emane_rs_rfpipe_mac_downstream_dequeue(
+        FfiRfpipeMac* ptr,
+        uint16_t dst,
+        uint64_t delay_microseconds,
+        uint32_t queue_size,
+        uint32_t queue_depth,
+        uint32_t queue_discards
+    );
+
+    bool emane_rs_rfpipe_mac_flow_control_add_token(FfiRfpipeMac* ptr);
+
+    // Tdma MAC FFI
+    struct FfiTdmaMac;
+    FfiTdmaMac* emane_rs_tdma_mac_new(uint16_t id);
+    void emane_rs_tdma_mac_free(FfiTdmaMac* ptr);
+
+    void emane_rs_tdma_mac_set_flow_control(
+        FfiTdmaMac* ptr,
+        bool enable,
+        uint16_t tokens
+    );
+
+    bool emane_rs_tdma_mac_remove_token(FfiTdmaMac* ptr);
+    bool emane_rs_tdma_mac_add_token(FfiTdmaMac* ptr);
+
 }
 
 #ifdef __cplusplus
