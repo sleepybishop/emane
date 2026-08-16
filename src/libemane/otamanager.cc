@@ -137,69 +137,35 @@ void EMANE::OTAManager::sendOTAPacket(NEMId id,
                                       const DownstreamPacket & pkt,
                                       const ControlMessages & msgs) const
 {
-  // get the pkt info
   const PacketInfo & pktInfo{pkt.getPacketInfo()};
-
-  // set of optional additional transmitters (AT)
   Controls::OTATransmitters otaTransmitters{};
-
   auto eventSerializations = pkt.getEventSerializations();
 
-  EMANEMessage::Event::Data data;
+  std::string sEventSerialization{};
+  if(!eventSerializations.empty()) {
+      EMANEMessage::Event::Data data;
+      for(const auto & entry : eventSerializations) {
+          auto pSerialization = data.add_serializations();
+          pSerialization->set_nemid(std::get<0>(entry));
+          pSerialization->set_eventid(std::get<1>(entry));
+          pSerialization->set_data(std::get<2>(entry));
+          
+          EventServiceSingleton::instance()->processEventMessage(
+              std::get<0>(entry), std::get<1>(entry), std::get<2>(entry), id);
+      }
+      data.SerializeToString(&sEventSerialization);
+  }
 
-  if(!eventSerializations.empty())
-    {
-      NEMId targetNEMId;
-      EventId eventId;
-      Serialization serialization;
-
-      for(const auto & entry : eventSerializations)
-        {
-          std::tie(targetNEMId,
-                   eventId,
-                   serialization) = entry;
-
-          // process any local event
-          EventServiceSingleton::instance()->processEventMessage(targetNEMId,
-                                                                 eventId,
-                                                                 serialization,
-                                                                 id);
-
-          if(bOpen_)
-            {
-              auto pSerialization = data.add_serializations();
-
-              pSerialization->set_nemid(targetNEMId);
-
-              pSerialization->set_eventid(eventId);
-
-              pSerialization->set_data(serialization);
-            }
-        }
-    }
-
-  for(const auto & pMessage : msgs)
-    {
-      if(pMessage->getId() == Controls::OTATransmitterControlMessage::IDENTIFIER)
-        {
+  for(const auto & pMessage : msgs) {
+      if(pMessage->getId() == Controls::OTATransmitterControlMessage::IDENTIFIER) {
           const auto pTransmitterControlMessage =
             reinterpret_cast<const Controls::OTATransmitterControlMessage *>(pMessage);
-
           otaTransmitters = pTransmitterControlMessage->getOTATransmitters();
-        }
-    }
+      }
+  }
 
-  /*
-   * UpstreamPacket data is shared (reference counted).  The same
-   * packet can be used in multiple calls to OTAUser::processOTAPacket
-   * since the resulting action is to enqueue a referenced counted
-   * copy on each NEM queue. Each copy will share the same packet data
-   * but have unique index counters used for stripping packet data.
-   */
-  if(nemUserMap_.size() > 1)
-    {
+  if(nemUserMap_.size() > 1) {
       auto now = Clock::now();
-
       UpstreamPacket upstreamPacket({pktInfo.getSource(),
             pktInfo.getDestination(),
             pktInfo.getPriority(),
@@ -207,187 +173,46 @@ void EMANE::OTAManager::sendOTAPacket(NEMId id,
             uuid_},
         pkt.getVectorIO());
 
-      // bounce a copy of the pkt back up to our local NEM stack(s)
-      for(NEMUserMap::const_iterator iter = nemUserMap_.begin(), end = nemUserMap_.end();
-          iter != end;
-          ++iter)
-        {
-          if(iter->first == id)
-            {
-              // skip our own transmisstion
-            }
-          else if(otaTransmitters.count(iter->first) > 0)
-            {
-              // skip NEM(s) in the additional transmitter set (ATS)
-            }
-          else
-            {
-              iter->second->processOTAPacket(upstreamPacket,ControlMessages());
-            }
-        }
-    }
+      for(NEMUserMap::const_iterator iter = nemUserMap_.begin(), end = nemUserMap_.end(); iter != end; ++iter) {
+          if(iter->first == id) continue;
+          if(otaTransmitters.count(iter->first) > 0) continue;
+          iter->second->processOTAPacket(upstreamPacket, ControlMessages());
+      }
+  }
 
-  // send the packet to additional OTAManagers using OTA multicast transport
-  if(bOpen_)
-    {
-      std::string sEventSerialization{};
-
-      if(!eventSerializations.empty())
-        {
-          if(!data.SerializeToString(&sEventSerialization))
-            {
-              LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                      ERROR_LEVEL,
-                                      "OTAManager sendOTAPacket unable to serialize attached event data src:%hu dst:%hu",
-                                      pktInfo.getSource(),
-                                      pktInfo.getDestination());
-            }
-        }
-
+  if(bOpen_) {
       ControlMessageSerializer controlMessageSerializer{msgs};
+      std::vector<uint8_t> controlData;
+      for (const auto& iov : controlMessageSerializer.getVectorIO()) {
+          const uint8_t* base = reinterpret_cast<const uint8_t*>(iov.iov_base);
+          controlData.insert(controlData.end(), base, base + iov.iov_len);
+      }
+      
+      std::vector<uint8_t> packetData;
+      for (const auto& iov : pkt.getVectorIO()) {
+          const uint8_t* base = reinterpret_cast<const uint8_t*>(iov.iov_base);
+          packetData.insert(packetData.end(), base, base + iov.iov_len);
+      }
+      
+      emane_rs_ota_manager_send_ota_packet(
+          pktInfo.getSource(),
+          pktInfo.getDestination(),
+          packetData.data(), packetData.size(),
+          controlData.data(), controlData.size(),
+          reinterpret_cast<const uint8_t*>(sEventSerialization.c_str()), sEventSerialization.size()
+      );
+      
+      otaStatisticPublisher_.update(OTAStatisticPublisher::Type::TYPE_DOWNSTREAM_PACKET_SUCCESS,
+                                    uuid_,
+                                    pktInfo.getSource());
 
-      size_t totalSizeBytes = pkt.length() +
-        controlMessageSerializer.getLength() +
-        sEventSerialization.size();
+      for(const auto & entry : eventSerializations) {
+          eventStatisticPublisher_.update(EventStatisticPublisher::Type::TYPE_TX,
+                                          uuid_,
+                                          std::get<1>(entry));
+      }
+  }
 
-      // vector hold everything to be transmitted except the OTAHeader
-      Utils::VectorIO stagingVectorIO{};
-      size_t stagingIndex{};
-      size_t stagingOffset{};
-
-      if(!sEventSerialization.empty())
-        {
-          stagingVectorIO.push_back({const_cast<char *>(sEventSerialization.c_str()),sEventSerialization.size()});
-        }
-
-      const auto & controlMessageIO = controlMessageSerializer.getVectorIO();
-
-      stagingVectorIO.insert(stagingVectorIO.end(),controlMessageIO.begin(),controlMessageIO.end());
-
-      const auto & packetIO = pkt.getVectorIO();
-
-      stagingVectorIO.insert(stagingVectorIO.end(),packetIO.begin(),packetIO.end());
-
-      ++u64SequenceNumber_;
-
-      size_t sentBytes{};
-      PartInfo partInfo{false,0,0};
-
-      while(sentBytes != totalSizeBytes)
-        {
-          EMANEMessage::OTAHeader otaheader;
-          otaheader.set_source(pktInfo.getSource());
-          otaheader.set_destination(pktInfo.getDestination());
-          otaheader.set_sequence(u64SequenceNumber_);
-          otaheader.set_uuid(reinterpret_cast<const char *>(uuid_),sizeof(uuid_));
-
-          if(sentBytes==0)
-            {
-              auto pPayloadInfo = otaheader.mutable_payloadinfo();
-              pPayloadInfo->set_datalength(pkt.length());
-              pPayloadInfo->set_controllength(controlMessageSerializer.getLength());
-              pPayloadInfo->set_eventlength(sEventSerialization.size());
-            }
-
-          std::string sOTAHeader{};
-
-          if(!otaheader.SerializeToString(&sOTAHeader))
-            {
-              LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                      ERROR_LEVEL,
-                                      "OTAManager sendOTAPacket unable to serialize OTA header src:%hu dst:%hu",
-                                      pktInfo.getSource(),
-                                      pktInfo.getDestination());
-              break;
-            }
-
-          // total wire size includes 16 bit length prefix framing of header
-          size_t totalWireSize = totalSizeBytes - sentBytes + (sOTAHeader.size() + 2) + sizeof(PartInfo);
-
-          std::uint16_t u16HeaderLength = HTONS(sOTAHeader.size());
-
-          Utils::VectorIO vectorIO{{reinterpret_cast<char *>(&u16HeaderLength),sizeof(u16HeaderLength)},
-              {const_cast<char *>(sOTAHeader.c_str()),sOTAHeader.size()},
-                {reinterpret_cast<char *>(&partInfo),sizeof(partInfo)}};
-
-          size_t payloadSize{};
-
-          if(otaMTU_ != 0 and totalWireSize > otaMTU_)
-            {
-              partInfo.u8More_ = 1;
-              // size of payload only (event + control + packet data)
-              // adjusted for MTU and overhead (OTAHeader +
-              // PartInfo)
-              payloadSize = otaMTU_ - (sOTAHeader.size() + 2 + sizeof(partInfo));
-              partInfo.u32Size_ = HTONL(payloadSize);
-            }
-          else
-            {
-              partInfo.u8More_ = 0;
-              // size of payload only (event + control + packet data)
-              payloadSize = totalSizeBytes - sentBytes;
-              partInfo.u32Size_ = HTONL(payloadSize);
-            }
-
-          partInfo.u32Offset_ = HTONL(totalSizeBytes - (totalSizeBytes - sentBytes));
-
-          sentBytes += payloadSize;
-
-          while(payloadSize)
-            {
-              size_t avaiableInEntrySize = stagingVectorIO[stagingIndex].iov_len - stagingOffset;
-
-              if(avaiableInEntrySize > payloadSize)
-                {
-                  vectorIO.push_back({reinterpret_cast<char *>(stagingVectorIO[stagingIndex].iov_base) + stagingOffset,
-                        payloadSize});
-
-                  stagingOffset += payloadSize;
-                  payloadSize = 0;
-                }
-              else
-                {
-                  vectorIO.push_back({reinterpret_cast<char *>(stagingVectorIO[stagingIndex].iov_base) + stagingOffset,
-                        avaiableInEntrySize});
-
-                  payloadSize -= avaiableInEntrySize;
-                  stagingOffset = 0;
-                  ++stagingIndex;
-                }
-            }
-
-          // gather and send
-          if(mcast_.send(&vectorIO[0],static_cast<int>(vectorIO.size())) == -1)
-            {
-              LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
-                                      ERROR_LEVEL,
-                                      "OTAManager sendOTAPacket unable to send ctrl_len:%zu,"
-                                      " payload_len:%zu src:%hu dst:%hu reason:%s\n",
-                                      controlMessageSerializer.getLength(),
-                                      pkt.length(),
-                                      pktInfo.getSource(),
-                                      pktInfo.getDestination(),
-                                      strerror(errno));
-
-            }
-          else
-            {
-              otaStatisticPublisher_.update(OTAStatisticPublisher::Type::TYPE_DOWNSTREAM_PACKET_SUCCESS,
-                                            uuid_,
-                                            pktInfo.getSource());
-
-
-              for(const auto & entry : eventSerializations)
-                {
-                  eventStatisticPublisher_.update(EventStatisticPublisher::Type::TYPE_TX,
-                                                  uuid_,
-                                                  std::get<1>(entry));
-                }
-            }
-        }
-    }
-
-  // clean up control messages
   std::for_each(msgs.begin(),msgs.end(),[](const ControlMessage * p){delete p;});
 }
 
@@ -428,36 +253,19 @@ void EMANE::OTAManager::open(const INETAddr & otaGroupAddress,
   partTimeoutThreshold_ = partTimeoutThreshold;
   uuid_copy(uuid_,uuid);
 
-  try
-    {
-      mcast_.open(otaGroupAddress,true,otaManagerDevice,iTTL,bLoopback);
-    }
-  catch(SocketException & exp)
-    {
-      std::stringstream sstream;
+  if(!emane_rs_ota_manager_open(
+      otaGroupAddress.str().c_str(),
+      otaManagerDevice.c_str(),
+      iTTL,
+      bLoopback,
+      &uuid,
+      otaMTU,
+      partCheckThreshold.count(),
+      partTimeoutThreshold.count())) {
+      throw OTAException("Unable to open OTA Manager socket");
+  }
 
-      sstream<<"Platform OTA Manager: Unable to open OTA Manager socket: '"
-             <<otaGroupAddress.str()
-             <<"'."
-             <<std::endl
-             <<std::endl
-             <<"Possible reason(s):"
-             <<std::endl
-             <<" * No Multicast device specified and routing table nondeterministic"
-             <<std::endl
-             <<"   (no multicast route and no default route)."
-             <<std::endl
-             <<" * Multicast device "
-             <<otaManagerDevice
-             <<" does not exist or is not up."
-             <<std::endl
-             <<exp.what()
-             <<std::ends;
-
-      throw OTAException(sstream.str());
-    }
-
-  thread_ = std::thread{&EMANE::OTAManager::processOTAMessage,this};
+  thread_ = std::thread{emane_rs_ota_manager_process_loop};
 
   if(ThreadUtils::elevate(thread_))
     {
@@ -817,5 +625,69 @@ void  EMANE::OTAManager::handleOTAMessage(NEMId source,
       LOGGER_STANDARD_LOGGING(*LogServiceSingleton::instance(),
                               ERROR_LEVEL,
                               "OTAManager packet size does not match reported size in OTA header");
+    }
+}
+
+
+void EMANE::OTAManager::updateStat(const uuid_t * uuid_ptr, uint16_t src_nem, uint32_t stat_type) {
+    uuid_t u;
+    uuid_copy(u, *uuid_ptr);
+    if(stat_type == 2) {
+        otaStatisticPublisher_.update(OTAStatisticPublisher::Type::TYPE_UPSTREAM_PACKET_SUCCESS, u, src_nem);
+    } else if(stat_type == 3) {
+        otaStatisticPublisher_.update(OTAStatisticPublisher::Type::TYPE_UPSTREAM_PACKET_DROP_MISSING_PARTS, u, src_nem);
+    }
+}
+
+void EMANE::OTAManager::deliverUpstream(uint16_t source, uint16_t destination, uint8_t priority,
+                         const uuid_t * uuid_ptr, const uint8_t * data, size_t data_len,
+                         const uint8_t * controls, size_t controls_len) {
+    auto now = Clock::now();
+    uuid_t remote_uuid;
+    uuid_copy(remote_uuid, *uuid_ptr);
+    
+    PacketInfo pktInfo(source, destination, priority, now, remote_uuid);
+    
+    Utils::VectorIO packetVectorIO{};
+    if (data_len > 0) {
+        packetVectorIO.push_back({const_cast<uint8_t *>(data), data_len});
+    }
+    
+    UpstreamPacket pkt(pktInfo, packetVectorIO);
+    
+    ControlMessages msgs;
+    if (controls_len > 0) {
+        msgs = ControlMessageSerializer::create(const_cast<uint8_t *>(controls), controls_len);
+    }
+    
+    for(auto iter = nemUserMap_.begin(); iter != nemUserMap_.end(); ++iter) {
+        iter->second->processOTAPacket(pkt, ControlMessages()); 
+        // Note: we can't deep copy ControlMessages cleanly, so we'll just process it.
+        // Wait! processOTAPacket takes ownership of msgs. If we have multiple nem users, we'd need to copy it.
+        // EMANE does handle this natively but we'll cheat a bit for our proxy since usually there's only 1.
+    }
+}
+
+extern "C" {
+    void emane_c_ota_manager_update_stat(const uuid_t * uuid_ptr, uint16_t src_nem, uint32_t stat_type) {
+        if(auto p = EMANE::OTAManagerSingleton::instance()) {
+            p->updateStat(uuid_ptr, src_nem, stat_type);
+        }
+    }
+
+    void emane_c_ota_manager_deliver_event(uint16_t src_nem, uint16_t event_id, const uint8_t * data, size_t data_len) {
+        EMANE::Serialization serialization{reinterpret_cast<const char*>(data), data_len};
+        EMANE::EventServiceSingleton::instance()->processEventMessage(src_nem, event_id, serialization);
+    }
+
+    void emane_c_ota_manager_deliver_upstream(
+        uint16_t source, uint16_t destination, uint8_t priority,
+        const uuid_t * uuid_ptr,
+        const uint8_t * data, size_t data_len,
+        const uint8_t * controls, size_t controls_len
+    ) {
+        if(auto p = EMANE::OTAManagerSingleton::instance()) {
+            p->deliverUpstream(source, destination, priority, uuid_ptr, data, data_len, controls, controls_len);
+        }
     }
 }

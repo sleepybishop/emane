@@ -107,6 +107,12 @@ namespace EMANE
 
     void setStatEventCountRowLimit(size_t rows);
 
+    void updateStat(const uuid_t * uuid_ptr, uint16_t src_nem, uint32_t stat_type);
+    
+    void deliverUpstream(uint16_t source, uint16_t destination, uint8_t priority,
+                         const uuid_t * uuid_ptr, const uint8_t * data, size_t data_len,
+                         const uint8_t * controls, size_t controls_len);
+
   private:
     typedef std::map<NEMId,OTAUser *> NEMUserMap;
     std::thread thread_;
@@ -155,6 +161,32 @@ namespace EMANE
   };
 
   using OTAManagerSingleton = OTAManager;
+}
+
+extern "C" {
+    bool emane_rs_ota_manager_open(
+        const char * group_addr_str,
+        const char * device_str,
+        uint8_t ttl,
+        bool loopback,
+        const uuid_t * uuid,
+        size_t ota_mtu,
+        uint16_t part_check_threshold_secs,
+        uint16_t part_timeout_threshold_secs
+    );
+
+    void emane_rs_ota_manager_process_loop();
+
+    bool emane_rs_ota_manager_send_ota_packet(
+        uint16_t source,
+        uint16_t destination,
+        const uint8_t * packet_data,
+        size_t packet_len,
+        const uint8_t * controls_data,
+        size_t controls_len,
+        const uint8_t * events_data,
+        size_t events_len
+    );
 }
 
 #endif //EMANEOTAMANAGER_HEADER_

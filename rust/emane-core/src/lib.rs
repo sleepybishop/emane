@@ -10,6 +10,7 @@ pub mod statistics;
 pub mod buildid;
 pub mod bypass_mac;
 pub mod event_service;
+pub mod ota_manager;
 pub mod flow_control_manager;
 pub mod neighbor_metric_manager;
 pub mod pcr_manager;
