@@ -45,7 +45,10 @@ namespace EMANE
   class LocationManager
   {
   public:
+    LocationManager(const LocationManager&) = delete;
+    LocationManager& operator=(const LocationManager&) = delete;
     LocationManager(NEMId nemId);
+    ~LocationManager();
 
     void update(const Events::Locations & locations);
 
@@ -54,13 +57,13 @@ namespace EMANE
     const PositionOrientationVelocity & getLocalPOV() const;
 
   private:
-    using LocationStore = std::map<NEMId,PositionOrientationVelocity>;
-    using LocationInfoCache = std::map<NEMId,LocationInfo>;
+    
+    
     NEMId nemId_;
-    PositionOrientationVelocity localPOV_;
-    LocationStore locationStore_;
-    LocationInfoCache locationInfoCache_;
-    std::uint64_t u64CacheSequenceNumber_;
+    
+    void* rs_ptr_;
+    
+    
   };
 }
 

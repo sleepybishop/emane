@@ -1,42 +1,43 @@
 #include <cstdint>
-/*
- * Copyright (c) 2013,2020 - Adjacent Link LLC, Bridgewater, New Jersey
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
-
 #include "locationmanager.h"
 #include "positionutils.h"
 
+extern "C" {
+    void* emane_rs_location_manager_create(uint16_t nemId);
+    void emane_rs_location_manager_destroy(void* ptr);
+    void* emane_rs_location_manager_get_local_pov(void* ptr);
+    void emane_rs_location_manager_set_local_pov(void* ptr, void* pov);
+    void* emane_rs_location_manager_get_pov(void* ptr, uint16_t nemId);
+    void emane_rs_location_manager_insert_pov(void* ptr, uint16_t nemId, void* pov);
+    void* emane_rs_location_manager_get_cache(void* ptr, uint16_t nemId);
+    void emane_rs_location_manager_set_cache(void* ptr, uint16_t nemId, void* loc_info);
+    void emane_rs_location_manager_clear_cache(void* ptr);
+    void emane_rs_location_manager_erase_cache(void* ptr, uint16_t nemId);
+    uint64_t emane_rs_location_manager_get_seq(void* ptr);
+    uint64_t emane_rs_location_manager_inc_seq(void* ptr);
+
+    void emane_rs_ffi_free_pov(void* ptr) {
+        delete static_cast<EMANE::PositionOrientationVelocity*>(ptr);
+    }
+    void emane_rs_ffi_free_loc_info(void* ptr) {
+        delete static_cast<EMANE::LocationInfo*>(ptr);
+    }
+}
+
 EMANE::LocationManager::LocationManager(NEMId nemId):
   nemId_{nemId},
-  u64CacheSequenceNumber_{}{}
+  rs_ptr_{emane_rs_location_manager_create(nemId)}
+{
+    auto pov = new PositionOrientationVelocity();
+    emane_rs_location_manager_set_local_pov(rs_ptr_, pov);
+}
+
+EMANE::LocationManager::~LocationManager()
+{
+    if (rs_ptr_) {
+        emane_rs_location_manager_destroy(rs_ptr_);
+    }
+}
 
 void EMANE::LocationManager::update(const Events::Locations & locations)
 {
@@ -46,62 +47,63 @@ void EMANE::LocationManager::update(const Events::Locations & locations)
 
       if(nemId_ == targetNEMId)
         {
-          // if self nem location changes clear
-          //  the location pair cache
-          if(localPOV_.update(location.getPosition(),
+          auto pov = static_cast<PositionOrientationVelocity*>(emane_rs_location_manager_get_local_pov(rs_ptr_));
+          if(pov->update(location.getPosition(),
                               location.getOrientation(),
                               location.getVelocity()))
             {
-              locationInfoCache_.clear();
+              emane_rs_location_manager_clear_cache(rs_ptr_);
             }
         }
       else
         {
-          auto iter = locationStore_.find(targetNEMId);
+          auto iter = emane_rs_location_manager_get_pov(rs_ptr_, targetNEMId);
 
-          if(iter != locationStore_.end())
+          if(iter != nullptr)
             {
-              // if nem location changes clear the
-              //   location pair chache if any
-              if(iter->second.update(location.getPosition(),
+              auto pov = static_cast<PositionOrientationVelocity*>(iter);
+              if(pov->update(location.getPosition(),
                                      location.getOrientation(),
                                      location.getVelocity()))
                 {
-                  locationInfoCache_.erase(targetNEMId);
+                  emane_rs_location_manager_erase_cache(rs_ptr_, targetNEMId);
                 }
             }
           else
             {
-              locationStore_.insert({targetNEMId,{location.getPosition(),
+              auto pov = new PositionOrientationVelocity(location.getPosition(),
                                                   location.getOrientation(),
-                                                  location.getVelocity()}});
+                                                  location.getVelocity());
+              emane_rs_location_manager_insert_pov(rs_ptr_, targetNEMId, pov);
             }
         }
     }
 }
 
-
 std::pair<EMANE::LocationInfo,bool> EMANE::LocationManager::getLocationInfo(NEMId remoteNEMId)
 {
-  if(localPOV_.isValid())
+  auto localPOV = static_cast<PositionOrientationVelocity*>(emane_rs_location_manager_get_local_pov(rs_ptr_));
+  if(localPOV && localPOV->isValid())
     {
-      auto cacheIter = locationInfoCache_.find(remoteNEMId);
+      auto cacheIter = emane_rs_location_manager_get_cache(rs_ptr_, remoteNEMId);
 
-      if(cacheIter != locationInfoCache_.end())
+      if(cacheIter != nullptr)
         {
-          return {cacheIter->second,true};
+          return {*static_cast<LocationInfo*>(cacheIter),true};
         }
       else
         {
-          auto iter = locationStore_.find(remoteNEMId);
+          auto iter = emane_rs_location_manager_get_pov(rs_ptr_, remoteNEMId);
 
-          if(iter != locationStore_.end())
+          if(iter != nullptr)
             {
-              LocationInfo locationInfo{localPOV_,iter->second,++u64CacheSequenceNumber_};
+              auto pov = static_cast<PositionOrientationVelocity*>(iter);
+              uint64_t seq = emane_rs_location_manager_inc_seq(rs_ptr_);
+              LocationInfo* locationInfo = new LocationInfo(*localPOV, *pov, seq);
 
-              locationInfoCache_[remoteNEMId] = locationInfo;
+              emane_rs_location_manager_set_cache(rs_ptr_, remoteNEMId, locationInfo);
 
-              return {locationInfo,true};
+              return {*locationInfo,true};
             }
         }
     }
@@ -111,5 +113,6 @@ std::pair<EMANE::LocationInfo,bool> EMANE::LocationManager::getLocationInfo(NEMI
 
 const EMANE::PositionOrientationVelocity & EMANE::LocationManager::getLocalPOV() const
 {
-  return localPOV_;
+  auto pov = static_cast<PositionOrientationVelocity*>(emane_rs_location_manager_get_local_pov(rs_ptr_));
+  return *pov;
 }

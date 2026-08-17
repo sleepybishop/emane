@@ -166,3 +166,5 @@ pub mod flow_control_client;
 pub mod spectrum_window_utils;
 pub mod noise_recorder;
 pub mod controls;
+pub mod location_manager;
+pub mod antenna_manager;

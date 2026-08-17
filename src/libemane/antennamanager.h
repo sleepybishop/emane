@@ -42,7 +42,10 @@ namespace EMANE
   class AntennaManager
   {
   public:
+    AntennaManager(const AntennaManager&) = delete;
+    AntennaManager& operator=(const AntennaManager&) = delete;
     AntennaManager();
+    ~AntennaManager();
 
     struct AntennaInfo
     {
@@ -65,12 +68,12 @@ namespace EMANE
                 AntennaIndex antennaIndex);
 
   private:
-    using AntennaStore = std::map<AntennaIndex,AntennaInfo>;
-    using NEMAntennaStore = std::map<NEMId, AntennaStore>;
-    using DefaultEventPointingStore = std::map<NEMId, Antenna::Pointing>;
-    NEMAntennaStore store_;
-    DefaultEventPointingStore defaultEventPointingStore_;
-    std::uint64_t u64UpdateSequence_;
+    
+    
+    
+    void* rs_ptr_;
+    
+    
   };
 }
 

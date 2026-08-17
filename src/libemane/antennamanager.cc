@@ -2,36 +2,31 @@
 /*
  * Copyright (c) 2020 - Adjacent Link LLC, Bridgewater, New Jersey
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "antennamanager.h"
+#include "antennaprofilemanifest.h"
+
+extern "C" {
+    void* emane_rs_antenna_manager_create();
+    void emane_rs_antenna_manager_destroy(void* ptr);
+    void emane_rs_antenna_manager_insert_antenna_info(void* ptr, uint16_t nemId, uint16_t index, void* info);
+    void* emane_rs_antenna_manager_get_antenna_info(void* ptr, uint16_t nemId, uint16_t index);
+    void emane_rs_antenna_manager_remove_antenna_info(void* ptr, uint16_t nemId, uint16_t index);
+    
+    void emane_rs_antenna_manager_insert_default_pointing(void* ptr, uint16_t nemId, void* pointing);
+    void* emane_rs_antenna_manager_get_default_pointing(void* ptr, uint16_t nemId);
+    
+    uint64_t emane_rs_antenna_manager_inc_seq(void* ptr);
+    uint64_t emane_rs_antenna_manager_get_seq(void* ptr);
+
+    void emane_rs_ffi_free_antenna_info(void* ptr) {
+        delete static_cast<EMANE::AntennaManager::AntennaInfo*>(ptr);
+    }
+    void emane_rs_ffi_free_pointing(void* ptr) {
+        delete static_cast<EMANE::Antenna::Pointing*>(ptr);
+    }
+}
 
 EMANE::AntennaManager::AntennaInfo::AntennaInfo():
   u64UpdateSequence_{},
@@ -41,18 +36,20 @@ EMANE::AntennaManager::AntennaInfo::AntennaInfo():
   placement_{}{}
 
 EMANE::AntennaManager::AntennaManager():
-  store_{},
-  u64UpdateSequence_{}{}
+  rs_ptr_{emane_rs_antenna_manager_create()}
+{}
 
+EMANE::AntennaManager::~AntennaManager()
+{
+    if (rs_ptr_) {
+        emane_rs_antenna_manager_destroy(rs_ptr_);
+    }
+}
 
 void EMANE::AntennaManager::update(const Events::AntennaProfiles & antennaProfiles)
 {
-  ++u64UpdateSequence_;
+  emane_rs_antenna_manager_inc_seq(rs_ptr_);
 
-  // updates coming in as events are for radio models using the
-  // original (compat 1) antenna profile event mechanisms for
-  // selecting and pointing a single antenna. Compat 1 single
-  // antenna uses the DEFAULT_ANTENNA_INDEX.
   for(const auto & antennaProfile : antennaProfiles)
     {
       auto target = Antenna::createProfileDefined(DEFAULT_ANTENNA_INDEX,
@@ -60,15 +57,8 @@ void EMANE::AntennaManager::update(const Events::AntennaProfiles & antennaProfil
                                                    antennaProfile.getAntennaAzimuthDegrees(),
                                                    antennaProfile.getAntennaElevationDegrees()});
 
-      // store all antenna event info so you can construct a
-      // compat 2 tx antenna entry. In compat 2, each OTA message
-      // contains one or more transmit antennas w/ profile and
-      // pointing info.
-      //
-      // A radio model can send a tx antenna for downstream use
-      // with no pointing to indicate that compat 1 style antenna
-      // profiles are in use.
-      defaultEventPointingStore_[antennaProfile.getNEMId()] = target.getPointing().first;
+      auto pointing = new Antenna::Pointing(target.getPointing().first);
+      emane_rs_antenna_manager_insert_default_pointing(rs_ptr_, antennaProfile.getNEMId(), pointing);
 
       update(antennaProfile.getNEMId(),target);
     }
@@ -76,46 +66,36 @@ void EMANE::AntennaManager::update(const Events::AntennaProfiles & antennaProfil
 
 void EMANE::AntennaManager::update(NEMId nemId, const Antenna & antenna)
 {
-  ++u64UpdateSequence_;
+  uint64_t u64UpdateSequence_ = emane_rs_antenna_manager_inc_seq(rs_ptr_);
 
   auto target = antenna;
+  
+  AntennaInfo* iterAntenna = static_cast<AntennaInfo*>(emane_rs_antenna_manager_get_antenna_info(rs_ptr_, nemId, target.getIndex()));
 
-  auto iterNemStore = store_.find(nemId);
-
-  if(iterNemStore == store_.end())
+  if(iterAntenna == nullptr)
     {
-      iterNemStore =
-        store_.emplace(nemId,AntennaStore{}).first;
+      iterAntenna = new AntennaInfo();
+      iterAntenna->u64UpdateSequence_ = u64UpdateSequence_;
+      emane_rs_antenna_manager_insert_antenna_info(rs_ptr_, nemId, target.getIndex(), iterAntenna);
     }
 
-  auto iterAntenna = iterNemStore->second.find(target.getIndex());
-
-  if(iterAntenna == iterNemStore->second.end())
-    {
-      iterAntenna = iterNemStore->second.emplace(target.getIndex(),
-                                                 AntennaInfo{}).first;
-
-      iterAntenna->second.u64UpdateSequence_ = u64UpdateSequence_;
-    }
-
-  if(iterAntenna->second.antenna_ != target)
+  if(iterAntenna->antenna_ != target)
     {
       if(target.isProfileDefined())
         {
           if(!target.getPointing().second && !target.getIndex())
             {
-              auto iterDefaultPointing = defaultEventPointingStore_.find(nemId);
+              auto iterDefaultPointing = static_cast<Antenna::Pointing*>(emane_rs_antenna_manager_get_default_pointing(rs_ptr_, nemId));
 
-              if(iterDefaultPointing != defaultEventPointingStore_.end())
+              if(iterDefaultPointing != nullptr)
                 {
-                  target.setPointing(iterDefaultPointing->second);
+                  target.setPointing(*iterDefaultPointing);
                 }
             }
 
-          const auto & currentPointing = iterAntenna->second.antenna_.getPointing();
+          const auto & currentPointing = iterAntenna->antenna_.getPointing();
           const auto & targetPointing = target.getPointing();
 
-          // if current pointing not valid or profile id changed
           if(!currentPointing.second ||
              targetPointing.first.getProfileId() != currentPointing.first.getProfileId())
             {
@@ -124,28 +104,27 @@ void EMANE::AntennaManager::update(NEMId nemId, const Antenna & antenna)
 
               if(ret.second)
                 {
-                  iterAntenna->second.pPattern_ = std::get<0>(ret.first);
-                  iterAntenna->second.pBlockage_ = std::get<1>(ret.first);
-                  iterAntenna->second.placement_ = std::get<2>(ret.first);
+                  iterAntenna->pPattern_ = std::get<0>(ret.first);
+                  iterAntenna->pBlockage_ = std::get<1>(ret.first);
+                  iterAntenna->placement_ = std::get<2>(ret.first);
                 }
               else
                 {
-                  // unknown profile
-                  iterAntenna->second.pPattern_ = nullptr;
-                  iterAntenna->second.pBlockage_ = nullptr;
-                  iterAntenna->second.placement_ = {};
+                  iterAntenna->pPattern_ = nullptr;
+                  iterAntenna->pBlockage_ = nullptr;
+                  iterAntenna->placement_ = {};
                 }
             }
         }
       else
         {
-          iterAntenna->second.pPattern_ = nullptr;
-          iterAntenna->second.pBlockage_ = nullptr;
-          iterAntenna->second.placement_ = {};
+          iterAntenna->pPattern_ = nullptr;
+          iterAntenna->pBlockage_ = nullptr;
+          iterAntenna->placement_ = {};
         }
 
-      iterAntenna->second.u64UpdateSequence_ = u64UpdateSequence_;
-      iterAntenna->second.antenna_ = target;
+      iterAntenna->u64UpdateSequence_ = u64UpdateSequence_;
+      iterAntenna->antenna_ = target;
     }
 }
 
@@ -155,16 +134,11 @@ EMANE::AntennaManager::getAntennaInfo(NEMId nemId,
 {
   static AntennaInfo empty{};
 
-  auto iterNemStore = store_.find(nemId);
+  auto iterAntenna = static_cast<AntennaInfo*>(emane_rs_antenna_manager_get_antenna_info(rs_ptr_, nemId, antennaIndex));
 
-  if(iterNemStore != store_.end())
+  if(iterAntenna != nullptr)
     {
-      auto iterAntenna = iterNemStore->second.find(antennaIndex);
-
-      if(iterAntenna != iterNemStore->second.end())
-        {
-          return {iterAntenna->second,true};
-        }
+      return {*iterAntenna,true};
     }
 
   return {empty,false};
@@ -173,10 +147,5 @@ EMANE::AntennaManager::getAntennaInfo(NEMId nemId,
 void EMANE::AntennaManager::remove(NEMId nemId,
                                    AntennaIndex antennaIndex)
 {
-  auto iterNemStore = store_.find(nemId);
-
-  if(iterNemStore != store_.end())
-    {
-      iterNemStore->second.erase(antennaIndex);
-    }
+  emane_rs_antenna_manager_remove_antenna_info(rs_ptr_, nemId, antennaIndex);
 }
