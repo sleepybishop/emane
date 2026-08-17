@@ -33,8 +33,20 @@
  */
 
 #include "timerserviceproxy.h"
-#include "timerservice.h"
 #include "logservice.h"
+
+extern "C" {
+    size_t emane_rs_timer_schedule(uint64_t expire_micros, uint64_t interval_micros, const void* arg, void* p_user, void (*callback)(size_t, uint64_t, uint64_t, uint64_t, const void*, void*));
+    bool emane_rs_timer_cancel(size_t event_id);
+}
+
+extern "C" void timer_callback(size_t event_id, uint64_t expire_time_micros, uint64_t schedule_time_micros, uint64_t fire_time_micros, const void* arg, void* pTimerServiceUser) {
+    auto proxy = static_cast<EMANE::TimerServiceProxy*>(pTimerServiceUser);
+    EMANE::TimePoint expire{std::chrono::duration_cast<EMANE::Clock::duration>(std::chrono::microseconds{expire_time_micros})};
+    EMANE::TimePoint schedule{std::chrono::duration_cast<EMANE::Clock::duration>(std::chrono::microseconds{schedule_time_micros})};
+    EMANE::TimePoint fire{std::chrono::duration_cast<EMANE::Clock::duration>(std::chrono::microseconds{fire_time_micros})};
+    proxy->processTimedEvent(event_id, expire, schedule, fire, arg);
+}
 
 EMANE::TimerServiceProxy::TimerServiceProxy():
   pTimerServiceUser_{}{}
@@ -49,17 +61,16 @@ void EMANE::TimerServiceProxy::setTimerServiceUser(TimerServiceUser * pTimerServ
 
 bool EMANE::TimerServiceProxy::cancelTimedEvent(TimerEventId eventId)
 {
-  return TimerServiceSingleton::instance()->cancelTimedEvent(eventId);
+  return emane_rs_timer_cancel(eventId);
 }
 
 EMANE::TimerEventId EMANE::TimerServiceProxy::scheduleTimedEvent(const TimePoint & timeout,
                                                                  const void *arg,
                                                                  const Duration & interval)
 {
-  return TimerServiceSingleton::instance()->scheduleTimedEvent(timeout,
-                                                               arg,
-                                                               interval,
-                                                               this);
+  uint64_t expire_micros = std::chrono::duration_cast<std::chrono::microseconds>(timeout.time_since_epoch()).count();
+  uint64_t interval_micros = std::chrono::duration_cast<std::chrono::microseconds>(interval).count();
+  return emane_rs_timer_schedule(expire_micros, interval_micros, arg, this, timer_callback);
 }
 
 void EMANE::TimerServiceProxy::processTimedEvent(TimerEventId eventId,

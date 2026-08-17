@@ -1,6 +1,5 @@
 #include "nemmanagerimpl.h"
 #include "logservice.h"
-#include "timerservice.h"
 #include "emane/configureexception.h"
 #include "emane/platformexception.h"
 #include "emane/startexception.h"

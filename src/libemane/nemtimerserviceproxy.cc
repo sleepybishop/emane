@@ -32,7 +32,36 @@
  */
 
 #include "nemtimerserviceproxy.h"
-#include "timerservice.h"
+
+extern "C" {
+    size_t emane_rs_timer_schedule(uint64_t expire_micros, uint64_t interval_micros, const void* arg, void* p_user, void (*callback)(size_t, uint64_t, uint64_t, uint64_t, const void*, void*), void (*free_callback)(void*));
+    bool emane_rs_timer_cancel(size_t event_id);
+}
+
+extern "C" void nem_timer_callback(size_t event_id, uint64_t expire_time_micros, uint64_t schedule_time_micros, uint64_t fire_time_micros, const void* arg, void* pTimerServiceUser) {
+    auto proxy = static_cast<EMANE::NEMTimerServiceProxy*>(pTimerServiceUser);
+    EMANE::TimePoint expire{std::chrono::duration_cast<EMANE::Clock::duration>(std::chrono::microseconds{expire_time_micros})};
+    EMANE::TimePoint schedule{std::chrono::duration_cast<EMANE::Clock::duration>(std::chrono::microseconds{schedule_time_micros})};
+    EMANE::TimePoint fire{std::chrono::duration_cast<EMANE::Clock::duration>(std::chrono::microseconds{fire_time_micros})};
+    proxy->processTimedEvent(event_id, expire, schedule, fire, arg);
+}
+
+struct WrappedCallback {
+    EMANE::NEMQueuedLayer* layer;
+    std::function<void(const EMANE::TimePoint&, const EMANE::TimePoint&, const EMANE::TimePoint&)> callback;
+};
+
+extern "C" void nem_schedule_callback(size_t event_id, uint64_t expire_time_micros, uint64_t schedule_time_micros, uint64_t fire_time_micros, const void* arg, void* p_user) {
+    auto wrapped = static_cast<WrappedCallback*>(p_user);
+    EMANE::TimePoint expire{std::chrono::duration_cast<EMANE::Clock::duration>(std::chrono::microseconds{expire_time_micros})};
+    EMANE::TimePoint schedule{std::chrono::duration_cast<EMANE::Clock::duration>(std::chrono::microseconds{schedule_time_micros})};
+    EMANE::TimePoint fire{std::chrono::duration_cast<EMANE::Clock::duration>(std::chrono::microseconds{fire_time_micros})};
+    wrapped->layer->processTimer(wrapped->callback, expire, schedule, fire);
+}
+
+extern "C" void nem_schedule_free(void* p_user) {
+    delete static_cast<WrappedCallback*>(p_user);
+}
 
 EMANE::NEMTimerServiceProxy::NEMTimerServiceProxy():
   pNEMQueuedLayer_{}{}
@@ -47,17 +76,16 @@ void EMANE::NEMTimerServiceProxy::setNEMLayer(NEMQueuedLayer * pNEMQueuedLayer)
 
 bool EMANE::NEMTimerServiceProxy::cancelTimedEvent(TimerEventId eventId)
 {
-  return TimerServiceSingleton::instance()->cancelTimedEvent(eventId);
+  return emane_rs_timer_cancel(eventId);
 }
 
 EMANE::TimerEventId EMANE::NEMTimerServiceProxy::scheduleTimedEvent(const TimePoint & timeout,
                                                                     const void *arg,
                                                                     const Duration & interval)
 {
-  return TimerServiceSingleton::instance()->scheduleTimedEvent(timeout,
-                                                               arg,
-                                                               interval,
-                                                               this);
+  uint64_t expire_micros = std::chrono::duration_cast<std::chrono::microseconds>(timeout.time_since_epoch()).count();
+  uint64_t interval_micros = std::chrono::duration_cast<std::chrono::microseconds>(interval).count();
+  return emane_rs_timer_schedule(expire_micros, interval_micros, arg, this, nem_timer_callback, nullptr);
 }
 
 void EMANE::NEMTimerServiceProxy::processTimedEvent(TimerEventId eventId,
@@ -77,15 +105,8 @@ EMANE::TimerEventId EMANE::NEMTimerServiceProxy::schedule_i(TimerCallback callba
                                                             const TimePoint & timePoint,
                                                             const Duration & interval)
 {
-  return TimerServiceSingleton::instance()->schedule([this,callback](const TimePoint & expireTime,
-                                                                     const TimePoint & scheduleTime,
-                                                                     const TimePoint & fireTime)
-                                                     {
-                                                       pNEMQueuedLayer_->processTimer(callback,
-                                                                                      expireTime,
-                                                                                      scheduleTime,
-                                                                                      fireTime);
-                                                     },
-                                                     timePoint,
-                                                     interval);
+  auto wrapped = new WrappedCallback{pNEMQueuedLayer_, callback};
+  uint64_t expire_micros = std::chrono::duration_cast<std::chrono::microseconds>(timePoint.time_since_epoch()).count();
+  uint64_t interval_micros = std::chrono::duration_cast<std::chrono::microseconds>(interval).count();
+  return emane_rs_timer_schedule(expire_micros, interval_micros, nullptr, wrapped, nem_schedule_callback, nem_schedule_free);
 }

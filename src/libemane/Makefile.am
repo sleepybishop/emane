@@ -201,8 +201,6 @@ libemane_la_SOURCES =                         \
  spectrumwindowutils.cc                       \
  statisticregistrarproxy.cc                   \
  tdmascheduleevent.cc                         \
- timer.cc                                     \
- timerservice.cc                              \
  timerserviceproxy.cc                         \
  timestampcontrolmessage.cc                   \
  transmittercontrolmessage.cc                 \
@@ -331,8 +329,6 @@ libemane_la_SOURCES =                         \
  statistictableclearupdatehandler.h           \
  statistictablequeryhandler.h                 \
  timerserviceexception.h                      \
- timerservice.h                               \
- timerservice.inl                             \
  timerserviceproxy.h                          \
  transportadapterimpl.h                       \
  transportfactory.h                           \

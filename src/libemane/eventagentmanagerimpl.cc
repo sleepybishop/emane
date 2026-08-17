@@ -43,7 +43,6 @@ extern "C" {
 
 #include "eventagentmanagerimpl.h"
 #include "logservice.h"
-#include "timerservice.h"
 #include "eventserviceexception.h"
 
 #include "emane/configureexception.h"

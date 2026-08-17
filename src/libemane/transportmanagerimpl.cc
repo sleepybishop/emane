@@ -33,7 +33,6 @@
  */
 
 #include "transportmanagerimpl.h"
-#include "timerservice.h"
 
 #include "emane/configureexception.h"
 
