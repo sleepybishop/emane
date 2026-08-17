@@ -1,6 +1,5 @@
-#include <cstdint>
 /*
- * Copyright (c) 2014,2021 - Adjacent Link LLC, Bridgewater, New Jersey
+ * Copyright (c) 2013,2020 - Adjacent Link LLC, Bridgewater, New Jersey
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,10 +32,55 @@
 
 #include "emane/utils/spectrumwindowutils.h"
 #include "emane/utils/conversionutils.h"
-
 #include "emane/spectrumserviceexception.h"
-
 #include <algorithm>
+
+extern "C" {
+    struct EmaneRsSpectrumCompressedEntry {
+        size_t index;
+        double value;
+    };
+
+    struct EmaneRsSpectrumCompressedRepresentation {
+        EmaneRsSpectrumCompressedEntry* ptr;
+        size_t len;
+        size_t cap;
+    };
+
+    struct EmaneRsSpectrumSubBandCompressedEntry {
+        size_t index;
+        double* ptr;
+        size_t len;
+        size_t cap;
+    };
+
+    struct EmaneRsSpectrumSubBandCompressedRepresentation {
+        EmaneRsSpectrumSubBandCompressedEntry* ptr;
+        size_t len;
+        size_t cap;
+    };
+
+    struct EmaneRsMaxBinNoiseFloorResult {
+        double noise_floor_db;
+        bool is_signal_in_noise;
+        int error_code;
+    };
+
+    EmaneRsSpectrumCompressedRepresentation emane_rs_spectrum_compress(const double* window_ptr, size_t window_len);
+    void emane_rs_spectrum_compress_free(EmaneRsSpectrumCompressedRepresentation repr);
+
+    EmaneRsSpectrumSubBandCompressedRepresentation emane_rs_spectrum_sub_band_compress(const double* window_ptr, size_t window_len, size_t sub_band_bin_count);
+    void emane_rs_spectrum_sub_band_compress_free(EmaneRsSpectrumSubBandCompressedRepresentation repr);
+
+    EmaneRsMaxBinNoiseFloorResult emane_rs_max_bin_noise_floor(
+        const double* noise_data_ptr,
+        size_t noise_data_len,
+        double rx_sensitivity_milliwatt,
+        double rx_power_dbm,
+        bool b_signal_in_noise,
+        size_t start_bin,
+        size_t end_bin);
+}
 
 std::pair<double,bool> EMANE::Utils::maxBinNoiseFloorRange(const SpectrumWindow & window,
                                                            double dRxPowerdBm,
@@ -117,7 +161,16 @@ std::pair<double,bool> EMANE::Utils::maxBinNoiseFloor(const std::vector<double> 
                                                       std::size_t startBin,
                                                       std::size_t endBin)
 {
-  if(endBin < startBin)
+  auto result = emane_rs_max_bin_noise_floor(
+      noiseData.data(),
+      noiseData.size(),
+      dRxSensitivityMilliWatt,
+      dRxPowerdBm,
+      bSignalInNoise,
+      startBin,
+      endBin);
+
+  if (result.error_code == 1)
     {
       throw makeException<SpectrumServiceException>("max bin end index %zu < max bin start index %zu,"
                                                     " num bins %zu",
@@ -125,7 +178,7 @@ std::pair<double,bool> EMANE::Utils::maxBinNoiseFloor(const std::vector<double> 
                                                     endBin,
                                                     noiseData.size());
     }
-  else if(endBin >= noiseData.size() || startBin >= noiseData.size())
+  else if (result.error_code == 2)
     {
       throw makeException<SpectrumServiceException>("bin index out of range, start index %zu,"
                                                     " end index %zu, num bins %zu",
@@ -134,19 +187,7 @@ std::pair<double,bool> EMANE::Utils::maxBinNoiseFloor(const std::vector<double> 
                                                     noiseData.size());
     }
 
-  double dNoiseFloorMilliWatt{*std::max_element(&noiseData[startBin],&noiseData[endBin]+1)};
-
-  if(bSignalInNoise)
-    {
-      dNoiseFloorMilliWatt -= Utils::DB_TO_MILLIWATT(dRxPowerdBm);
-    }
-
-  if(dNoiseFloorMilliWatt < dRxSensitivityMilliWatt)
-    {
-      dNoiseFloorMilliWatt = dRxSensitivityMilliWatt;
-    }
-
-  return {Utils::MILLIWATT_TO_DB(dNoiseFloorMilliWatt),bSignalInNoise};
+  return {result.noise_floor_db, result.is_signal_in_noise};
 }
 
 EMANE::Microseconds::rep EMANE::Utils::timepointToAbsoluteBin(const TimePoint & tp,
@@ -156,8 +197,6 @@ EMANE::Microseconds::rep EMANE::Utils::timepointToAbsoluteBin(const TimePoint & 
   auto count =
     std::chrono::duration_cast<Microseconds>(tp.time_since_epoch()).count();
 
-  // times that fall on a bin boundary belong to the previous bin
-  // (count % binSizeMicroseconds_ == 0) will evaluate to 0 or 1
   return count == 0 ? 0 : count / binSize.count() - (bAdjust && (count % binSize.count() == 0));
 }
 
@@ -166,20 +205,14 @@ EMANE::Utils::spectrumCompress(const std::vector<double> & window)
 {
   SpectrumCompressedRepresentation ret;
 
-  double dPrevious{};
+  auto repr = emane_rs_spectrum_compress(window.data(), window.size());
 
-  std::size_t i{};
-
-  for(const auto & entry : window)
+  for (size_t i = 0; i < repr.len; ++i)
     {
-      if(dPrevious != entry || (ret.empty() && entry != 0))
-        {
-          ret.push_back(std::make_pair(i,entry));
-          dPrevious = entry;
-        }
-
-      ++i;
+      ret.push_back(std::make_pair(repr.ptr[i].index, repr.ptr[i].value));
     }
+
+  emane_rs_spectrum_compress_free(repr);
 
   return ret;
 }
@@ -190,41 +223,15 @@ EMANE::Utils::spectrumSubBandCompress(const std::vector<double> & window,
 {
   SpectrumSubBandCompressedRepresentation ret;
 
-  std::vector<double> dPrevious(subBandBinCount,0);
+  auto repr = emane_rs_spectrum_sub_band_compress(window.data(), window.size(), subBandBinCount);
 
-  bool bWrite{};
-  std::size_t i{};
-  std::size_t subBandBinIndex{};
-
-  // iterate over entire window
-  for(const auto & entry : window)
+  for (size_t i = 0; i < repr.len; ++i)
     {
-      // compare the subband bin to the previous entry
-      if(dPrevious[subBandBinIndex] != entry || (ret.empty() && entry != 0))
-        {
-          // any bin value difference will cause a compress entry for every bin
-          bWrite = true;
-          dPrevious[subBandBinIndex] = entry;
-        }
-
-      ++subBandBinIndex;
-
-      // once we have seen every bin in the sub band bins for a time
-      // entry, see if we need to publish due to change
-      if(subBandBinIndex == subBandBinCount)
-        {
-          // reset the index
-          subBandBinIndex = 0;
-
-          if(bWrite)
-            {
-              ret.push_back(std::make_pair(i,dPrevious));
-              bWrite = false;
-            }
-
-          ++i;
-        }
+      std::vector<double> subBandVals(repr.ptr[i].ptr, repr.ptr[i].ptr + repr.ptr[i].len);
+      ret.push_back(std::make_pair(repr.ptr[i].index, subBandVals));
     }
+
+  emane_rs_spectrum_sub_band_compress_free(repr);
 
   return ret;
 }
