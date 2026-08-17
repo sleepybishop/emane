@@ -1,42 +1,33 @@
 #include <cstdint>
-/*
- * Copyright (c) 2017-2018,2020 - Adjacent Link LLC, Bridgewater,
- * New Jersey
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
-
 #include "nakagamifadingalgorithm.h"
+
+extern "C" {
+    void* emane_rs_nakagami_fading_new();
+    void emane_rs_nakagami_fading_free(void* ptr);
+    double emane_rs_nakagami_fading_compute(void* ptr, double power_dbm, double distance_meters, double d0, double d1, double m0, double m1, double m2);
+}
 
 EMANE::NakagamiFadingAlgorithm::NakagamiFadingAlgorithm(NEMId id,
                                                         PlatformServiceProvider * pPlatformService):
-  FadingAlgorithm{id,pPlatformService}{}
+  FadingAlgorithm{id,pPlatformService},
+  pState_{emane_rs_nakagami_fading_new()}{}
 
 
-EMANE::NakagamiFadingAlgorithm::~NakagamiFadingAlgorithm(){}
+EMANE::NakagamiFadingAlgorithm::~NakagamiFadingAlgorithm()
+{
+  emane_rs_nakagami_fading_free(pState_);
+}
+
+double EMANE::NakagamiFadingAlgorithm::operator()(double dPowerdBm, double dDistanceMeters, const void * pParams)
+{
+  auto pNakagamiFadingParameters = reinterpret_cast<const Parameters *>(pParams);
+  
+  return emane_rs_nakagami_fading_compute(pState_,
+                                          dPowerdBm,
+                                          dDistanceMeters,
+                                          pNakagamiFadingParameters->dDistance0Meters_,
+                                          pNakagamiFadingParameters->dDistance1Meters_,
+                                          pNakagamiFadingParameters->dm0_,
+                                          pNakagamiFadingParameters->dm1_,
+                                          pNakagamiFadingParameters->dm2_);
+}

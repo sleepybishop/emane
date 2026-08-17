@@ -161,3 +161,4 @@ pub mod nem_layer_stack;
 pub mod nem_impl;
 pub mod spectral_mask;
 pub mod antenna;
+pub mod nakagami_fading_algorithm;
