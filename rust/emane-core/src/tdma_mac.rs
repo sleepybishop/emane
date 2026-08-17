@@ -77,7 +77,7 @@ pub extern "C" fn emane_rs_tdma_mac_process_flow_control_message(
 ) -> bool {
     let state = unsafe { &mut *ptr };
     if state.flow_control_enable {
-        state.flow_control_manager.process_flow_control_message(msg_tokens)
+        state.flow_control_manager.process_flow_control_message(msg_tokens).is_some()
     } else {
         false
     }
