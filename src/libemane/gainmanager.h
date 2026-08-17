@@ -46,9 +46,12 @@ namespace EMANE
   class GainManager
   {
   public:
+    GainManager(const GainManager&) = delete;
+    GainManager& operator=(const GainManager&) = delete;
     GainManager(NEMId nemId,
                 AntennaIndex rxAntennaIndex,
                 AntennaManager & antennaManager);
+    ~GainManager();
 
     enum class GainStatus {SUCCESS = 0,
       ERROR_LOCATIONINFO,
@@ -63,16 +66,10 @@ namespace EMANE
                            const LocationInfo & locationPairInfo);
 
   private:
-    using AntennaIndexMap = std::map<std::uint16_t,
-                                     Antenna>;
-
-    using AntennaStore = std::map<NEMId,
-                                  AntennaIndexMap>;
     NEMId id_;
     AntennaIndex rxAntennaIndex_;
     AntennaManager & antennaManager_;
-    AntennaStore antennaStore_;
-    std::uint64_t u64AntennaUpdateSequence_;
+    void* rs_ptr_;
 
     struct AntennaPatternInfo
     {
@@ -89,16 +86,7 @@ namespace EMANE
 
     AntennaPatternInfo localAntennaPatternInfo_;
 
-    using GainCacheEntry = std::tuple<std::uint64_t,
-                                      std::uint64_t,
-                                      double, // remote gain
-                                      double>; // local gain
-
-    using Cache = std::map<NEMId, // Tx NEM Id
-                           std::map<AntennaIndex, // Tx Antenna Index
-                                    GainCacheEntry>>;
-
-    Cache gainCache_;
+    
 
     std::tuple<double,double,bool>
     getGainCache(NEMId transmitterId,

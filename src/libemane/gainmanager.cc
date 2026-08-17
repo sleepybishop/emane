@@ -32,7 +32,25 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+
 #include "gainmanager.h"
+#include "emane/utils/conversionutils.h"
+
+extern "C" {
+    void* emane_rs_gain_manager_create();
+    void emane_rs_gain_manager_destroy(void* ptr);
+    void emane_rs_gain_manager_set_cache(
+        void* ptr, uint16_t tx_nem_id, uint16_t tx_antenna_idx,
+        uint64_t tx_antenna_seq, uint64_t location_seq, double remote_gain, double local_gain
+    );
+    bool emane_rs_gain_manager_get_cache(
+        void* ptr, uint16_t tx_nem_id, uint16_t tx_antenna_idx,
+        uint64_t tx_antenna_seq, uint64_t location_seq,
+        uint64_t rx_antenna_seq,
+        double* out_remote_gain, double* out_local_gain
+    );
+}
+
 #include "antennaprofilemanifest.h"
 #include "positionutils.h"
 #include "antennaprofileexception.h"
@@ -52,22 +70,23 @@ EMANE::GainManager::AntennaPatternInfo::AntennaPatternInfo(AntennaPattern * pPat
   pBlockage_{pBlockage},
   placement_{placement}{}
 
-EMANE::GainManager::GainManager(NEMId id,
-                                AntennaIndex rxAntennaIndex,
-                                AntennaManager & antennaManager):
-  id_{id},
+EMANE::GainManager::GainManager(NEMId nemId,
+            AntennaIndex rxAntennaIndex,
+            AntennaManager & antennaManager):
+  id_{nemId},
   rxAntennaIndex_{rxAntennaIndex},
-  antennaManager_(antennaManager),
-  u64AntennaUpdateSequence_{}{}
+  antennaManager_{antennaManager},
+  rs_ptr_{emane_rs_gain_manager_create()}
+{}
 
-void EMANE::GainManager::setGainCache(NEMId transmitterId,
+void
+EMANE::GainManager::setGainCache(NEMId transmitterId,
                                       const AntennaManager::AntennaInfo & txAntennaInfo,
                                       const LocationInfo & locationPairInfo,
                                       double dRemoteGaindBi,
                                       double dLocalGaindBi)
 {
-  gainCache_[transmitterId][txAntennaInfo.antenna_.getIndex()] =
-    std::make_tuple(txAntennaInfo.u64UpdateSequence_,locationPairInfo.getSequenceNumber(),dRemoteGaindBi,dLocalGaindBi);
+  emane_rs_gain_manager_set_cache(rs_ptr_, transmitterId, txAntennaInfo.antenna_.getIndex(), txAntennaInfo.u64UpdateSequence_, locationPairInfo.getSequenceNumber(), dRemoteGaindBi, dLocalGaindBi);
 }
 
 std::tuple<double,double,bool>
@@ -76,41 +95,10 @@ EMANE::GainManager::getGainCache(NEMId transmitterId,
                                  const AntennaManager::AntennaInfo & rxAntennaInfo,
                                  const LocationInfo & locationPairInfo)
 {
-  if(rxAntennaInfo.u64UpdateSequence_ != u64AntennaUpdateSequence_)
-    {
-      gainCache_.clear();
-
-      u64AntennaUpdateSequence_ = rxAntennaInfo.u64UpdateSequence_;
-    }
-  else
-    {
-      auto txNEMIdIter = gainCache_.find(transmitterId);
-
-      if(txNEMIdIter != gainCache_.end())
-        {
-          auto antennaIndexIter = txNEMIdIter->second.find(txAntennaInfo.antenna_.getIndex());
-
-          if(antennaIndexIter != txNEMIdIter->second.end())
-            {
-              std::uint64_t u64TxAntennaUpdateSequence{};
-              std::uint64_t u64LocationUpdateSequence{};
-              double dRemoteGaindBi{};
-              double dLocalGaindBi{};
-
-              std::tie(u64TxAntennaUpdateSequence,
-                       u64LocationUpdateSequence,
-                       dRemoteGaindBi,
-                       dLocalGaindBi) = antennaIndexIter->second;
-
-              if(u64TxAntennaUpdateSequence == txAntennaInfo.u64UpdateSequence_ &&
-                 u64LocationUpdateSequence == locationPairInfo.getSequenceNumber())
-                {
-                  return std::make_tuple(dRemoteGaindBi,dLocalGaindBi,true);
-                }
-            }
-        }
-    }
-
+  double dRemoteGaindBi{};
+  double dLocalGaindBi{};
+  bool found = emane_rs_gain_manager_get_cache(rs_ptr_, transmitterId, txAntennaInfo.antenna_.getIndex(), txAntennaInfo.u64UpdateSequence_, locationPairInfo.getSequenceNumber(), rxAntennaInfo.u64UpdateSequence_, &dRemoteGaindBi, &dLocalGaindBi);
+  if(found) return std::make_tuple(dRemoteGaindBi,dLocalGaindBi,true);
   return {};
 }
 
@@ -119,10 +107,10 @@ EMANE::GainManager::determineGain(NEMId transmitterId,
                                   AntennaIndex txAntennaIndex,
                                   const LocationInfo & locationPairInfo)
 {
-  const auto & remoteAntennaInfo = antennaManager_.getAntennaInfo(transmitterId,
+  auto remoteAntennaInfo = antennaManager_.getAntennaInfo(transmitterId,
                                                                   txAntennaIndex);
 
-  const auto & localAntennaInfo = antennaManager_.getAntennaInfo(id_,
+  auto localAntennaInfo = antennaManager_.getAntennaInfo(id_,
                                                                  rxAntennaIndex_);
 
   if(!remoteAntennaInfo.second || !localAntennaInfo.second)
@@ -154,7 +142,6 @@ EMANE::GainManager::determineGain(NEMId transmitterId,
 
   if(!remoteAntenna.isIdealOmni())
     {
-      AntennaStore::const_iterator remoteAntennaStoreIter;
 
       if(!locationPairInfo.isValid())
         {
@@ -351,4 +338,8 @@ EMANE::GainManager::determineGain(NEMId transmitterId,
     }
 
   return std::make_tuple(dRemoteAntennaGaindBi,dLocalAntennaGaindBi,GainStatus::SUCCESS,false);
+}
+
+EMANE::GainManager::~GainManager() {
+  if(rs_ptr_) emane_rs_gain_manager_destroy(rs_ptr_);
 }

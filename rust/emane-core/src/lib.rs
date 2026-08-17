@@ -168,3 +168,4 @@ pub mod noise_recorder;
 pub mod controls;
 pub mod location_manager;
 pub mod antenna_manager;
+pub mod gain_manager;
