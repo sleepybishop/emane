@@ -155,3 +155,4 @@ pub extern "C" fn emane_rs_lognormal_fading_process(
 }
 pub mod nem_queued_layer;
 pub mod mac_layer;
+pub mod logger;
