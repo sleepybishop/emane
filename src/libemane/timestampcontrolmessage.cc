@@ -33,25 +33,51 @@
 
 #include "emane/controls/timestampcontrolmessage.h"
 
+extern "C" {
+    void* emane_rs_timestamp_control_message_create(uint64_t time_stamp_microsec);
+    void* emane_rs_timestamp_control_message_clone(const void* ptr);
+    uint64_t emane_rs_timestamp_control_message_get_time_stamp(const void* ptr);
+    void emane_rs_timestamp_control_message_free(void* ptr);
+}
+
 class EMANE::Controls::TimeStampControlMessage::Implementation
 {
 public:
   Implementation(const TimePoint & timeStamp):
-    timeStamp_{timeStamp}{}
+    pRsMsg_{nullptr}
+  {
+      uint64_t microsec = std::chrono::duration_cast<std::chrono::microseconds>(timeStamp.time_since_epoch()).count();
+      pRsMsg_ = emane_rs_timestamp_control_message_create(microsec);
+  }
+
+  Implementation(void* pRsMsg): pRsMsg_{pRsMsg} {}
+
+  ~Implementation()
+  {
+      if (pRsMsg_) {
+          emane_rs_timestamp_control_message_free(pRsMsg_);
+      }
+  }
 
   TimePoint getTimeStamp() const
   {
-    return timeStamp_;
+      uint64_t microsec = emane_rs_timestamp_control_message_get_time_stamp(pRsMsg_);
+      return TimePoint{std::chrono::microseconds{microsec}};
+  }
+
+  Implementation* clone() const
+  {
+      return new Implementation(emane_rs_timestamp_control_message_clone(pRsMsg_));
   }
 
 private:
-  const TimePoint timeStamp_;
+  void* pRsMsg_;
 };
 
 EMANE::Controls::TimeStampControlMessage::
 TimeStampControlMessage(const TimeStampControlMessage & msg):
   ControlMessage{IDENTIFIER},
-  pImpl_{new Implementation{*msg.pImpl_}}
+  pImpl_{msg.pImpl_->clone()}
 {}
 
 EMANE::Controls::TimeStampControlMessage::TimeStampControlMessage(const TimePoint & timeStamp):
