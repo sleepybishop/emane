@@ -34,6 +34,16 @@
 
 #include "emane/controls/receivepropertiescontrolmessage.h"
 
+extern "C" {
+    void* emane_rs_receive_properties_control_message_create(uint64_t sot, uint64_t propagation, uint64_t span, double dReceiverSensitivitydBm);
+    void* emane_rs_receive_properties_control_message_clone(const void* ptr);
+    uint64_t emane_rs_receive_properties_control_message_get_tx_time(const void* ptr);
+    uint64_t emane_rs_receive_properties_control_message_get_propagation_delay(const void* ptr);
+    uint64_t emane_rs_receive_properties_control_message_get_span(const void* ptr);
+    double emane_rs_receive_properties_control_message_get_receiver_sensitivity_dbm(const void* ptr);
+    void emane_rs_receive_properties_control_message_free(void* ptr);
+}
+
 class EMANE::Controls::ReceivePropertiesControlMessage::Implementation
 {
 public:
@@ -41,42 +51,57 @@ public:
                  const Microseconds & propagation,
                  const Microseconds & span,
                  double dReceiverSensitivitydBm):
-    sot_{sot},
-    propagation_{propagation},
-    span_{span},
-    dReceiverSensitivitydBm_{dReceiverSensitivitydBm}{}
+    pRsMsg_{nullptr}
+  {
+      uint64_t sot_micros = std::chrono::duration_cast<std::chrono::microseconds>(sot.time_since_epoch()).count();
+      uint64_t prop_micros = propagation.count();
+      uint64_t span_micros = span.count();
+      pRsMsg_ = emane_rs_receive_properties_control_message_create(sot_micros, prop_micros, span_micros, dReceiverSensitivitydBm);
+  }
+
+  Implementation(void* pRsMsg): pRsMsg_{pRsMsg} {}
+
+  ~Implementation()
+  {
+      if (pRsMsg_) {
+          emane_rs_receive_properties_control_message_free(pRsMsg_);
+      }
+  }
 
   TimePoint getTxTime() const
   {
-    return sot_;
+      uint64_t microsec = emane_rs_receive_properties_control_message_get_tx_time(pRsMsg_);
+      return TimePoint{std::chrono::microseconds{microsec}};
   }
 
   Microseconds getPropagationDelay() const
   {
-    return propagation_;
+      return Microseconds{emane_rs_receive_properties_control_message_get_propagation_delay(pRsMsg_)};
   }
 
   Microseconds getSpan() const
   {
-    return span_;
+      return Microseconds{emane_rs_receive_properties_control_message_get_span(pRsMsg_)};
   }
 
   double getReceiverSensitivitydBm() const
   {
-    return dReceiverSensitivitydBm_;
+      return emane_rs_receive_properties_control_message_get_receiver_sensitivity_dbm(pRsMsg_);
+  }
+
+  Implementation* clone() const
+  {
+      return new Implementation(emane_rs_receive_properties_control_message_clone(pRsMsg_));
   }
 
 private:
-  const TimePoint sot_;
-  const Microseconds propagation_;
-  const Microseconds span_;
-  const double dReceiverSensitivitydBm_;
+  void* pRsMsg_;
 };
 
 EMANE::Controls::ReceivePropertiesControlMessage::
 ReceivePropertiesControlMessage(const ReceivePropertiesControlMessage & msg):
   ControlMessage{IDENTIFIER},
-  pImpl_{msg.pImpl_}
+  pImpl_{msg.pImpl_->clone()}
 {}
 
 

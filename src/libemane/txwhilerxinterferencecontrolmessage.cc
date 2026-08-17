@@ -33,25 +33,46 @@
 
 #include "emane/controls/txwhilerxinterferencecontrolmessage.h"
 
+extern "C" {
+    void* emane_rs_tx_while_rx_interference_control_message_create(double rx_power_dbm);
+    void* emane_rs_tx_while_rx_interference_control_message_clone(const void* ptr);
+    double emane_rs_tx_while_rx_interference_control_message_get_rx_power_dbm(const void* ptr);
+    void emane_rs_tx_while_rx_interference_control_message_free(void* ptr);
+}
+
 class EMANE::Controls::TxWhileRxInterferenceControlMessage::Implementation
 {
 public:
   Implementation(double dRxPowerdBm):
-    dRxPowerdBm_{dRxPowerdBm}{}
+    pRsMsg_{emane_rs_tx_while_rx_interference_control_message_create(dRxPowerdBm)}{}
+
+  Implementation(void* pRsMsg): pRsMsg_{pRsMsg} {}
+
+  ~Implementation()
+  {
+      if (pRsMsg_) {
+          emane_rs_tx_while_rx_interference_control_message_free(pRsMsg_);
+      }
+  }
 
   double getRxPowerdBm() const
   {
-    return dRxPowerdBm_;
+    return emane_rs_tx_while_rx_interference_control_message_get_rx_power_dbm(pRsMsg_);
+  }
+
+  Implementation* clone() const
+  {
+      return new Implementation(emane_rs_tx_while_rx_interference_control_message_clone(pRsMsg_));
   }
 
 private:
-  const double dRxPowerdBm_;
+  void* pRsMsg_;
 };
 
 EMANE::Controls::TxWhileRxInterferenceControlMessage::
 TxWhileRxInterferenceControlMessage(const TxWhileRxInterferenceControlMessage & msg):
   ControlMessage{IDENTIFIER},
-  pImpl_{new Implementation{*msg.pImpl_}}
+  pImpl_{msg.pImpl_->clone()}
 {}
 
 EMANE::Controls::TxWhileRxInterferenceControlMessage::TxWhileRxInterferenceControlMessage(double dRxPowerdBm):
