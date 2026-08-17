@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "configurationregistrarproxy.h"
 #include "emane/registrarexception.h"
 #include <cstring>

@@ -1,3 +1,4 @@
+#include <cstdint>
 /*
  * Copyright (c) 2013 - Adjacent Link LLC, Bridgewater, New Jersey
  * All rights reserved.
@@ -37,7 +38,6 @@
 #include "configurationservice.h"
 #include "eventagentfactorymanager.h"
 #include "eventgeneratorfactorymanager.h"
-#include "eventservice.h"
 #include "layerfactorymanager.h"
 #include "logservice.h"
 #include "nemlayerstateconfigured.h"
@@ -58,7 +58,7 @@ void EMANE::Application::shutdown()
 {
   google::protobuf::ShutdownProtobufLibrary();
 
-  EventServiceSingleton::destroy();
+  
   OTAManagerSingleton::destroy();
 
   BuildIdServiceSingleton::destroy();

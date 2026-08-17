@@ -1,3 +1,4 @@
+#include <cstdint>
 /*
  * Copyright (c) 2013-2014,2016 - Adjacent Link LLC, Bridgewater,
  * New Jersey
@@ -35,7 +36,6 @@
 
 #include "platformservice.h"
 #include "logservice.h"
-#include "eventservice.h"
 #include "emane/platformserviceuser.h"
 
 EMANE::PlatformService::PlatformService()

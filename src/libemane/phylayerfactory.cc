@@ -1,3 +1,4 @@
+#include <cstdint>
 /*
  * Copyright (c) 2013,2015 - Adjacent Link LLC, Bridgewater, New Jersey
  * Copyright (c) 2008 - DRS CenGen, LLC, Columbia, Maryland

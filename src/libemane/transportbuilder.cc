@@ -1,3 +1,13 @@
+
+#include <cstdint>
+#include <cstddef>
+
+extern "C" {
+    void emane_rs_event_service_register_user(uint16_t build_id, uint16_t nem_id, void* p_user);
+    void emane_rs_event_service_process_event_message(uint16_t nem_id, uint16_t event_id, const char* data, size_t len, uint16_t ignore_nem);
+    bool emane_rs_event_service_mcast_open(const char* addr, const char* device, int ttl, bool loopback, const unsigned char* uuid);
+}
+
 /*
  * Copyright (c) 2013-2014,2016 - Adjacent Link LLC, Bridgewater,
  * New Jersey
@@ -40,7 +50,6 @@
 #include "transportfactorymanager.h"
 #include "logservice.h"
 #include "timerserviceproxy.h"
-#include "eventservice.h"
 #include "nemplatformservice.h"
 #include "buildidservice.h"
 #include "registrarproxy.h"
@@ -149,9 +158,7 @@ EMANE::Application::TransportBuilder::buildTransport(NEMId id,
 
 
   // register event service handler with event service
-  EventServiceSingleton::instance()->registerEventServiceUser(buildId,
-                                                              pNEMLayer.get(),
-                                                              id);
+  emane_rs_event_service_register_user(buildId, id, pNEMLayer.get());
 
   RegistrarProxy registrarProxy{buildId};
 
@@ -205,9 +212,7 @@ EMANE::Application::TransportBuilder::buildTransportWithAdapter_i(Transport * pT
                                 pNEMLayer.get());
 
   // register event service handler with event service
-  EventServiceSingleton::instance()->registerEventServiceUser(buildId,
-                                                              pNEMLayer.get(),
-                                                              id);
+  emane_rs_event_service_register_user(buildId, id, pNEMLayer.get());
 
   RegistrarProxy registrarProxy{buildId};
 

@@ -100,14 +100,36 @@ fn get_event_socket() -> &'static Mutex<Option<UdpSocket>> {
     EVENT_SOCKET.get_or_init(|| Mutex::new(None))
 }
 
+pub struct EventServiceState {
+    pub uuid: [u8; 16],
+    pub seq_num: u64,
+    pub mcast_addr: Option<String>,
+}
+
+fn get_event_service_state() -> &'static Mutex<EventServiceState> {
+    static STATE: OnceLock<Mutex<EventServiceState>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(EventServiceState {
+        uuid: [0; 16],
+        seq_num: 0,
+        mcast_addr: None,
+    }))
+}
+
 #[no_mangle]
 pub extern "C" fn emane_rs_event_service_mcast_open(
     addr: *const c_char,
     device: *const c_char,
     ttl: i32,
     loopback: bool,
+    uuid: *const u8,
 ) -> bool {
     let addr_str = unsafe { std::ffi::CStr::from_ptr(addr) }.to_string_lossy();
+    let mut state = get_event_service_state().lock().unwrap();
+    state.mcast_addr = Some(addr_str.clone().into_owned());
+    unsafe {
+        state.uuid.copy_from_slice(std::slice::from_raw_parts(uuid, 16));
+    }
+
     let sock_addr: SocketAddr = match addr_str.parse() {
         Ok(a) => a,
         Err(_) => return false,
@@ -263,6 +285,36 @@ pub extern "C" fn emane_rs_event_service_process_loop(local_uuid: *const u8) {
             Ok(_) => continue,
             Err(_) => break, // socket closed or error
         }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_event_service_send_event(
+    build_id: u16,
+    nem_id: u16,
+    event_id: u16,
+    data: *const std::os::raw::c_char,
+    len: usize,
+) {
+    emane_rs_event_service_route_local_event(build_id, nem_id, event_id, data, len);
+
+    let mut state = get_event_service_state().lock().unwrap();
+    if let Some(addr) = state.mcast_addr.clone() {
+        state.seq_num += 1;
+        let seq_num = state.seq_num;
+        let c_addr = std::ffi::CString::new(addr.clone()).unwrap();
+        let uuid = state.uuid.clone(); // copy
+        drop(state); // drop lock before calling multicast function
+        
+        emane_rs_event_service_send_event_multicast(
+            uuid.as_ptr(),
+            event_id,
+            nem_id,
+            data,
+            len,
+            seq_num,
+            c_addr.as_ptr()
+        );
     }
 }
 

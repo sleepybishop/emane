@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "registrarproxy.h"
 
 EMANE::RegistrarProxy::RegistrarProxy(BuildId buildId):

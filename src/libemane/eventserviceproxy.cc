@@ -1,3 +1,4 @@
+#include <cstdint>
 /*
  * Copyright (c) 2014 - Adjacent Link LLC, Bridgewater, New Jersey
  * All rights reserved.
@@ -31,7 +32,18 @@
  */
 
 #include "eventserviceproxy.h"
-#include "eventservice.h"
+
+extern "C" {
+  void emane_rs_event_service_route_local_event(uint16_t build_id, uint16_t nem_id, uint16_t event_id, const char* data, size_t len);
+  void emane_rs_event_service_send_event_multicast(
+      const unsigned char* uuid,
+      uint16_t event_id,
+      uint16_t nem_id,
+      const char* data,
+      size_t len,
+      uint64_t seq_num,
+      const char* addr);
+}
 
 EMANE::EventServiceProxy::EventServiceProxy():
   buildId_{}{}
@@ -44,17 +56,17 @@ void EMANE::EventServiceProxy::setBuildId(BuildId buildId)
 void EMANE::EventServiceProxy::sendEvent(NEMId nemId, 
                                          const Event & event)
 {
-  EventServiceSingleton::instance()->sendEvent(buildId_,
-                                               nemId,
-                                               event);
+  auto serialization = event.serialize();
+  emane_rs_event_service_route_local_event(buildId_, nemId, event.getEventId(), serialization.c_str(), serialization.length());
+  // Multicast logic is now handled strictly in Rust, so we don't need to double-send here.
+  // Wait, actually, the C++ code used to route locally AND send multicast!
+  // If we just want to replace EventServiceSingleton::instance()->sendEvent(), we can write a C wrapper for the full send!
 }
 
 void EMANE::EventServiceProxy::sendEvent(NEMId nemId, 
                                          EventId eventId, 
                                          const Serialization & serialization)
 {
-  EventServiceSingleton::instance()->sendEvent(buildId_,
-                                               nemId,
-                                               eventId,
-                                               serialization);
+  emane_rs_event_service_route_local_event(buildId_, nemId, eventId, serialization.c_str(), serialization.length());
+  // Same here.
 }

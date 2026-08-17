@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "emane/events/antennaprofileevent.h"
 #include <cstring>
 

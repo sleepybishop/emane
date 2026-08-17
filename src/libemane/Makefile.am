@@ -90,7 +90,6 @@ libemane_la_SOURCES =                         \
  eventgeneratorfactorymanager.cc              \
  eventgeneratormanagerimpl.cc                 \
  eventregistrarproxy.cc                       \
- eventservice.cc                              \
  eventserviceproxy.cc                         \
  eventstatisticpublisher.cc                   \
  eventtablepublisher.cc                       \
@@ -153,7 +152,7 @@ libemane_la_SOURCES =                         \
  observedpowertablepublisher.cc               \
  observedpowertablepublisher.h                \
  orientationformatter.cc                      \
- otamanager.cc                                \
+ otamanager.cc rust_c_exports.cc                                \
  otastatisticpublisher.cc                     \
  otatransmittercontrolmessage.cc              \
  pathlossevent.cc                             \
@@ -247,7 +246,6 @@ libemane_la_SOURCES =                         \
  eventgeneratormanagerimpl.h                  \
  eventregistrarproxy.h                        \
  eventserviceexception.h                      \
- eventservice.h                               \
  eventserviceproxy.h                          \
  eventstatisticpublisher.h                    \
  eventtablepublisher.h                        \

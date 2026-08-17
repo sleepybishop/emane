@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "emane/configurationupdate.h"
 #include "emane/application/nembuilder.h"
 #include <string>

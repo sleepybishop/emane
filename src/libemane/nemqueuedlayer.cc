@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "nemqueuedlayer.h"
 #include "logservice.h"
 #include "rust_ffi.h"

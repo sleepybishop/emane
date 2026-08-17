@@ -1,3 +1,4 @@
+#include <cstdint>
 /*
  * Copyright (c) 2008 - DRS CenGen, LLC, Columbia, Maryland
  * All rights reserved.

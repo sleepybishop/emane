@@ -1,3 +1,13 @@
+
+#include <cstdint>
+#include <cstddef>
+
+extern "C" {
+    void emane_rs_event_service_register_user(uint16_t build_id, uint16_t nem_id, void* p_user);
+    void emane_rs_event_service_process_event_message(uint16_t nem_id, uint16_t event_id, const char* data, size_t len, uint16_t ignore_nem);
+    bool emane_rs_event_service_mcast_open(const char* addr, const char* device, int ttl, bool loopback, const unsigned char* uuid);
+}
+
 #include "configurationservice.h"
 /*
  * Copyright (c) 2013-2014,2016 - Adjacent Link LLC, Bridgewater,
@@ -39,7 +49,6 @@
 #include "eventagentmanagerimpl.h"
 #include "logservice.h"
 #include "timerserviceproxy.h"
-#include "eventservice.h"
 #include "platformservice.h"
 #include "buildidservice.h"
 #include "registrarproxy.h"
@@ -111,9 +120,7 @@ EMANE::Application::EventAgentBuilder::buildEventAgent(EMANE::NEMId nemId,
   pPlatformService->setFileDescriptorServiceProvider(NOPFileDescriptorService::instance());
 
   // register event service user with event service
-  EventServiceSingleton::instance()->registerEventServiceUser(buildId,
-                                                              pAgent.get(),
-                                                              nemId);
+  emane_rs_event_service_register_user(buildId, nemId, pAgent.get());
 
 
 

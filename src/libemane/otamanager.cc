@@ -1,3 +1,13 @@
+
+#include <cstdint>
+#include <cstddef>
+
+extern "C" {
+    void emane_rs_event_service_register_user(uint16_t build_id, uint16_t nem_id, void* p_user);
+    void emane_rs_event_service_process_event_message(uint16_t nem_id, uint16_t event_id, const char* data, size_t len, uint16_t ignore_nem);
+    bool emane_rs_event_service_mcast_open(const char* addr, const char* device, int ttl, bool loopback, const unsigned char* uuid);
+}
+
 /*
  * Copyright (c) 2013-2017 - Adjacent Link LLC, Bridgewater, New Jersey
  * Copyright (c) 2008-2012 - DRS CenGen, LLC, Columbia, Maryland
@@ -36,7 +46,6 @@
 #include "logservice.h"
 #include "controlmessageserializer.h"
 #include "otaexception.h"
-#include "eventservice.h"
 #include "otaheader.pb.h"
 #include "event.pb.h"
 #include "socketexception.h"
@@ -150,8 +159,7 @@ void EMANE::OTAManager::sendOTAPacket(NEMId id,
           pSerialization->set_eventid(std::get<1>(entry));
           pSerialization->set_data(std::get<2>(entry));
           
-          EventServiceSingleton::instance()->processEventMessage(
-              std::get<0>(entry), std::get<1>(entry), std::get<2>(entry), id);
+          emane_rs_event_service_process_event_message(std::get<0>(entry), std::get<1>(entry), std::get<2>(entry).c_str(), std::get<2>(entry).length(), id);
       }
       data.SerializeToString(&sEventSerialization);
   }
@@ -530,9 +538,7 @@ void  EMANE::OTAManager::handleOTAMessage(NEMId source,
         {
           for(const auto & serialization : data.serializations())
             {
-              EventServiceSingleton::instance()->processEventMessage(serialization.nemid(),
-                                                                     serialization.eventid(),
-                                                                     serialization.data());
+              emane_rs_event_service_process_event_message(serialization.nemid(), serialization.eventid(), serialization.data().c_str(), serialization.data().length(), 0);
 
               eventStatisticPublisher_.update(EventStatisticPublisher::Type::TYPE_RX,
                                               remoteUUID,
@@ -668,26 +674,3 @@ void EMANE::OTAManager::deliverUpstream(uint16_t source, uint16_t destination, u
     }
 }
 
-extern "C" {
-    void emane_c_ota_manager_update_stat(const uuid_t * uuid_ptr, uint16_t src_nem, uint32_t stat_type) {
-        if(auto p = EMANE::OTAManagerSingleton::instance()) {
-            p->updateStat(uuid_ptr, src_nem, stat_type);
-        }
-    }
-
-    void emane_c_ota_manager_deliver_event(uint16_t src_nem, uint16_t event_id, const uint8_t * data, size_t data_len) {
-        EMANE::Serialization serialization{reinterpret_cast<const char*>(data), data_len};
-        EMANE::EventServiceSingleton::instance()->processEventMessage(src_nem, event_id, serialization);
-    }
-
-    void emane_c_ota_manager_deliver_upstream(
-        uint16_t source, uint16_t destination, uint8_t priority,
-        const uuid_t * uuid_ptr,
-        const uint8_t * data, size_t data_len,
-        const uint8_t * controls, size_t controls_len
-    ) {
-        if(auto p = EMANE::OTAManagerSingleton::instance()) {
-            p->deliverUpstream(source, destination, priority, uuid_ptr, data, data_len, controls, controls_len);
-        }
-    }
-}

@@ -195,6 +195,10 @@ fn main() {
     let uuid = [0u8; 16]; // Default UUID
     let manager = emane_rs_nem_manager_create(uuid.as_ptr());
 
+    let mut event_group = None;
+    let mut event_device = String::new();
+    let mut event_ttl = 1;
+
     // Parse platform parameters
     for node in doc.descendants().filter(|n| n.has_tag_name("param") && n.parent().map_or(false, |p| p.has_tag_name("platform"))) {
         if let (Some(name), Some(value)) = (node.attribute("name"), node.attribute("value")) {
@@ -205,7 +209,38 @@ fn main() {
             }
             if name == "controlportendpoint" {
                 emane_core::control_port::start_control_port(value);
+            } else if name == "eventservicegroup" {
+                event_group = Some(value.to_string());
+            } else if name == "eventservicedevice" {
+                event_device = value.to_string();
+            } else if name == "eventservicettl" {
+                event_ttl = value.parse().unwrap_or(1);
             }
+        }
+    }
+
+    if let Some(group) = event_group {
+        let c_group = CString::new(group).unwrap();
+        let c_device = CString::new(event_device).unwrap();
+        let opened = unsafe {
+            emane_core::event_service::emane_rs_event_service_mcast_open(
+                c_group.as_ptr(),
+                if c_device.as_bytes().is_empty() { std::ptr::null() } else { c_device.as_ptr() },
+                event_ttl,
+                true,
+                uuid.as_ptr(),
+            )
+        };
+        if opened {
+            println!("Event service opened, spawning processor thread...");
+            let uuid_clone = uuid.clone();
+            std::thread::spawn(move || {
+                unsafe {
+                    emane_core::event_service::emane_rs_event_service_process_loop(uuid_clone.as_ptr());
+                }
+            });
+        } else {
+            eprintln!("Failed to open event service socket");
         }
     }
 

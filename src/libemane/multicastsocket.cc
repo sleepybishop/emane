@@ -1,3 +1,4 @@
+#include <cstdint>
 /*
  * Copyright (c) 2015 - Adjacent Link LLC, Bridgewater, New Jersey
  * All rights reserved.

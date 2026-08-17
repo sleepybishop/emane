@@ -1,3 +1,13 @@
+
+#include <cstdint>
+#include <cstddef>
+
+extern "C" {
+    void emane_rs_event_service_register_user(uint16_t build_id, uint16_t nem_id, void* p_user);
+    void emane_rs_event_service_process_event_message(uint16_t nem_id, uint16_t event_id, const char* data, size_t len, uint16_t ignore_nem);
+    bool emane_rs_event_service_mcast_open(const char* addr, const char* device, int ttl, bool loopback, const unsigned char* uuid);
+}
+
 /*
  * Copyright (c) 2013-2015 - Adjacent Link LLC, Bridgewater, New Jersey
  * Copyright (c) 2011-2012 - DRS CenGen, LLC, Columbia, Maryland
@@ -32,7 +42,6 @@
  */
 #include "eventgeneratormanagerimpl.h"
 #include "logservice.h"
-#include "eventservice.h"
 #include "timerservice.h"
 #include "eventserviceexception.h"
 
@@ -119,11 +128,7 @@ void EMANE::Application::EventGeneratorManagerImpl::start()
 {
   try
     {
-      EventServiceSingleton::instance()->open(eventServiceGroupAddr_,
-                                              sEventServiceDevice_,
-                                              u8EventServiceTTL_,
-                                              true,
-                                              uuid_);
+      /* EventService open moved to Rust */
     }
   catch(EventServiceException & e)
     {

@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "emane/maclayerimpl.h"
 #include "emane/upstreampacket.h"
 #include "emane/downstreampacket.h"

@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "emane/events/fadingselectionevent.h"
 #include <cstring>
 

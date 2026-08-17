@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "configurationservice.h"
 #include "emane/registrarexception.h"
 #include "emane/configurationexception.h"

@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <vector>
 #include "emane/events/locationevent.h"
 #include <cstring>

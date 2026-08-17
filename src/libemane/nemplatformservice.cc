@@ -1,3 +1,4 @@
+#include <cstdint>
 /*
  * Copyright (c) 2016 - Adjacent Link LLC, Bridgewater, New Jersey
  * All rights reserved.
@@ -32,8 +33,6 @@
 
 #include "nemplatformservice.h"
 #include "logservice.h"
-#include "eventservice.h"
-
 EMANE::NEMPlatformService::NEMPlatformService():
   pNEMQueuedLayer_{}{}
 
