@@ -282,16 +282,9 @@ extern "C" {
     }
     
     void emane_c_control_port_open(const char* port_str) {
-        if(EMANE::Application::NEMManagerImpl::instance() && port_str) {
-            EMANE::INETAddr addr{port_str};
-            EMANE::Application::NEMManagerImpl::instance()->getControlPortService().open(addr);
-        }
     }
     
     void emane_c_control_port_close() {
-        if(EMANE::Application::NEMManagerImpl::instance()) {
-            EMANE::Application::NEMManagerImpl::instance()->getControlPortService().close();
-        }
     }
     
     void emane_c_load_antenna_profile(const char* uri) {

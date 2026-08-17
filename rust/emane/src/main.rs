@@ -203,6 +203,9 @@ fn main() {
             unsafe {
                 emane_rs_nem_manager_set_config_str(manager, c_name.as_ptr(), c_value.as_ptr());
             }
+            if name == "controlportendpoint" {
+                emane_core::control_port::start_control_port(value);
+            }
         }
     }
 

@@ -74,13 +74,9 @@ libemane_la_SOURCES =                         \
  commonmacheader.cc                           \
  commonphyheader.cc                           \
  configurationcontroller.cc                   \
- configurationqueryhandler.cc                 \
  configurationregistrarproxy.cc               \
  configurationservice.cc                      \
- configurationupdatehandler.cc                \
  controlmessageserializer.cc                  \
- controlportservice.cc                        \
- controlportsession.cc                        \
  datagramsocket.cc                            \
  downstreampacket.cc                          \
  downstreamtransport.cc                       \
@@ -120,14 +116,12 @@ libemane_la_SOURCES =                         \
  locationinfoformatter.cc                     \
  locationmanager.cc                           \
  logger.cc                                    \
- loglevelupdatehandler.cc                     \
  loggerrecordmessage.cc                       \
  lognormalfadingalgorithm.cc                  \
  lognormalfadingalgorithmmanager.cc           \
  logservice.cc                                \
  maclayer_ffi.cc                                  \
  main.cc                                      \
- manifestqueryhandler.cc                      \
  mimoreceivepropertiescontrolmessage.cc       \
  mimoreceivepropertiescontrolmessageformatter.cc \
  mimotransmitpropertiescontrolmessage.cc      \
@@ -186,7 +180,6 @@ libemane_la_SOURCES =                         \
  receivepropertiescontrolmessageformatter.cc  \
  receivepowertablepublisher.cc                \
  registrarproxy.cc                            \
- requestmessagehandler.cc                     \
  rfsignaltable.cc                             \
  rxantennaaddcontrolmessage.cc                \
  rxantennaaddcontrolmessageformatter.cc       \
@@ -207,13 +200,8 @@ libemane_la_SOURCES =                         \
  spectrummonitor.cc                           \
  spectrumservice.cc                           \
  spectrumwindowutils.cc                       \
- statisticclearupdatehandler.cc               \
- statisticcontroller.cc                       \
- statisticqueryhandler.cc                     \
  statisticregistrarproxy.cc                   \
  statisticservice.cc                          \
- statistictableclearupdatehandler.cc          \
- statistictablequeryhandler.cc                \
  tdmascheduleevent.cc                         \
  timer.cc                                     \
  timerservice.cc                              \

@@ -76,14 +76,12 @@ namespace EMANE
 
     private:
       void* pRsNemManager_;
-      ControlPort::Service controlPortService_;
       
       // Keep static pointers for C callbacks
       static NEMManagerImpl* pInstance_;
       
     public:
       static NEMManagerImpl* instance() { return pInstance_; }
-      ControlPort::Service& getControlPortService() { return controlPortService_; }
     };
 
     extern "C" {

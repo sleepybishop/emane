@@ -1,0 +1,1344 @@
+    Checking emane-core v0.1.0 (/home/joe/src/sleepybishop/emane/rust/emane-core)
+error: an inner attribute is not permitted in this context
+ --> emane-core/src/lib.rs:2:1
+  |
+2 | #![allow(non_upper_case_globals)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+6 | pub mod xml;
+  | ------------ the inner attribute doesn't annotate this module
+  |
+  = note: inner attributes, like `#![no_std]`, annotate the item enclosing them, and are usually found at the beginning of source files
+help: to annotate the module, change the attribute from inner to outer style
+  |
+2 - #![allow(non_upper_case_globals)]
+2 + #[allow(non_upper_case_globals)]
+  |
+
+error: an inner attribute is not permitted in this context
+ --> emane-core/src/lib.rs:3:1
+  |
+3 | #![allow(non_camel_case_types)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+6 | pub mod xml;
+  | ------------ the inner attribute doesn't annotate this module
+  |
+  = note: inner attributes, like `#![no_std]`, annotate the item enclosing them, and are usually found at the beginning of source files
+help: to annotate the module, change the attribute from inner to outer style
+  |
+3 - #![allow(non_camel_case_types)]
+3 + #[allow(non_camel_case_types)]
+  |
+
+error: an inner attribute is not permitted in this context
+ --> emane-core/src/lib.rs:4:1
+  |
+4 | #![allow(non_snake_case)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+5 |
+6 | pub mod xml;
+  | ------------ the inner attribute doesn't annotate this module
+  |
+  = note: inner attributes, like `#![no_std]`, annotate the item enclosing them, and are usually found at the beginning of source files
+help: to annotate the module, change the attribute from inner to outer style
+  |
+4 - #![allow(non_snake_case)]
+4 + #[allow(non_snake_case)]
+  |
+
+error[E0432]: unresolved import `crate::protobufs::emane_remote_control_port_api::AnyType`
+ --> emane-core/src/control_port.rs:8:79
+  |
+8 | ...{Request, Response, Any, AnyType, request, response};
+  |                             ^^^^^^^ no `AnyType` in `protobufs::emane_remote_control_port_api`
+  |
+  = help: consider importing this enum instead:
+          crate::protobufs::emane_remote_control_port_api::any::AnyType
+
+error[E0432]: unresolved import `crate::config::emane_rs_config_free_query_result`
+  --> emane-core/src/control_port.rs:19:28
+   |
+19 |     emane_rs_config_query, emane_rs_config_free_query_result,
+   |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `emane_rs_config_free_query_result` in `config`
+   |
+help: a similar name exists in the module
+   |
+19 -     emane_rs_config_query, emane_rs_config_free_query_result,
+19 +     emane_rs_config_query, emane_rs_config_free_manifest,
+   |
+
+warning: unused import: `std::os::raw::c_char`
+ --> emane-core/src/control_port.rs:6:5
+  |
+6 | use std::os::raw::c_char;
+  |     ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `emane_rs_statistic_free_manifest`, `emane_rs_statistic_free_table_manifest`, `emane_rs_statistic_get_manifest`, and `emane_rs_statistic_get_table_manifest`
+  --> emane-core/src/control_port.rs:13:5
+   |
+13 |     emane_rs_statistic_get_manifest, emane_rs_statistic_free_manifest,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+14 |     emane_rs_statistic_get_table_manifest, emane_rs_statistic_free_table_manifest,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::os::raw::c_void`
+ --> emane-core/src/events.rs:3:5
+  |
+3 | use std::os::raw::c_void;
+  |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `CString`
+ --> emane-core/src/config.rs:4:22
+  |
+4 | use std::ffi::{CStr, CString};
+  |                      ^^^^^^^
+
+warning: unused import: `emane_rs_regex_free`
+ --> emane-core/src/config.rs:5:44
+  |
+5 | use crate::regex::{emane_rs_regex_compile, emane_rs_regex_free, emane_rs_...
+  |                                            ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `HashSet`
+ --> emane-core/src/buildid.rs:1:33
+  |
+1 | use std::collections::{HashMap, HashSet};
+  |                                 ^^^^^^^
+
+warning: unused import: `HashSet`
+ --> emane-core/src/event_service.rs:1:33
+  |
+1 | use std::collections::{HashMap, HashSet};
+  |                                 ^^^^^^^
+
+warning: unused import: `c_int`
+ --> emane-core/src/ota_manager.rs:4:36
+  |
+4 | use std::os::raw::{c_void, c_char, c_int};
+  |                                    ^^^^^
+
+warning: unused import: `c_ushort`
+  --> emane-core/src/ota_manager.rs:11:61
+   |
+11 | use libc::{c_uint, setsockopt, SOL_SOCKET, SO_BINDTODEVICE, c_ushort};
+   |                                                             ^^^^^^^^
+
+warning: unused import: `std::time::Duration`
+ --> emane-core/src/tdma_mac.rs:1:5
+  |
+1 | use std::time::Duration;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: type `std_basic_string__Char_alloc_type` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:51:10
+   |
+51 | pub type std_basic_string__Char_alloc_type = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringCharAllocType`
+   |
+   = note: `#[warn(non_camel_case_types)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: type `std_basic_string__Alloc_traits` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:52:10
+   |
+52 | pub type std_basic_string__Alloc_traits = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringAllocTraits`
+
+warning: type `std_basic_string_traits_type` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:53:10
+   |
+53 | pub type std_basic_string_traits_type = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringTraitsType`
+
+warning: type `std_basic_string_value_type` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:54:10
+   |
+54 | pub type std_basic_string_value_type = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringValueType`
+
+warning: type `std_basic_string_allocator_type` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:55:10
+   |
+55 | pub type std_basic_string_allocator_type = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringAllocatorType`
+
+warning: type `std_basic_string_size_type` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:56:10
+   |
+56 | pub type std_basic_string_size_type = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringSizeType`
+
+warning: type `std_basic_string_difference_type` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:57:10
+   |
+57 | pub type std_basic_string_difference_type = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringDifferenceType`
+
+warning: type `std_basic_string_reference` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:58:10
+   |
+58 | pub type std_basic_string_reference = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringReference`
+
+warning: type `std_basic_string_const_reference` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:59:10
+   |
+59 | pub type std_basic_string_const_reference = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringConstReference`
+
+warning: type `std_basic_string_pointer` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:60:10
+   |
+60 | pub type std_basic_string_pointer = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringPointer`
+
+warning: type `std_basic_string_const_pointer` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:61:10
+   |
+61 | pub type std_basic_string_const_pointer = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringConstPointer`
+
+warning: type `std_basic_string_iterator` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:62:10
+   |
+62 | pub type std_basic_string_iterator = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringIterator`
+
+warning: type `std_basic_string_const_iterator` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:63:10
+   |
+63 | pub type std_basic_string_const_iterator = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringConstIterator`
+
+warning: type `std_basic_string_const_reverse_iterator` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:64:10
+   |
+64 | pub type std_basic_string_const_reverse_iterator = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringConstReverseIterator`
+
+warning: type `std_basic_string_reverse_iterator` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:65:10
+   |
+65 | pub type std_basic_string_reverse_iterator = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringReverseIterator`
+
+warning: type `std_basic_string___const_iterator` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:66:10
+   |
+66 | pub type std_basic_string___const_iterator = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringConstIterator`
+
+warning: type `std_basic_string___sv_type` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:67:10
+   |
+67 | pub type std_basic_string___sv_type = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringSvType`
+
+warning: type `std_basic_string__If_sv` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:68:10
+   |
+68 | pub type std_basic_string__If_sv = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringIfSv`
+
+warning: type `std_basic_string__bindgen_ty_1` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:80:10
+   |
+80 | pub type std_basic_string__bindgen_ty_1 = i32;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdBasicStringBindgenTy1`
+
+warning: type `std_list__Base` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:92:10
+   |
+92 | pub type std_list__Base = u8;
+   |          ^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListBase`
+
+warning: type `std_list__Tp_alloc_type` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:93:10
+   |
+93 | pub type std_list__Tp_alloc_type = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListTpAllocType`
+
+warning: type `std_list__Tp_alloc_traits` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:94:10
+   |
+94 | pub type std_list__Tp_alloc_traits = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListTpAllocTraits`
+
+warning: type `std_list__Node_alloc_type` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:95:10
+   |
+95 | pub type std_list__Node_alloc_type = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListNodeAllocType`
+
+warning: type `std_list__Node_alloc_traits` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:96:10
+   |
+96 | pub type std_list__Node_alloc_traits = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListNodeAllocTraits`
+
+warning: type `std_list__Node_traits` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:97:10
+   |
+97 | pub type std_list__Node_traits = u8;
+   |          ^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListNodeTraits`
+
+warning: type `std_list_value_type` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:98:10
+   |
+98 | pub type std_list_value_type = u8;
+   |          ^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListValueType`
+
+warning: type `std_list_pointer` should have an upper camel case name
+  --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:99:10
+   |
+99 | pub type std_list_pointer = u8;
+   |          ^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListPointer`
+
+warning: type `std_list_const_pointer` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:100:10
+    |
+100 | pub type std_list_const_pointer = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListConstPointer`
+
+warning: type `std_list_reference` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:101:10
+    |
+101 | pub type std_list_reference = u8;
+    |          ^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListReference`
+
+warning: type `std_list_const_reference` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:102:10
+    |
+102 | pub type std_list_const_reference = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListConstReference`
+
+warning: type `std_list_iterator` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:103:10
+    |
+103 | pub type std_list_iterator = u8;
+    |          ^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListIterator`
+
+warning: type `std_list_const_iterator` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:104:10
+    |
+104 | pub type std_list_const_iterator = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListConstIterator`
+
+warning: type `std_list_const_reverse_iterator` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:105:10
+    |
+105 | pub type std_list_const_reverse_iterator = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListConstReverseIterator`
+
+warning: type `std_list_reverse_iterator` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:106:10
+    |
+106 | pub type std_list_reverse_iterator = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListReverseIterator`
+
+warning: type `std_list_size_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:107:10
+    |
+107 | pub type std_list_size_type = u64;
+    |          ^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListSizeType`
+
+warning: type `std_list_difference_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:108:10
+    |
+108 | pub type std_list_difference_type = u64;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListDifferenceType`
+
+warning: type `std_list_allocator_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:109:10
+    |
+109 | pub type std_list_allocator_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListAllocatorType`
+
+warning: type `std_list__Node_ptr` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:110:10
+    |
+110 | pub type std_list__Node_ptr = u8;
+    |          ^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListNodePtr`
+
+warning: type `std_list___remove_return_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:111:10
+    |
+111 | pub type std_list___remove_return_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdListRemoveReturnType`
+
+warning: type `std_false_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:117:10
+    |
+117 | pub type std_false_type = u8;
+    |          ^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdFalseType`
+
+warning: type `std_chrono_duration___is_float` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:131:10
+    |
+131 | pub type std_chrono_duration___is_float = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdChronoDurationIsFloat`
+
+warning: type `std_chrono_duration___divide` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:132:10
+    |
+132 | pub type std_chrono_duration___divide = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdChronoDurationDivide`
+
+warning: type `std_chrono_duration___is_harmonic` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:133:10
+    |
+133 | pub type std_chrono_duration___is_harmonic = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdChronoDurationIsHarmonic`
+
+warning: type `std_chrono_duration_rep` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:134:10
+    |
+134 | pub type std_chrono_duration_rep = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdChronoDurationRep`
+
+warning: type `std_chrono_duration_period` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:135:10
+    |
+135 | pub type std_chrono_duration_period = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdChronoDurationPeriod`
+
+warning: type `std_chrono_nanoseconds` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:136:10
+    |
+136 | pub type std_chrono_nanoseconds = u64;
+    |          ^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdChronoNanoseconds`
+
+warning: type `std_chrono_microseconds` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:137:10
+    |
+137 | pub type std_chrono_microseconds = u64;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdChronoMicroseconds`
+
+warning: type `std_chrono_milliseconds` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:138:10
+    |
+138 | pub type std_chrono_milliseconds = u64;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdChronoMilliseconds`
+
+warning: type `std_chrono_seconds` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:139:10
+    |
+139 | pub type std_chrono_seconds = u64;
+    |          ^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdChronoSeconds`
+
+warning: type `std_chrono__V2_system_clock_duration` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:146:10
+    |
+146 | pub type std_chrono__V2_system_clock_duration = u64;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdChronoV2SystemClockDuration`
+
+warning: type `std_chrono__V2_system_clock_rep` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:147:10
+    |
+147 | pub type std_chrono__V2_system_clock_rep = u64;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdChronoV2SystemClockRep`
+
+warning: type `std_chrono__V2_system_clock_period` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:148:10
+    |
+148 | pub type std_chrono__V2_system_clock_period = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdChronoV2SystemClockPeriod`
+
+warning: type `std_chrono__V2_system_clock_time_point` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:149:10
+    |
+149 | pub type std_chrono__V2_system_clock_time_point = u64;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdChronoV2SystemClockTimePoint`
+
+warning: type `std_string` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:174:10
+    |
+174 | pub type std_string = [u64; 4usize];
+    |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `StdString`
+
+warning: type `std_allocator_value_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:212:10
+    |
+212 | pub type std_allocator_value_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdAllocatorValueType`
+
+warning: type `std_allocator_size_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:213:10
+    |
+213 | pub type std_allocator_size_type = u64;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdAllocatorSizeType`
+
+warning: type `std_allocator_difference_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:214:10
+    |
+214 | pub type std_allocator_difference_type = u64;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdAllocatorDifferenceType`
+
+warning: type `std_allocator_pointer` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:215:10
+    |
+215 | pub type std_allocator_pointer = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdAllocatorPointer`
+
+warning: type `std_allocator_const_pointer` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:216:10
+    |
+216 | pub type std_allocator_const_pointer = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdAllocatorConstPointer`
+
+warning: type `std_allocator_reference` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:217:10
+    |
+217 | pub type std_allocator_reference = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdAllocatorReference`
+
+warning: type `std_allocator_const_reference` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:218:10
+    |
+218 | pub type std_allocator_const_reference = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdAllocatorConstReference`
+
+warning: type `std_allocator_rebind_other` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:224:10
+    |
+224 | pub type std_allocator_rebind_other = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdAllocatorRebindOther`
+
+warning: type `std_allocator_propagate_on_container_move_assignment` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:225:10
+    |
+225 | pub type std_allocator_propagate_on_container_move_assignment = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdAllocatorPropagateOnContainerMoveAssignment`
+
+warning: type `std_allocator_is_always_equal` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:226:10
+    |
+226 | pub type std_allocator_is_always_equal = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdAllocatorIsAlwaysEqual`
+
+warning: type `std_pair_first_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:237:10
+    |
+237 | pub type std_pair_first_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdPairFirstType`
+
+warning: type `std_pair_second_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:238:10
+    |
+238 | pub type std_pair_second_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdPairSecondType`
+
+warning: type `std_pair__PCCP` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:239:10
+    |
+239 | pub type std_pair__PCCP = u8;
+    |          ^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdPairPccp`
+
+warning: type `std_pair__PCCFP` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:240:10
+    |
+240 | pub type std_pair__PCCFP = u8;
+    |          ^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdPairPccfp`
+
+warning: type `std_tuple__Inherited` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:251:10
+    |
+251 | pub type std_tuple__Inherited = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdTupleInherited`
+
+warning: type `std_tuple__TCC` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:252:10
+    |
+252 | pub type std_tuple__TCC = u8;
+    |          ^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdTupleTcc`
+
+warning: type `std_tuple__ImplicitDefaultCtor` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:253:10
+    |
+253 | pub type std_tuple__ImplicitDefaultCtor = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdTupleImplicitDefaultCtor`
+
+warning: type `std_tuple__ExplicitDefaultCtor` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:254:10
+    |
+254 | pub type std_tuple__ExplicitDefaultCtor = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdTupleExplicitDefaultCtor`
+
+warning: type `std_tuple__ImplicitCtor` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:255:10
+    |
+255 | pub type std_tuple__ImplicitCtor = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdTupleImplicitCtor`
+
+warning: type `std_tuple__ExplicitCtor` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:256:10
+    |
+256 | pub type std_tuple__ExplicitCtor = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdTupleExplicitCtor`
+
+warning: type `std_set_key_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:267:10
+    |
+267 | pub type std_set_key_type = u8;
+    |          ^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetKeyType`
+
+warning: type `std_set_value_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:268:10
+    |
+268 | pub type std_set_value_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetValueType`
+
+warning: type `std_set_key_compare` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:269:10
+    |
+269 | pub type std_set_key_compare = u8;
+    |          ^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetKeyCompare`
+
+warning: type `std_set_value_compare` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:270:10
+    |
+270 | pub type std_set_value_compare = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetValueCompare`
+
+warning: type `std_set_allocator_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:271:10
+    |
+271 | pub type std_set_allocator_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetAllocatorType`
+
+warning: type `std_set__Key_alloc_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:272:10
+    |
+272 | pub type std_set__Key_alloc_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetKeyAllocType`
+
+warning: type `std_set__Rep_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:273:10
+    |
+273 | pub type std_set__Rep_type = u8;
+    |          ^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetRepType`
+
+warning: type `std_set__Alloc_traits` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:274:10
+    |
+274 | pub type std_set__Alloc_traits = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetAllocTraits`
+
+warning: type `std_set_pointer` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:275:10
+    |
+275 | pub type std_set_pointer = u8;
+    |          ^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetPointer`
+
+warning: type `std_set_const_pointer` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:276:10
+    |
+276 | pub type std_set_const_pointer = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetConstPointer`
+
+warning: type `std_set_reference` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:277:10
+    |
+277 | pub type std_set_reference = u8;
+    |          ^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetReference`
+
+warning: type `std_set_const_reference` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:278:10
+    |
+278 | pub type std_set_const_reference = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetConstReference`
+
+warning: type `std_set_iterator` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:279:10
+    |
+279 | pub type std_set_iterator = u8;
+    |          ^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetIterator`
+
+warning: type `std_set_const_iterator` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:280:10
+    |
+280 | pub type std_set_const_iterator = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetConstIterator`
+
+warning: type `std_set_reverse_iterator` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:281:10
+    |
+281 | pub type std_set_reverse_iterator = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetReverseIterator`
+
+warning: type `std_set_const_reverse_iterator` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:282:10
+    |
+282 | pub type std_set_const_reverse_iterator = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetConstReverseIterator`
+
+warning: type `std_set_size_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:283:10
+    |
+283 | pub type std_set_size_type = u8;
+    |          ^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetSizeType`
+
+warning: type `std_set_difference_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:284:10
+    |
+284 | pub type std_set_difference_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetDifferenceType`
+
+warning: type `std_set_node_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:285:10
+    |
+285 | pub type std_set_node_type = u8;
+    |          ^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetNodeType`
+
+warning: type `std_set_insert_return_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:286:10
+    |
+286 | pub type std_set_insert_return_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdSetInsertReturnType`
+
+warning: type `std_vector__Base` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:292:10
+    |
+292 | pub type std_vector__Base = u8;
+    |          ^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdVectorBase`
+
+warning: type `std_vector__Tp_alloc_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:293:10
+    |
+293 | pub type std_vector__Tp_alloc_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdVectorTpAllocType`
+
+warning: type `std_vector__Alloc_traits` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:294:10
+    |
+294 | pub type std_vector__Alloc_traits = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdVectorAllocTraits`
+
+warning: type `std_vector_value_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:295:10
+    |
+295 | pub type std_vector_value_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdVectorValueType`
+
+warning: type `std_vector_pointer` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:296:10
+    |
+296 | pub type std_vector_pointer = u8;
+    |          ^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdVectorPointer`
+
+warning: type `std_vector_const_pointer` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:297:10
+    |
+297 | pub type std_vector_const_pointer = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdVectorConstPointer`
+
+warning: type `std_vector_reference` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:298:10
+    |
+298 | pub type std_vector_reference = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdVectorReference`
+
+warning: type `std_vector_const_reference` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:299:10
+    |
+299 | pub type std_vector_const_reference = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdVectorConstReference`
+
+warning: type `std_vector_iterator` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:300:10
+    |
+300 | pub type std_vector_iterator = u8;
+    |          ^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdVectorIterator`
+
+warning: type `std_vector_const_iterator` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:301:10
+    |
+301 | pub type std_vector_const_iterator = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdVectorConstIterator`
+
+warning: type `std_vector_const_reverse_iterator` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:302:10
+    |
+302 | pub type std_vector_const_reverse_iterator = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdVectorConstReverseIterator`
+
+warning: type `std_vector_reverse_iterator` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:303:10
+    |
+303 | pub type std_vector_reverse_iterator = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdVectorReverseIterator`
+
+warning: type `std_vector_size_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:304:10
+    |
+304 | pub type std_vector_size_type = u64;
+    |          ^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdVectorSizeType`
+
+warning: type `std_vector_difference_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:305:10
+    |
+305 | pub type std_vector_difference_type = u64;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdVectorDifferenceType`
+
+warning: type `std_vector_allocator_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:306:10
+    |
+306 | pub type std_vector_allocator_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdVectorAllocatorType`
+
+warning: type `std_unique_ptr__DeleterConstraint` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:333:10
+    |
+333 | pub type std_unique_ptr__DeleterConstraint = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUniquePtrDeleterConstraint`
+
+warning: type `std_unique_ptr_pointer` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:334:10
+    |
+334 | pub type std_unique_ptr_pointer = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUniquePtrPointer`
+
+warning: type `std_unique_ptr_element_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:335:10
+    |
+335 | pub type std_unique_ptr_element_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUniquePtrElementType`
+
+warning: type `std_unique_ptr_deleter_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:336:10
+    |
+336 | pub type std_unique_ptr_deleter_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUniquePtrDeleterType`
+
+warning: type `std_unique_ptr___safe_conversion_up` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:337:10
+    |
+337 | pub type std_unique_ptr___safe_conversion_up = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUniquePtrSafeConversionUp`
+
+warning: type `std_unordered_map__Hashtable` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:348:10
+    |
+348 | pub type std_unordered_map__Hashtable = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapHashtable`
+
+warning: type `std_unordered_map_key_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:349:10
+    |
+349 | pub type std_unordered_map_key_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapKeyType`
+
+warning: type `std_unordered_map_value_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:350:10
+    |
+350 | pub type std_unordered_map_value_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapValueType`
+
+warning: type `std_unordered_map_mapped_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:351:10
+    |
+351 | pub type std_unordered_map_mapped_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapMappedType`
+
+warning: type `std_unordered_map_hasher` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:352:10
+    |
+352 | pub type std_unordered_map_hasher = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapHasher`
+
+warning: type `std_unordered_map_key_equal` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:353:10
+    |
+353 | pub type std_unordered_map_key_equal = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapKeyEqual`
+
+warning: type `std_unordered_map_allocator_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:354:10
+    |
+354 | pub type std_unordered_map_allocator_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapAllocatorType`
+
+warning: type `std_unordered_map_pointer` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:355:10
+    |
+355 | pub type std_unordered_map_pointer = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapPointer`
+
+warning: type `std_unordered_map_const_pointer` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:356:10
+    |
+356 | pub type std_unordered_map_const_pointer = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapConstPointer`
+
+warning: type `std_unordered_map_reference` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:357:10
+    |
+357 | pub type std_unordered_map_reference = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapReference`
+
+warning: type `std_unordered_map_const_reference` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:358:10
+    |
+358 | pub type std_unordered_map_const_reference = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapConstReference`
+
+warning: type `std_unordered_map_iterator` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:359:10
+    |
+359 | pub type std_unordered_map_iterator = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapIterator`
+
+warning: type `std_unordered_map_const_iterator` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:360:10
+    |
+360 | pub type std_unordered_map_const_iterator = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapConstIterator`
+
+warning: type `std_unordered_map_local_iterator` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:361:10
+    |
+361 | pub type std_unordered_map_local_iterator = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapLocalIterator`
+
+warning: type `std_unordered_map_const_local_iterator` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:362:10
+    |
+362 | pub type std_unordered_map_const_local_iterator = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapConstLocalIterator`
+
+warning: type `std_unordered_map_size_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:363:10
+    |
+363 | pub type std_unordered_map_size_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapSizeType`
+
+warning: type `std_unordered_map_difference_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:364:10
+    |
+364 | pub type std_unordered_map_difference_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapDifferenceType`
+
+warning: type `std_unordered_map_node_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:365:10
+    |
+365 | pub type std_unordered_map_node_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapNodeType`
+
+warning: type `std_unordered_map_insert_return_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:366:10
+    |
+366 | pub type std_unordered_map_insert_return_type = u8;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdUnorderedMapInsertReturnType`
+
+warning: type `std_mutex_native_handle_type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:373:10
+    |
+373 | pub type std_mutex_native_handle_type = u64;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `StdMutexNativeHandleType`
+
+warning: type `__socklen_t` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:387:10
+    |
+387 | pub type __socklen_t = ::std::os::raw::c_uint;
+    |          ^^^^^^^^^^^ help: convert the identifier to upper camel case: `SocklenT`
+
+warning: type `__gnuc_va_list` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:388:10
+    |
+388 | pub type __gnuc_va_list = __builtin_va_list;
+    |          ^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `GnucVaList`
+
+warning: type `va_list` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:389:10
+    |
+389 | pub type va_list = __gnuc_va_list;
+    |          ^^^^^^^ help: convert the identifier to upper camel case: `VaList`
+
+warning: type `EMANE_Seconds` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:390:10
+    |
+390 | pub type EMANE_Seconds = std_chrono_seconds;
+    |          ^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneSeconds`
+
+warning: type `EMANE_Milliseconds` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:391:10
+    |
+391 | pub type EMANE_Milliseconds = std_chrono_milliseconds;
+    |          ^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneMilliseconds`
+
+warning: type `EMANE_Microseconds` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:392:10
+    |
+392 | pub type EMANE_Microseconds = std_chrono_microseconds;
+    |          ^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneMicroseconds`
+
+warning: type `EMANE_Nanoseconds` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:393:10
+    |
+393 | pub type EMANE_Nanoseconds = std_chrono_nanoseconds;
+    |          ^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneNanoseconds`
+
+warning: type `EMANE_DoubleSeconds` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:394:10
+    |
+394 | pub type EMANE_DoubleSeconds = u8;
+    |          ^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneDoubleSeconds`
+
+warning: type `EMANE_Clock` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:395:10
+    |
+395 | pub type EMANE_Clock = std_chrono__V2_system_clock;
+    |          ^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneClock`
+
+warning: type `EMANE_Duration` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:396:10
+    |
+396 | pub type EMANE_Duration = std_chrono__V2_system_clock_duration;
+    |          ^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneDuration`
+
+warning: type `EMANE_TimePoint` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:397:10
+    |
+397 | pub type EMANE_TimePoint = std_chrono__V2_system_clock_time_point;
+    |          ^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneTimePoint`
+
+warning: type `EMANE_NEMId` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:398:10
+    |
+398 | pub type EMANE_NEMId = ::std::os::raw::c_ushort;
+    |          ^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneNemid`
+
+warning: type `EMANE_EventId` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:399:10
+    |
+399 | pub type EMANE_EventId = ::std::os::raw::c_ushort;
+    |          ^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneEventId`
+
+warning: type `EMANE_TimerEventId` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:400:10
+    |
+400 | pub type EMANE_TimerEventId = usize;
+    |          ^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneTimerEventId`
+
+warning: type `EMANE_PlatformId` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:401:10
+    |
+401 | pub type EMANE_PlatformId = ::std::os::raw::c_ushort;
+    |          ^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmanePlatformId`
+
+warning: type `EMANE_AntennaProfileId` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:402:10
+    |
+402 | pub type EMANE_AntennaProfileId = ::std::os::raw::c_ushort;
+    |          ^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneAntennaProfileId`
+
+warning: type `EMANE_ControlMessageId` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:403:10
+    |
+403 | pub type EMANE_ControlMessageId = ::std::os::raw::c_ushort;
+    |          ^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneControlMessageId`
+
+warning: type `EMANE_RegistrationId` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:404:10
+    |
+404 | pub type EMANE_RegistrationId = ::std::os::raw::c_ushort;
+    |          ^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneRegistrationId`
+
+warning: type `EMANE_BuildId` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:405:10
+    |
+405 | pub type EMANE_BuildId = ::std::os::raw::c_uint;
+    |          ^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneBuildId`
+
+warning: type `EMANE_LengthPrefix` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:406:10
+    |
+406 | pub type EMANE_LengthPrefix = ::std::os::raw::c_ushort;
+    |          ^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneLengthPrefix`
+
+warning: type `EMANE_Priority` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:407:10
+    |
+407 | pub type EMANE_Priority = ::std::os::raw::c_uchar;
+    |          ^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmanePriority`
+
+warning: type `EMANE_Strings` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:408:10
+    |
+408 | pub type EMANE_Strings = [u64; 3usize];
+    |          ^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneStrings`
+
+warning: type `EMANE_AntennaIndex` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:409:10
+    |
+409 | pub type EMANE_AntennaIndex = ::std::os::raw::c_ushort;
+    |          ^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneAntennaIndex`
+
+warning: type `EMANE_FilterIndex` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:410:10
+    |
+410 | pub type EMANE_FilterIndex = ::std::os::raw::c_ushort;
+    |          ^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneFilterIndex`
+
+warning: type `EMANE_FilterData` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:411:10
+    |
+411 | pub type EMANE_FilterData = std_string;
+    |          ^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneFilterData`
+
+warning: type `EMANE_FrequencyGroupIndex` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:412:10
+    |
+412 | pub type EMANE_FrequencyGroupIndex = ::std::os::raw::c_ushort;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneFrequencyGroupIndex`
+
+warning: type `EMANE_FrequencySet` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:413:10
+    |
+413 | pub type EMANE_FrequencySet = u8;
+    |          ^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneFrequencySet`
+
+warning: type `EMANE_FrequencySets` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:414:10
+    |
+414 | pub type EMANE_FrequencySets = u8;
+    |          ^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneFrequencySets`
+
+warning: type `EMANE_SpectralMaskIndex` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:419:10
+    |
+419 | pub type EMANE_SpectralMaskIndex = ::std::os::raw::c_ushort;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneSpectralMaskIndex`
+
+warning: type `EMANE_Any_Type` should have an upper camel case name
+   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:722:10
+    |
+722 | pub type EMANE_Any_Type = ::std::os::raw::c_int;
+    |          ^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneAnyType`
+
+warning: type `EMANE_Serialization` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1216:10
+     |
+1216 | pub type EMANE_Serialization = std_string;
+     |          ^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneSerialization`
+
+warning: type `EMANE_ConfigurationProperties` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1274:10
+     |
+1274 | pub type EMANE_ConfigurationProperties = ::std::os::raw::c_int;
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneConfigurationProperties`
+
+warning: type `EMANE_ConfigurationNameStringValues` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1436:10
+     |
+1436 | pub type EMANE_ConfigurationNameStringValues = u8;
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneConfigurationNameStringValues`
+
+warning: type `EMANE_ConfigurationUpdateRequest` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1438:10
+     |
+1438 | pub type EMANE_ConfigurationUpdateRequest = u8;
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneConfigurationUpdateRequest`
+
+warning: type `EMANE_ConfigurationNameAnyValues` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1440:10
+     |
+1440 | pub type EMANE_ConfigurationNameAnyValues = u8;
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneConfigurationNameAnyValues`
+
+warning: type `EMANE_ConfigurationUpdate` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1442:10
+     |
+1442 | pub type EMANE_ConfigurationUpdate = u8;
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneConfigurationUpdate`
+
+warning: type `EMANE_ConfigurationManifest` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1444:10
+     |
+1444 | pub type EMANE_ConfigurationManifest = u8;
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneConfigurationManifest`
+
+warning: type `EMANE_ConfigurationValidator` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1446:10
+     |
+1446 | pub type EMANE_ConfigurationValidator = u8;
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneConfigurationValidator`
+
+warning: type `EMANE_StatisticTableValues` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1528:10
+     |
+1528 | pub type EMANE_StatisticTableValues = [u64; 3usize];
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneStatisticTableValues`
+
+warning: type `EMANE_StatisticTableLabels` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1529:10
+     |
+1529 | pub type EMANE_StatisticTableLabels = [u64; 3usize];
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneStatisticTableLabels`
+
+warning: type `EMANE_StatisticTable_InternalTable` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1551:10
+     |
+1551 | pub type EMANE_StatisticTable_InternalTable = u8;
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneStatisticTableInternalTable`
+
+warning: type `EMANE_StatisticProperties` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1573:10
+     |
+1573 | pub type EMANE_StatisticProperties = ::std::os::raw::c_int;
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneStatisticProperties`
+
+warning: type `EMANE_LogLevel` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1704:10
+     |
+1704 | pub type EMANE_LogLevel = ::std::os::raw::c_uint;
+     |          ^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneLogLevel`
+
+warning: type `EMANE_LogServiceProvider__bindgen_ty_1` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1719:10
+     |
+1719 | pub type EMANE_LogServiceProvider__bindgen_ty_1 = ::std::os::raw::c_uint;
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneLogServiceProviderBindgenTy1`
+
+warning: type `EMANE_ComponentType` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1759:10
+     |
+1759 | pub type EMANE_ComponentType = ::std::os::raw::c_uint;
+     |          ^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneComponentType`
+
+warning: type `EMANE_TimerServiceProvider_TimerCallback` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1789:10
+     |
+1789 | pub type EMANE_TimerServiceProvider_TimerCallback = u8;
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneTimerServiceProviderTimerCallback`
+
+warning: type `EMANE_FileDescriptorServiceProvider_DescriptorType` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1817:10
+     |
+1817 | pub type EMANE_FileDescriptorServiceProvider_DescriptorType = ::std::o...
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneFileDescriptorServiceProviderDescriptorType`
+
+warning: type `EMANE_FileDescriptorServiceProvider_Callback` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1818:10
+     |
+1818 | pub type EMANE_FileDescriptorServiceProvider_Callback = u8;
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneFileDescriptorServiceProviderCallback`
+
+warning: type `EMANE_ControlMessages` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1972:10
+     |
+1972 | pub type EMANE_ControlMessages = u8;
+     |          ^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneControlMessages`
+
+warning: type `EMANE_Utils_VectorIO` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:2048:10
+     |
+2048 | pub type EMANE_Utils_VectorIO = u8;
+     |          ^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneUtilsVectorIo`
+
+warning: type `EMANE_DownstreamPacket_EventSerializations` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:2230:10
+     |
+2230 | pub type EMANE_DownstreamPacket_EventSerializations = u8;
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `EmaneDownstreamPacketEventSerializations`
+
+warning: type `socklen_t` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:2626:10
+     |
+2626 | pub type socklen_t = __socklen_t;
+     |          ^^^^^^^^^ help: convert the identifier to upper camel case: `SocklenT`
+
+warning: type `sa_family_t` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:2627:10
+     |
+2627 | pub type sa_family_t = ::std::os::raw::c_ushort;
+     |          ^^^^^^^^^^^ help: convert the identifier to upper camel case: `SaFamilyT`
+
+warning: type `in_addr_t` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:2669:10
+     |
+2669 | pub type in_addr_t = u32;
+     |          ^^^^^^^^^ help: convert the identifier to upper camel case: `InAddrT`
+
+warning: type `in_port_t` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:2700:10
+     |
+2700 | pub type in_port_t = u16;
+     |          ^^^^^^^^^ help: convert the identifier to upper camel case: `InPortT`
+
+warning: type `uuid_t` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:2921:10
+     |
+2921 | pub type uuid_t = [::std::os::raw::c_uchar; 16usize];
+     |          ^^^^^^ help: convert the identifier to upper camel case: `UuidT`
+
+warning: type `__builtin_va_list` should have an upper camel case name
+    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:2922:10
+     |
+2922 | pub type __builtin_va_list = [__va_list_tag; 1usize];
+     |          ^^^^^^^^^^^^^^^^^ help: convert the identifier to upper camel case: `BuiltinVaList`
+
+warning: unnecessary `unsafe` block
+   --> emane-core/src/control_port.rs:297:29
+    |
+297 | ...                   unsafe {
+    |                       ^^^^^^ unnecessary `unsafe` block
+    |
+    = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> emane-core/src/events.rs:552:17
+    |
+552 |             let mut loc = emane_message::location_event::Location {
+    |                 ----^^^
+    |                 |
+    |                 help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+   --> emane-core/src/config.rs:189:21
+    |
+189 | ...   regex_ptr = unsafe { emane_rs_regex_compile(s_regex, regex_err.as...
+    |                   ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> emane-core/src/config.rs:250:21
+    |
+250 | ...   regex_ptr = unsafe { emane_rs_regex_compile(s_regex, regex_err.as...
+    |                   ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> emane-core/src/config.rs:533:35
+    |
+533 | ...   let matched = unsafe { emane_rs_regex_match(info.regex_ptr.0, c_s...
+    |                     ^^^^^^ unnecessary `unsafe` block
+
+warning: value assigned to `p_size` is never read
+   --> emane-core/src/ota_manager.rs:470:13
+    |
+470 |             p_size -= take;
+    |             ^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `ptr`
+  --> emane-core/src/mac_layer.rs:65:48
+   |
+65 | ...ane_rs_mac_layer_configure(ptr: *mut MacLayer, update: *mut c_void) {
+   |                               ^^^ help: if this is intentional, prefix it with an underscore: `_ptr`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `update`
+  --> emane-core/src/mac_layer.rs:65:68
+   |
+65 | ...gure(ptr: *mut MacLayer, update: *mut c_void) {
+   |                             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_update`
+
+For more information about this error, try `rustc --explain E0432`.
+warning: `emane-core` (lib) generated 209 warnings
+error: could not compile `emane-core` (lib) due to 5 previous errors; 209 warnings emitted
