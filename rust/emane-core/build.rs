@@ -12,6 +12,8 @@ fn main() {
         // Since EMANE is C++, we must enable C++ support
         .clang_arg("-xc++")
         .clang_arg("-std=c++17")
+        .clang_arg("-I/usr/include/uuid")
+        .clang_arg("-I/usr/include/libxml2")
         .allowlist_type("EMANE::.*")
         .allowlist_function("EMANE::.*")
         .allowlist_var("EMANE::.*")

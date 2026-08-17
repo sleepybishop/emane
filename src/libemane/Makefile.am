@@ -136,7 +136,8 @@ libemane_la_SOURCES =                         \
  nakagamifadingalgorithm.cc                   \
  nakagamifadingalgorithmmanager.cc            \
  neighbormetricmanager.cc                     \
- nembuilder.cc                                \
+ nembuilder.cc \
+  nembuilder_c.cc                                \
  nemimpl.cc                                   \
  nemlayerstack.cc                             \
  nemlayerstate.cc                             \

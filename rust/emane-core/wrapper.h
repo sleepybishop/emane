@@ -4,3 +4,4 @@
 #include <emane/types.h>
 #include <emane/any.h>
 #include <emane/event.h>
+#include <emane/nemlayer.h>
