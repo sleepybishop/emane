@@ -84,10 +84,13 @@ namespace EMANE
     
     void destroy() throw() override;
     
+    void* getRsNemLayerStack() const;
+
   private:
     using NEMLayers = std::vector<std::unique_ptr<NEMLayer>>;
     
     NEMLayers nemLayers_;
+    void* pRsNemLayerStack_ = nullptr;
   };
 }
 

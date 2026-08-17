@@ -1,45 +1,27 @@
 #include <cstdint>
-/*
- * Copyright (c) 2013-2015,2017 - Adjacent Link LLC, Bridgewater,
- * New Jersey
- * Copyright (c) 2011 - DRS CenGen, LLC, Columbia, Maryland
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of DRS CenGen, LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
-
 #include "nemimpl.h"
 #include "logservice.h"
 #include "emane/configureexception.h"
 #include "emane/startexception.h"
 
-#include <sstream>
-#include <iomanip>
+extern "C" {
+    void* emane_rs_nem_impl_create(std::uint16_t id, void* stack, bool b_ext, void* ota, void* net);
+    void emane_rs_nem_impl_destroy(void* ptr);
+    void emane_rs_nem_impl_start(void* ptr);
+    void emane_rs_nem_impl_post_start(void* ptr);
+    void emane_rs_nem_impl_stop(void* ptr);
+    void emane_rs_nem_impl_destroy_layers(void* ptr);
+
+    void emane_c_nem_adapter_open_ota(void* adapter) {
+        if(adapter) static_cast<EMANE::NEMOTAAdapter*>(adapter)->open();
+    }
+    void emane_c_nem_adapter_close_ota(void* adapter) {
+        if(adapter) static_cast<EMANE::NEMOTAAdapter*>(adapter)->close();
+    }
+    // We let C++ NEMImpl handle the network adapter opening because it requires C++ config parameters
+    void emane_c_nem_adapter_open_net(void*) {}
+    void emane_c_nem_adapter_close_net(void*) {}
+}
 
 EMANE::Application::NEMImpl::NEMImpl(NEMId id,
                                      std::unique_ptr<NEMLayerStack> & pNEMLayerStack,
@@ -47,13 +29,21 @@ EMANE::Application::NEMImpl::NEMImpl(NEMId id,
   pNEMLayerStack_(std::move(pNEMLayerStack)),
   id_{id},
   bExternalTransport_{bExternalTransport},
-  NEMOTAAdapter_{id},
-  NEMNetworkAdapter_{id}
+  pNEMOTAAdapter_{new NEMOTAAdapter{id}},
+  pNEMNetworkAdapter_{new NEMNetworkAdapter{id}}
 {
-  pNEMLayerStack_->connectLayers(&NEMNetworkAdapter_,&NEMOTAAdapter_);
+  pNEMLayerStack_->connectLayers(pNEMNetworkAdapter_.get(), pNEMOTAAdapter_.get());
+  
+  pRsNemImpl_ = emane_rs_nem_impl_create(id_, pNEMLayerStack_->getRsNemLayerStack(), bExternalTransport_, pNEMOTAAdapter_.get(), pNEMNetworkAdapter_.get());
 }
 
-EMANE::Application::NEMImpl::~NEMImpl(){}
+EMANE::Application::NEMImpl::~NEMImpl()
+{
+  if(pRsNemImpl_) {
+      emane_rs_nem_impl_destroy(pRsNemImpl_);
+      pRsNemImpl_ = nullptr;
+  }
+}
 
 void EMANE::Application::NEMImpl::initialize(Registrar & registrar)
 {
@@ -135,15 +125,13 @@ void EMANE::Application::NEMImpl::configure(const ConfigurationUpdate & update)
 
 void EMANE::Application::NEMImpl::start()
 {
-  NEMOTAAdapter_.open();
-
   if(bExternalTransport_)
     {
       try
         {
-          NEMNetworkAdapter_.open(platformEndpointAddr_,
-                                  transportEndpointAddr_,
-                                  protocol_);
+          pNEMNetworkAdapter_->open(platformEndpointAddr_,
+                                    transportEndpointAddr_,
+                                    protocol_);
         }
       catch(NetworkAdapterException & exp)
         {
@@ -151,30 +139,28 @@ void EMANE::Application::NEMImpl::start()
         }
     }
 
-  pNEMLayerStack_->start();
+  emane_rs_nem_impl_start(pRsNemImpl_);
 }
 
 void EMANE::Application::NEMImpl::postStart()
 {
-  pNEMLayerStack_->postStart();
+  emane_rs_nem_impl_post_start(pRsNemImpl_);
 }
 
 void EMANE::Application::NEMImpl::stop()
 {
   if(bExternalTransport_)
     {
-      NEMNetworkAdapter_.close();
+      pNEMNetworkAdapter_->close();
     }
-
-  NEMOTAAdapter_.close();
-
-  pNEMLayerStack_->stop();
+    
+  emane_rs_nem_impl_stop(pRsNemImpl_);
 }
 
 void EMANE::Application::NEMImpl::destroy()
   throw()
 {
-  pNEMLayerStack_->destroy();
+  emane_rs_nem_impl_destroy_layers(pRsNemImpl_);
 }
 
 EMANE::NEMId EMANE::Application::NEMImpl::getNEMId() const
