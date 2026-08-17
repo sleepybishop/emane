@@ -22,12 +22,6 @@ extern "C" {
         part_check_thresh: u16,
         part_timeout_thresh: u16,
     );
-    fn emane_c_event_service_open(
-        addr: *const c_char,
-        device: *const c_char,
-        ttl: u8,
-        uuid: *const u8,
-    );
 }
 
 pub struct NemManager {
@@ -243,10 +237,11 @@ pub extern "C" fn emane_rs_nem_manager_start(manager_ptr: *mut c_void) {
     let evt_addr = CString::new(manager.event_service_group_addr.clone()).unwrap();
     let evt_dev = CString::new(manager.event_service_device.clone()).unwrap();
     unsafe {
-        emane_c_event_service_open(
+        crate::event_service::emane_rs_event_service_mcast_open(
             evt_addr.as_ptr(),
             evt_dev.as_ptr(),
-            manager.event_service_ttl,
+            manager.event_service_ttl as std::os::raw::c_int,
+            true, // loopback
             manager.uuid.as_ptr(),
         );
     }

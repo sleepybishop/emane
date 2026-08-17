@@ -38,7 +38,6 @@
 #include "buildidservice.h"
 #include "configurationservice.h"
 #include "registrarproxy.h"
-#include "eventservice.h"
 #include "frameworkphy.h"
 #include "antennaprofilemanifest.h"
 #include "statisticservice.h"
@@ -65,6 +64,8 @@
 #include <iomanip>
 #include <algorithm>
 #include <getopt.h>
+
+extern "C" void emane_c_event_service_register_user(EMANE::BuildId, EMANE::NEMId);
 
 namespace
 {
@@ -1289,9 +1290,7 @@ EMANE::FrameworkPHY * createPHY(EMANE::NEMId id, EMANE::SpectrumService * pSpect
   pPlatformService->setPlatformServiceUser(buildId,pPHYLayer);
 
   // register event service handler with event service
-  EMANE::EventServiceSingleton::instance()->registerEventServiceUser(buildId,
-                                                                     pPHYLayer,
-                                                                     id);
+  emane_c_event_service_register_user(buildId, id);
 
   EMANE::RegistrarProxy registrarProxy{buildId};
 

@@ -2,8 +2,6 @@
 #include "logservice.h"
 #include "otamanager.h"
 #include "timerservice.h"
-#include "eventservice.h"
-#include "eventserviceexception.h"
 #include "emane/configureexception.h"
 #include "emane/platformexception.h"
 #include "emane/startexception.h"
@@ -222,10 +220,6 @@ void EMANE::Application::NEMManagerImpl::configure(const ConfigurationUpdate & u
         {
           OTAManagerSingleton::instance()->setStatEventCountRowLimit(item.second[0].asUINT32());
         }
-      else if(item.first == "stats.event.maxeventcountrows")
-        {
-          EventServiceSingleton::instance()->setStatEventCountRowLimit(item.second[0].asUINT32());
-        }
       else if(item.first == "spectralmaskmanifesturi")
         {
           emane_rs_nem_manager_set_config_str(pRsNemManager_, item.first.c_str(), item.second[0].asString().c_str());
@@ -321,28 +315,6 @@ extern "C" {
             );
         } catch(EMANE::OTAException & exp) {
             throw EMANE::StartException(exp.what());
-        }
-    }
-    
-    void emane_c_event_service_open(
-        const char* addr,
-        const char* device,
-        std::uint8_t ttl,
-        const std::uint8_t* uuid
-    ) {
-        try {
-            EMANE::INETAddr inetAddr{addr};
-            uuid_t u;
-            std::copy(uuid, uuid + 16, std::begin(u));
-            EMANE::EventServiceSingleton::instance()->open(
-                inetAddr,
-                device ? device : "",
-                ttl,
-                true,
-                u
-            );
-        } catch(EMANE::EventServiceException & e) {
-            throw EMANE::StartException(e.what());
         }
     }
 }
