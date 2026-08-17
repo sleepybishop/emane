@@ -38,7 +38,6 @@
 #include <cstring>
 #include <vector>
 
-#include "wheel.h"
 #include "emane/types.h"
 
 #include <map>
@@ -90,7 +89,6 @@ namespace EMANE
     size_t totalSubBandBins_;
     std::uint64_t  u64BandEndFrequencyHz_;
 
-    Wheel<double> wheel_;
     double dRxSensitivityMilliWatt_;
     Microseconds::rep maxEndOfReceptionBin_;
     Microseconds::rep minStartOfReceptionBin_;

@@ -71,7 +71,6 @@ EMANE::NoiseRecorder::NoiseRecorder(const Microseconds & bin,
   u64BandStartFrequencyHz_{static_cast<std::uint64_t>(u64FrequencyHz - u64BandwidthHz / 2.0)},
   totalSubBandBins_{u64BandwidthBinSizeHz ? static_cast<size_t>(std::ceil(u64BandwidthHz/static_cast<double>(u64BandwidthBinSizeHz)))+1 : 1},
   u64BandEndFrequencyHz_{u64BandStartFrequencyHz_ +  totalSubBandBins_ * u64BandwidthBinSizeHz - 1},
-  wheel_{static_cast<std::size_t>(totalWheelBins_), totalSubBandBins_},
   dRxSensitivityMilliWatt_{dRxSensitivityMilliWatt},
   maxEndOfReceptionBin_{},
   minStartOfReceptionBin_{}

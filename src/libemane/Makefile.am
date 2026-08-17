@@ -339,9 +339,7 @@ libemane_la_SOURCES =                         \
  velocityecef.h                               \
  velocityecef.inl                             \
  velocityneu.h                                \
- velocityneu.inl                              \
- wheel.h                                      \
- wheel.inl
+ velocityneu.inl
 
 BUILT_SOURCES =                               \
  $(nodist_libemane_la_SOURCES)
