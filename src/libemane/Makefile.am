@@ -14,14 +14,14 @@ $(top_srcdir)/rust/target/debug/libemane_core.a:
 	cd $(top_srcdir)/rust/emane-core && cargo build
 
 libemane_la_LIBADD=      \
- $(top_srcdir)/rust/target/debug/libemane_core.a \
  -lrt                    \
  $(libxml2_LIBS)         \
  $(protobuf_LIBS)        \
  $(libuuid_LIBS)
 
-libemane_la_LDFLAGS=     \
- $(AM_LDFLAGS)           \
+libemane_la_LDFLAGS= \
+ $(AM_LDFLAGS) \
+ -Wl,--whole-archive,$(top_srcdir)/rust/target/debug/libemane_core.a,--no-whole-archive \
  -avoid-version
 
 nodist_libemane_la_SOURCES =             \
@@ -125,7 +125,7 @@ libemane_la_SOURCES =                         \
  lognormalfadingalgorithm.cc                  \
  lognormalfadingalgorithmmanager.cc           \
  logservice.cc                                \
- maclayer.cc                                  \
+ maclayer_ffi.cc                                  \
  main.cc                                      \
  manifestqueryhandler.cc                      \
  mimoreceivepropertiescontrolmessage.cc       \

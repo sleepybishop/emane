@@ -18,14 +18,34 @@ extern "C" {
 }
 
 namespace {
-    CppFfiAny makeFfiAny(const EMANE::Any& val) {
-        CppFfiAny ffi{};
+    void populateFfiAny(const EMANE::Any& val, CppFfiAny& ffi, std::vector<std::string>& stringStore) {
         ffi.any_type = static_cast<int32_t>(val.getType());
-        if (ffi.any_type == static_cast<int32_t>(EMANE::Any::Type::TYPE_INT64)) ffi.i64_value = val.asINT64();
-        else if (ffi.any_type == static_cast<int32_t>(EMANE::Any::Type::TYPE_UINT64)) ffi.u64_value = val.asUINT64();
-        else if (ffi.any_type == static_cast<int32_t>(EMANE::Any::Type::TYPE_DOUBLE)) ffi.d_value = val.asDouble();
-        else if (ffi.any_type == static_cast<int32_t>(EMANE::Any::Type::TYPE_STRING)) ffi.s_value = val.asString().c_str();
-        return ffi;
+        switch (val.getType()) {
+            case EMANE::Any::Type::TYPE_INT8:   ffi.i64_value = val.asINT8(); break;
+            case EMANE::Any::Type::TYPE_UINT8:  ffi.u64_value = val.asUINT8(); break;
+            case EMANE::Any::Type::TYPE_INT16:  ffi.i64_value = val.asINT16(); break;
+            case EMANE::Any::Type::TYPE_UINT16: ffi.u64_value = val.asUINT16(); break;
+            case EMANE::Any::Type::TYPE_INT32:  ffi.i64_value = val.asINT32(); break;
+            case EMANE::Any::Type::TYPE_UINT32: ffi.u64_value = val.asUINT32(); break;
+            case EMANE::Any::Type::TYPE_INT64:  ffi.i64_value = val.asINT64(); break;
+            case EMANE::Any::Type::TYPE_UINT64: ffi.u64_value = val.asUINT64(); break;
+            case EMANE::Any::Type::TYPE_FLOAT:  ffi.d_value = val.asFloat(); break;
+            case EMANE::Any::Type::TYPE_DOUBLE: ffi.d_value = val.asDouble(); break;
+            case EMANE::Any::Type::TYPE_STRING: {
+                stringStore.push_back(val.asString());
+                ffi.s_value = stringStore.back().c_str();
+                break;
+            }
+            case EMANE::Any::Type::TYPE_INET_ADDR: {
+                stringStore.push_back(val.asString()); // Just format it to string
+                ffi.s_value = stringStore.back().c_str();
+                break;
+            }
+            case EMANE::Any::Type::TYPE_BOOL: {
+                ffi.u64_value = val.asBool() ? 1 : 0;
+                break;
+            }
+        }
     }
 }
 
@@ -43,10 +63,13 @@ void EMANE::ConfigurationRegistrarProxy::registerNumericAny(const std::string & 
                                                             std::size_t maxOccurs,
                                                             const std::string & sRegexPattern)
 {
-    std::vector<CppFfiAny> ffi_values;
-    for (const auto& v : values) ffi_values.push_back(makeFfiAny(v));
-    CppFfiAny min_ffi = makeFfiAny(minValue);
-    CppFfiAny max_ffi = makeFfiAny(maxValue);
+    std::vector<std::string> stringStore;
+    std::vector<CppFfiAny> ffi_values(values.size());
+    for (size_t i = 0; i < values.size(); ++i) {
+        populateFfiAny(values[i], ffi_values[i], stringStore);
+    }
+    CppFfiAny min_ffi{}; populateFfiAny(minValue, min_ffi, stringStore);
+    CppFfiAny max_ffi{}; populateFfiAny(maxValue, max_ffi, stringStore);
     
     char err_buf[256] = {0};
     emane_rs_config_register_numeric_any(buildId_, sName.c_str(), static_cast<int32_t>(type), static_cast<uint64_t>(properties), ffi_values.empty() ? nullptr : ffi_values.data(), ffi_values.size(), sUsage.c_str(), &min_ffi, &max_ffi, minOccurs, maxOccurs, sRegexPattern.c_str(), err_buf, sizeof(err_buf));
@@ -64,8 +87,11 @@ void EMANE::ConfigurationRegistrarProxy::registerNonNumericAny(const std::string
                                                                std::size_t maxOccurs,
                                                                const std::string & sRegexPattern)
 {
-    std::vector<CppFfiAny> ffi_values;
-    for (const auto& v : values) ffi_values.push_back(makeFfiAny(v));
+    std::vector<std::string> stringStore;
+    std::vector<CppFfiAny> ffi_values(values.size());
+    for (size_t i = 0; i < values.size(); ++i) {
+        populateFfiAny(values[i], ffi_values[i], stringStore);
+    }
     
     char err_buf[256] = {0};
     emane_rs_config_register_non_numeric_any(buildId_, sName.c_str(), static_cast<int32_t>(type), static_cast<uint64_t>(properties), ffi_values.empty() ? nullptr : ffi_values.data(), ffi_values.size(), sUsage.c_str(), minOccurs, maxOccurs, sRegexPattern.c_str(), err_buf, sizeof(err_buf));

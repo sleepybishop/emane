@@ -12,6 +12,7 @@ use emane_core::nem_manager::{
     emane_rs_nem_manager_post_start,
     emane_rs_nem_manager_stop,
     emane_rs_nem_manager_destroy,
+    emane_rs_nem_manager_set_config_str,
 };
 
 #[derive(Parser, Debug)]
@@ -73,6 +74,23 @@ fn parse_config_xml(path: &str) -> HashMap<String, Vec<String>> {
     config
 }
 
+fn get_library_from_xml(filename: &str) -> String {
+    if let Ok(mut content) = std::fs::read_to_string(filename) {
+        if let Some(idx) = content.find("<!DOCTYPE") {
+            if let Some(end_idx) = content[idx..].find('>') {
+                content.replace_range(idx..idx + end_idx + 1, "");
+            }
+        }
+        if let Ok(doc) = Document::parse(&content) {
+            let root = doc.root_element();
+            if let Some(lib) = root.attribute("library") {
+                return lib.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
 struct CStringConfig {
     items: Vec<(CString, Vec<CString>)>,
 }
@@ -128,22 +146,24 @@ fn build_layer(
         len: ffi_items.len(),
     };
 
-    // Use a hardcoded map for library names based on the definition filename for now, 
-    // similar to how EMANE's XML parser resolves it.
-    let lib_name = if definition.contains("bypassmac") {
-        "bypassmaclayer"
-    } else if definition.contains("bypassphy") {
-        "" // Framework PHY
-    } else if definition.contains("rfpipemac") {
-        "rfpipemaclayer"
-    } else if definition.contains("ieee80211abgmac") {
-        "ieee80211abgmaclayer"
-    } else if definition.contains("transvirtual") {
-        "transvirtual"
-    } else {
-        ""
-    };
-
+    let mut lib_name = get_library_from_xml(definition);
+    if lib_name.is_empty() {
+        // Fallback for cases where library might not be in the XML or is bypassphy (which is native)
+        lib_name = if definition.contains("bypassmac") {
+            "bypassmaclayer".to_string()
+        } else if definition.contains("bypassphy") {
+            "".to_string()
+        } else if definition.contains("rfpipemac") {
+            "rfpipemaclayer".to_string()
+        } else if definition.contains("ieee80211abgmac") {
+            "ieee80211abgmaclayer".to_string()
+        } else if definition.contains("transvirtual") {
+            "transvirtual".to_string()
+        } else {
+            "".to_string()
+        };
+    }
+    
     let c_lib_name = CString::new(lib_name).unwrap();
 
     unsafe {
@@ -175,6 +195,17 @@ fn main() {
     let uuid = [0u8; 16]; // Default UUID
     let manager = emane_rs_nem_manager_create(uuid.as_ptr());
 
+    // Parse platform parameters
+    for node in doc.descendants().filter(|n| n.has_tag_name("param") && n.parent().map_or(false, |p| p.has_tag_name("platform"))) {
+        if let (Some(name), Some(value)) = (node.attribute("name"), node.attribute("value")) {
+            let c_name = CString::new(name).unwrap();
+            let c_value = CString::new(value).unwrap();
+            unsafe {
+                emane_rs_nem_manager_set_config_str(manager, c_name.as_ptr(), c_value.as_ptr());
+            }
+        }
+    }
+
     for node in doc.descendants().filter(|n| n.has_tag_name("nem")) {
         let id = node.attribute("id").unwrap_or("0").parse::<u16>().unwrap_or(0);
         println!("Orchestrating NEM id: {}", id);
@@ -185,27 +216,42 @@ fn main() {
         // 1. Transport
         for child in node.children() {
             if child.has_tag_name("transport") {
-                let definition = child.attribute("definition").unwrap_or("");
-                let layer = build_layer("transport", id, definition, &empty_map); // Simplified override handling
-                if !layer.is_null() { layers.push(layer); }
+                if let Some(def) = child.attribute("definition") {
+                    let mut path = std::path::PathBuf::from(&args.config_url);
+                    path.pop();
+                    path.push(def);
+                    let def_str = path.to_str().unwrap().to_string();
+                    let layer = build_layer("transport", id, &def_str, &empty_map); 
+                    if !layer.is_null() { layers.push(layer); }
+                }
             }
         }
         
         // 2. MAC
         for child in node.children() {
             if child.has_tag_name("mac") {
-                let definition = child.attribute("definition").unwrap_or("");
-                let layer = build_layer("mac", id, definition, &empty_map);
-                if !layer.is_null() { layers.push(layer); }
+                if let Some(def) = child.attribute("definition") {
+                    let mut path = std::path::PathBuf::from(&args.config_url);
+                    path.pop();
+                    path.push(def);
+                    let def_str = path.to_str().unwrap().to_string();
+                    let layer = build_layer("mac", id, &def_str, &empty_map);
+                    if !layer.is_null() { layers.push(layer); }
+                }
             }
         }
 
         // 3. PHY
         for child in node.children() {
             if child.has_tag_name("phy") {
-                let definition = child.attribute("definition").unwrap_or("");
-                let layer = build_layer("phy", id, definition, &empty_map);
-                if !layer.is_null() { layers.push(layer); }
+                if let Some(def) = child.attribute("definition") {
+                    let mut path = std::path::PathBuf::from(&args.config_url);
+                    path.pop();
+                    path.push(def);
+                    let def_str = path.to_str().unwrap().to_string();
+                    let layer = build_layer("phy", id, &def_str, &empty_map);
+                    if !layer.is_null() { layers.push(layer); }
+                }
             }
         }
 

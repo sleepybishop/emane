@@ -76,6 +76,7 @@ extern "C" {
     fn emane_c_config_process_configuration(pRunningStateMutable: *mut std::ffi::c_void, update: *const FfiConfigUpdate);
 }
 
+#[derive(Clone)]
 pub struct ConfigInfo {
     name: String,
     any_type: i32,
@@ -162,8 +163,8 @@ pub extern "C" fn emane_rs_config_register_running_state_mutable(build_id: u16, 
 #[no_mangle]
 pub extern "C" fn emane_rs_config_register_numeric_any(
     build_id: u16, s_name: *const c_char, any_type: i32, properties: u64,
-    values: FfiAnyArray, s_usage: *const c_char,
-    min_value: FfiAny, max_value: FfiAny, min_occurs: usize, max_occurs: usize,
+    values_ptr: *const FfiAny, values_len: usize, s_usage: *const c_char,
+    min_ptr: *const FfiAny, max_ptr: *const FfiAny, min_occurs: usize, max_occurs: usize,
     s_regex: *const c_char, err_buf: *mut c_char, err_len: usize
 ) {
     let mut s = get_config_service().lock().unwrap();
@@ -193,23 +194,26 @@ pub extern "C" fn emane_rs_config_register_numeric_any(
         }
     }
     
-    let mut vec_values = Vec::new();
-    if !values.data.is_null() && values.len > 0 {
-        let slice = unsafe { std::slice::from_raw_parts(values.data, values.len) };
+    let mut values_vec = Vec::new();
+    if !values_ptr.is_null() && values_len > 0 {
+        let slice = unsafe { std::slice::from_raw_parts(values_ptr, values_len) };
         for item in slice {
-            vec_values.push(FfiAnyOwned::from_ffi(item));
+            values_vec.push(FfiAnyOwned::from_ffi(item));
         }
     }
+    
+    let min_value = unsafe { FfiAnyOwned::from_ffi(&*min_ptr) };
+    let max_value = unsafe { FfiAnyOwned::from_ffi(&*max_ptr) };
     
     store.insert(name.clone(), ConfigInfo {
         name,
         any_type,
         properties,
-        values: vec_values,
+        values: values_vec,
         usage: unsafe { CStr::from_ptr(s_usage).to_string_lossy().into_owned() },
         has_min_max: true,
-        min_value: FfiAnyOwned::from_ffi(&min_value),
-        max_value: FfiAnyOwned::from_ffi(&max_value),
+        min_value,
+        max_value,
         min_occurs,
         max_occurs,
         regex_pattern,
@@ -220,7 +224,7 @@ pub extern "C" fn emane_rs_config_register_numeric_any(
 #[no_mangle]
 pub extern "C" fn emane_rs_config_register_non_numeric_any(
     build_id: u16, s_name: *const c_char, any_type: i32, properties: u64,
-    values: FfiAnyArray, s_usage: *const c_char,
+    values_ptr: *const FfiAny, values_len: usize, s_usage: *const c_char,
     min_occurs: usize, max_occurs: usize,
     s_regex: *const c_char, err_buf: *mut c_char, err_len: usize
 ) {
@@ -246,16 +250,16 @@ pub extern "C" fn emane_rs_config_register_non_numeric_any(
         regex_ptr = unsafe { emane_rs_regex_compile(s_regex, regex_err.as_mut_ptr(), 256) };
         if regex_ptr.is_null() {
             let err_msg = unsafe { CStr::from_ptr(regex_err.as_ptr()).to_string_lossy() };
-            write_error(&format!("Bad regex pattern defined for {}: {} {}", name, regex_pattern, err_msg), err_buf, err_len);
+            write_error(&format!("Invalid regex for {}: {}", name, err_msg), err_buf, err_len);
             return;
         }
     }
     
-    let mut vec_values = Vec::new();
-    if !values.data.is_null() && values.len > 0 {
-        let slice = unsafe { std::slice::from_raw_parts(values.data, values.len) };
+    let mut values_vec = Vec::new();
+    if !values_ptr.is_null() && values_len > 0 {
+        let slice = unsafe { std::slice::from_raw_parts(values_ptr, values_len) };
         for item in slice {
-            vec_values.push(FfiAnyOwned::from_ffi(item));
+            values_vec.push(FfiAnyOwned::from_ffi(item));
         }
     }
     
@@ -264,7 +268,7 @@ pub extern "C" fn emane_rs_config_register_non_numeric_any(
         name,
         any_type,
         properties,
-        values: vec_values,
+        values: values_vec,
         usage: unsafe { CStr::from_ptr(s_usage).to_string_lossy().into_owned() },
         has_min_max: false,
         min_value: FfiAnyOwned::from_ffi(&dummy),
@@ -455,56 +459,26 @@ pub extern "C" fn emane_rs_config_free_update(update: FfiConfigUpdate) {
 
 fn parse_any(any_type: i32, s: &str) -> Option<FfiAnyOwned> {
     match any_type {
-        1 => { // TYPE_INT8
-            let v = s.parse::<i8>().ok()?;
-            Some(FfiAnyOwned { any_type, i64_value: v as i64, u64_value: 0, d_value: 0.0, s_value: String::new() })
+        0|2|4|6 => { // Signed: INT64, INT32, INT16, INT8
+            s.parse::<i64>().or_else(|_| s.parse::<f64>().map(|v| v as i64)).map(|v| FfiAnyOwned { any_type, i64_value: v, u64_value: 0, d_value: 0.0, s_value: String::new() }).ok()
         },
-        2 => { // TYPE_UINT8
-            let v = s.parse::<u8>().ok()?;
-            Some(FfiAnyOwned { any_type, i64_value: 0, u64_value: v as u64, d_value: 0.0, s_value: String::new() })
+        1|3|5|7 => { // Unsigned: UINT64, UINT32, UINT16, UINT8
+            s.parse::<u64>().or_else(|_| s.parse::<f64>().map(|v| v as u64)).map(|v| FfiAnyOwned { any_type, i64_value: 0, u64_value: v, d_value: 0.0, s_value: String::new() }).ok()
         },
-        3 => { // TYPE_INT16
-            let v = s.parse::<i16>().ok()?;
-            Some(FfiAnyOwned { any_type, i64_value: v as i64, u64_value: 0, d_value: 0.0, s_value: String::new() })
+        8|9 => { // Float/Double
+            s.parse::<f64>().map(|v| FfiAnyOwned { any_type, i64_value: 0, u64_value: 0, d_value: v, s_value: String::new() }).ok()
         },
-        4 => { // TYPE_UINT16
-            let v = s.parse::<u16>().ok()?;
-            Some(FfiAnyOwned { any_type, i64_value: 0, u64_value: v as u64, d_value: 0.0, s_value: String::new() })
-        },
-        5 => { // TYPE_INT32
-            let v = s.parse::<i32>().ok()?;
-            Some(FfiAnyOwned { any_type, i64_value: v as i64, u64_value: 0, d_value: 0.0, s_value: String::new() })
-        },
-        6 => { // TYPE_UINT32
-            let v = s.parse::<u32>().ok()?;
-            Some(FfiAnyOwned { any_type, i64_value: 0, u64_value: v as u64, d_value: 0.0, s_value: String::new() })
-        },
-        7 => { // TYPE_INT64
-            let v = s.parse::<i64>().ok()?;
-            Some(FfiAnyOwned { any_type, i64_value: v, u64_value: 0, d_value: 0.0, s_value: String::new() })
-        },
-        8 => { // TYPE_UINT64
-            let v = s.parse::<u64>().ok()?;
-            Some(FfiAnyOwned { any_type, i64_value: 0, u64_value: v, d_value: 0.0, s_value: String::new() })
-        },
-        9 => { // TYPE_FLOAT
-            let v = s.parse::<f32>().ok()?;
-            Some(FfiAnyOwned { any_type, i64_value: 0, u64_value: 0, d_value: v as f64, s_value: String::new() })
-        },
-        10 => { // TYPE_DOUBLE
-            let v = s.parse::<f64>().ok()?;
-            Some(FfiAnyOwned { any_type, i64_value: 0, u64_value: 0, d_value: v, s_value: String::new() })
-        },
-        11 => { // TYPE_STRING
+        10|12 => { // INET_ADDR, STRING
             Some(FfiAnyOwned { any_type, i64_value: 0, u64_value: 0, d_value: 0.0, s_value: s.to_string() })
         },
-        12 => { // TYPE_INET_ADDR
-            Some(FfiAnyOwned { any_type, i64_value: 0, u64_value: 0, d_value: 0.0, s_value: s.to_string() })
-        },
-        13 => { // TYPE_BOOL
-            let lower = s.to_lowercase();
-            let v = lower == "true" || lower == "1" || lower == "yes" || lower == "on";
-            Some(FfiAnyOwned { any_type, i64_value: v as i64, u64_value: 0, d_value: 0.0, s_value: String::new() })
+        11 => { // BOOL
+            if s.eq_ignore_ascii_case("true") || s == "1" || s.eq_ignore_ascii_case("on") || s.eq_ignore_ascii_case("yes") {
+                Some(FfiAnyOwned { any_type, i64_value: 0, u64_value: 1, d_value: 0.0, s_value: String::new() })
+            } else if s.eq_ignore_ascii_case("false") || s == "0" || s.eq_ignore_ascii_case("off") || s.eq_ignore_ascii_case("no") {
+                Some(FfiAnyOwned { any_type, i64_value: 0, u64_value: 0, d_value: 0.0, s_value: String::new() })
+            } else {
+                None
+            }
         },
         _ => None,
     }
@@ -514,11 +488,8 @@ fn parse_any(any_type: i32, s: &str) -> Option<FfiAnyOwned> {
 pub extern "C" fn emane_rs_config_build_updates(build_id: u16, req: FfiConfigUpdateReq, err_buf: *mut c_char, err_len: usize) -> FfiConfigUpdate {
     let s = get_config_service().lock().unwrap();
     let store = match s.stores.get(&build_id) {
-        Some(st) => st,
-        None => {
-            write_error(&format!("No component registered with build id {}", build_id), err_buf, err_len);
-            return FfiConfigUpdate { data: std::ptr::null_mut(), len: 0 };
-        }
+        Some(st) => std::collections::HashMap::clone(st),
+        None => HashMap::new(),
     };
     
     let mut vec_items = Vec::new();
@@ -569,7 +540,7 @@ pub extern "C" fn emane_rs_config_build_updates(build_id: u16, req: FfiConfigUpd
                 let parsed = match parse_any(info.any_type, &val_str) {
                     Some(p) => p,
                     None => {
-                        write_error(&format!("Parameter value type incorrect {}", name), err_buf, err_len);
+                        write_error(&format!("Parameter value type incorrect {} (any_type={}, val='{}')", name, info.any_type, val_str), err_buf, err_len);
                         return FfiConfigUpdate { data: std::ptr::null_mut(), len: 0 };
                     }
                 };
@@ -578,19 +549,19 @@ pub extern "C" fn emane_rs_config_build_updates(build_id: u16, req: FfiConfigUpd
                 if info.has_min_max && info.any_type != 11 && info.any_type != 12 { // not STRING or INET_ADDR
                     let mut out_of_range = false;
                     match info.any_type {
-                        1|3|5|7 => { // Signed
+                        0|2|4|6 => { // Signed: INT64, INT32, INT16, INT8
                             if parsed.i64_value < info.min_value.i64_value || parsed.i64_value > info.max_value.i64_value { out_of_range = true; }
                         },
-                        2|4|6|8 => { // Unsigned
+                        1|3|5|7 => { // Unsigned: UINT64, UINT32, UINT16, UINT8
                             if parsed.u64_value < info.min_value.u64_value || parsed.u64_value > info.max_value.u64_value { out_of_range = true; }
                         },
-                        9|10 => { // Float
+                        8|9 => { // Float/Double
                             if parsed.d_value < info.min_value.d_value || parsed.d_value > info.max_value.d_value { out_of_range = true; }
                         },
                         _ => {}
                     }
                     if out_of_range {
-                        write_error(&format!("Out of range {} set to {}", name, val_str), err_buf, err_len);
+                        write_error(&format!("Out of range {} set to {}. Min: {}, Max: {}, parsed: {}", name, val_str, info.min_value.u64_value, info.max_value.u64_value, parsed.u64_value), err_buf, err_len);
                         return FfiConfigUpdate { data: std::ptr::null_mut(), len: 0 };
                     }
                 }
@@ -633,7 +604,16 @@ pub extern "C" fn emane_rs_config_build_updates(build_id: u16, req: FfiConfigUpd
 
 #[no_mangle]
 pub extern "C" fn emane_rs_config_update(build_id: u16, updates: FfiConfigUpdate, err_buf: *mut c_char, err_len: usize) -> bool {
+    if updates.data.is_null() || updates.len == 0 {
+        return true;
+    }
+
     let mut s = get_config_service().lock().unwrap();
+    
+    // Check modifiable and cache updates
+    let slice = unsafe { std::slice::from_raw_parts(updates.data, updates.len) };
+    
+    // We only need the store if there are actually updates
     let store = match s.stores.get_mut(&build_id) {
         Some(st) => st,
         None => {
@@ -641,13 +621,6 @@ pub extern "C" fn emane_rs_config_update(build_id: u16, updates: FfiConfigUpdate
             return false;
         }
     };
-    
-    if updates.data.is_null() || updates.len == 0 {
-        return true;
-    }
-    
-    // Check modifiable and cache updates
-    let slice = unsafe { std::slice::from_raw_parts(updates.data, updates.len) };
     for item in slice {
         let name = unsafe { CStr::from_ptr(item.name).to_string_lossy().into_owned() };
         let info = match store.get_mut(&name) {

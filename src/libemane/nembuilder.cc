@@ -36,7 +36,7 @@
 #include "configurationservice.h"
 #include "emane/buildexception.h"
 #include "timerserviceproxy.h"
-#include "maclayer.h"
+
 #include "phylayer.h"
 #include "shimlayer.h"
 #include "transportlayer.h"
@@ -194,6 +194,8 @@ EMANE::Application::NEMBuilder::createPlatformService()
   return new NEMPlatformService{};
 }
 
+#include "rustnemlayerproxy.h"
+
 std::unique_ptr<EMANE::NEMLayer>
 EMANE::Application::NEMBuilder::buildMACLayer_i(MACLayerImplementor * pImpl,
                                                 PlatformServiceProvider * pProvider,
@@ -204,11 +206,9 @@ EMANE::Application::NEMBuilder::buildMACLayer_i(MACLayerImplementor * pImpl,
 {
   EMANE::NEMPlatformService * pPlatformService{dynamic_cast<EMANE::NEMPlatformService*>(pProvider)};
 
-  std::unique_ptr<NEMQueuedLayer> pNEMLayer{new MACLayer{id,
-                                                         new NEMStatefulLayer{id,
-                                                                              pImpl,
-                                                                              pPlatformService},
-                                                         pPlatformService}};
+  std::unique_ptr<NEMQueuedLayer> pNEMLayer{new RustNemLayerProxy{id,
+                                                                    pPlatformService,
+                                                                    pImpl}};
 
   // register to the component map
   BuildId buildId{BuildIdServiceSingleton::instance()->registerBuildable(pNEMLayer.get(),
