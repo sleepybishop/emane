@@ -111,3 +111,92 @@ impl QueueMetricManager {
         self.queue_data_map.remove(&queue_id).is_some()
     }
 }
+
+#[no_mangle]
+pub extern "C" fn emane_rs_queue_metric_manager_create(nem_id: u16) -> *mut QueueMetricManager {
+    Box::into_raw(Box::new(QueueMetricManager::new(nem_id)))
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_queue_metric_manager_destroy(ptr: *mut QueueMetricManager) {
+    if !ptr.is_null() {
+        unsafe { Box::from_raw(ptr); }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_queue_metric_manager_update(
+    ptr: *mut QueueMetricManager,
+    queue_id: u16,
+    max_queue_size: u32,
+    current_queue_depth: u32,
+    num_discards: u32,
+    delay_microseconds: u64,
+) {
+    if let Some(m) = unsafe { ptr.as_mut() } {
+        m.update_queue_metric(queue_id, max_queue_size, current_queue_depth, num_discards, delay_microseconds);
+    }
+}
+
+#[repr(C)]
+pub struct FfiR2RIQueueMetric {
+    pub queue_id: u16,
+    pub queue_max_size: u32,
+    pub queue_current_depth_high_water: u32,
+    pub num_discards_high_water: u32,
+    pub avg_delay_microseconds: u64,
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_queue_metric_manager_get(
+    ptr: *mut QueueMetricManager,
+    out_len: *mut usize,
+) -> *mut FfiR2RIQueueMetric {
+    if let Some(m) = unsafe { ptr.as_mut() } {
+        let metrics = m.get_queue_metrics();
+        let mut ffi_metrics = Vec::with_capacity(metrics.len());
+        for metric in metrics {
+            ffi_metrics.push(FfiR2RIQueueMetric {
+                queue_id: metric.queue_id,
+                queue_max_size: metric.queue_max_size,
+                queue_current_depth_high_water: metric.queue_current_depth_high_water,
+                num_discards_high_water: metric.num_discards_high_water,
+                avg_delay_microseconds: metric.avg_delay_microseconds,
+            });
+        }
+        
+        ffi_metrics.shrink_to_fit();
+        unsafe { *out_len = ffi_metrics.len(); }
+        let ptr = ffi_metrics.as_mut_ptr();
+        std::mem::forget(ffi_metrics);
+        ptr
+    } else {
+        unsafe { *out_len = 0; }
+        std::ptr::null_mut()
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_queue_metric_manager_free(ptr: *mut FfiR2RIQueueMetric, len: usize) {
+    if !ptr.is_null() && len > 0 {
+        unsafe { Vec::from_raw_parts(ptr, len, len); }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_queue_metric_manager_add(ptr: *mut QueueMetricManager, queue_id: u16, max_queue_size: u32) -> bool {
+    if let Some(m) = unsafe { ptr.as_mut() } {
+        m.add_queue_metric(queue_id, max_queue_size)
+    } else {
+        false
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_queue_metric_manager_remove(ptr: *mut QueueMetricManager, queue_id: u16) -> bool {
+    if let Some(m) = unsafe { ptr.as_mut() } {
+        m.remove_queue_metric(queue_id)
+    } else {
+        false
+    }
+}
