@@ -160,3 +160,4 @@ pub mod timer_service;
 pub mod nem_layer_stack;
 pub mod nem_impl;
 pub mod spectral_mask;
+pub mod antenna;
