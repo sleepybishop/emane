@@ -164,3 +164,4 @@ pub mod antenna;
 pub mod nakagami_fading_algorithm;
 pub mod flow_control_client;
 pub mod spectrum_window_utils;
+pub mod noise_recorder;

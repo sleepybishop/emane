@@ -36,6 +36,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <vector>
 
 #include "wheel.h"
 #include "emane/types.h"
@@ -55,14 +56,8 @@ namespace EMANE
                   std::uint64_t u64FrequencyHz,
                   std::uint64_t u64BandwidthHz,
                   std::uint64_t u64BandwidthBinSizeHz);
+    ~NoiseRecorder();
 
-    /**
-     * Update the noise recorder with new signal information
-     *
-     * @pre offset must be <= than MAX_OFFSET
-     *      propagation must be <= MAX_PROPAGATION
-     *      duration must be <= MAX_DURATION
-     */
     std::tuple<TimePoint,TimePoint>
     update(const TimePoint & now,
            const TimePoint & txTime,
@@ -83,7 +78,6 @@ namespace EMANE
 
     std::size_t getSubBandBinCount() const;
 
-    // dump the entire wheel for test-only-purposes
     std::vector<double> dump() const;
 
 
@@ -105,19 +99,15 @@ namespace EMANE
     using NEMAntennaIndexEORBinMap = std::map<NEMId,AntennaIndexEORMap>;
     NEMAntennaIndexEORBinMap nemAntennaIndexEORBinMap_;
 
-
-    using BinPowerApply = std::tuple<std::size_t, // start bin
-                                     std::size_t, // end bin
-                                     double>; // multipler
-
+    using BinPowerApply = std::tuple<std::size_t, std::size_t, double>;
     using BinPowerApplies = std::vector<BinPowerApply>;
 
-    using BinPowerApplyMap = std::map<std::pair<std::uint64_t, // start freq
-                                                std::uint64_t>, // end freq
-                                      BinPowerApplies>;
+    using BinPowerApplyMap = std::map<std::pair<std::uint64_t, std::uint64_t>, BinPowerApplies>;
     BinPowerApplyMap binPowerApplyMap_;
 
     Microseconds::rep timepointToBin(const TimePoint & tp, bool bAdjust = false);
+
+    void* rs_recorder_;
   };
 }
 
