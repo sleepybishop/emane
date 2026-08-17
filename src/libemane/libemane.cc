@@ -46,7 +46,6 @@
 #include "nemlayerstaterunning.h"
 #include "nemlayerstatestopped.h"
 #include "nemlayerstateuninitialized.h"
-#include "statisticservice.h"
 #include "timerservice.h"
 #include "transportfactorymanager.h"
 
@@ -61,7 +60,6 @@ void EMANE::Application::shutdown()
 
   BuildIdServiceSingleton::destroy();
   ConfigurationServiceSingleton::destroy();
-  StatisticServiceSingleton::destroy();
   TimerServiceSingleton::destroy();
 
   NEMLayerStateConfiguredSingleton::destroy();

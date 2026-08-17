@@ -200,6 +200,175 @@ extern "C" {
     }
 }
 
+
+#include "emane/any.h"
+#include "emane/statistic.h"
+#include "emane/statistictablepublisher.h"
+#include <cstring>
+
+extern "C" {
+    struct FfiAny {
+        int32_t type;
+        int64_t i64_value;
+        uint64_t u64_value;
+        double d_value;
+        const char* s_value;
+    };
+
+    struct FfiAnyArray {
+        const FfiAny* data;
+        size_t len;
+    };
+
+    struct FfiStringArray {
+        const char** data;
+        size_t len;
+    };
+
+    struct FfiTableRow {
+        FfiAnyArray values;
+    };
+
+    FfiAny emane_c_statistic_as_any(void* p_statistic) {
+        auto stat = static_cast<EMANE::Statistic*>(p_statistic);
+        EMANE::Any val = stat->asAny();
+        FfiAny ret{};
+        ret.type = static_cast<int32_t>(val.getType());
+        ret.i64_value = 0;
+        ret.u64_value = 0;
+        ret.d_value = 0;
+        ret.s_value = nullptr;
+
+        switch(val.getType()) {
+            case EMANE::Any::Type::TYPE_INT8:
+            case EMANE::Any::Type::TYPE_INT16:
+            case EMANE::Any::Type::TYPE_INT32:
+            case EMANE::Any::Type::TYPE_INT64:
+                ret.i64_value = val.asINT64();
+                break;
+            case EMANE::Any::Type::TYPE_UINT8:
+            case EMANE::Any::Type::TYPE_UINT16:
+            case EMANE::Any::Type::TYPE_UINT32:
+            case EMANE::Any::Type::TYPE_UINT64:
+                ret.u64_value = val.asUINT64();
+                break;
+            case EMANE::Any::Type::TYPE_FLOAT:
+            case EMANE::Any::Type::TYPE_DOUBLE:
+                ret.d_value = val.asDouble();
+                break;
+            case EMANE::Any::Type::TYPE_STRING:
+                ret.s_value = strdup(val.asString().c_str());
+                break;
+            case EMANE::Any::Type::TYPE_BOOL:
+                ret.u64_value = val.asBool() ? 1 : 0;
+                break;
+            case EMANE::Any::Type::TYPE_INET_ADDR:
+                ret.s_value = strdup(val.asINETAddr().str().c_str());
+                break;
+                break;
+        }
+        return ret;
+    }
+
+    void emane_c_statistic_free_any_string(const char* s) {
+        if (s) {
+            free(const_cast<char*>(s));
+        }
+    }
+
+    void emane_c_statistic_clear(void* p_statistic) {
+        auto stat = static_cast<EMANE::Statistic*>(p_statistic);
+        stat->clear();
+    }
+
+    void emane_c_statistic_table_clear(void* p_clear_func, void* p_table) {
+        if (p_clear_func) {
+            auto func = static_cast<std::function<void(EMANE::StatisticTablePublisher*)>*>(p_clear_func);
+            (*func)(static_cast<EMANE::StatisticTablePublisher*>(p_table));
+        } else {
+            auto table = static_cast<EMANE::StatisticTablePublisher*>(p_table);
+            table->clear();
+        }
+    }
+
+    void emane_c_statistic_table_get_values(void* p_table, FfiStringArray* out_labels, FfiTableRow** out_rows, size_t* out_rows_len) {
+        auto table = static_cast<EMANE::StatisticTablePublisher*>(p_table);
+        auto labels = table->getLabels();
+        auto values = table->getValues();
+
+        const char** c_labels = new const char*[labels.size()];
+        for (size_t i = 0; i < labels.size(); ++i) {
+            c_labels[i] = strdup(labels[i].c_str());
+        }
+        out_labels->data = c_labels;
+        out_labels->len = labels.size();
+
+        FfiTableRow* c_rows = new FfiTableRow[values.size()];
+        for (size_t i = 0; i < values.size(); ++i) {
+            const auto& row = values[i];
+            FfiAny* c_row_vals = new FfiAny[row.size()];
+            for (size_t j = 0; j < row.size(); ++j) {
+                const EMANE::Any& val = row[j];
+                c_row_vals[j].type = static_cast<int32_t>(val.getType());
+                c_row_vals[j].i64_value = 0;
+                c_row_vals[j].u64_value = 0;
+                c_row_vals[j].d_value = 0;
+                c_row_vals[j].s_value = nullptr;
+
+                switch(val.getType()) {
+                    case EMANE::Any::Type::TYPE_INT8:
+                    case EMANE::Any::Type::TYPE_INT16:
+                    case EMANE::Any::Type::TYPE_INT32:
+                    case EMANE::Any::Type::TYPE_INT64:
+                        c_row_vals[j].i64_value = val.asINT64();
+                        break;
+                    case EMANE::Any::Type::TYPE_UINT8:
+                    case EMANE::Any::Type::TYPE_UINT16:
+                    case EMANE::Any::Type::TYPE_UINT32:
+                    case EMANE::Any::Type::TYPE_UINT64:
+                        c_row_vals[j].u64_value = val.asUINT64();
+                        break;
+                    case EMANE::Any::Type::TYPE_FLOAT:
+                    case EMANE::Any::Type::TYPE_DOUBLE:
+                        c_row_vals[j].d_value = val.asDouble();
+                        break;
+                    case EMANE::Any::Type::TYPE_STRING:
+                        c_row_vals[j].s_value = strdup(val.asString().c_str());
+                        break;
+                    case EMANE::Any::Type::TYPE_BOOL:
+                        c_row_vals[j].u64_value = val.asBool() ? 1 : 0;
+                        break;
+                    case EMANE::Any::Type::TYPE_INET_ADDR:
+                        c_row_vals[j].s_value = strdup(val.asINETAddr().str().c_str());
+                        break;
+                        break;
+                }
+            }
+            c_rows[i].values.data = c_row_vals;
+            c_rows[i].values.len = row.size();
+        }
+        *out_rows = c_rows;
+        *out_rows_len = values.size();
+    }
+
+    void emane_c_statistic_table_free_values(FfiStringArray labels, FfiTableRow* rows, size_t rows_len) {
+        for (size_t i = 0; i < labels.len; ++i) {
+            free(const_cast<char*>(labels.data[i]));
+        }
+        delete[] labels.data;
+
+        for (size_t i = 0; i < rows_len; ++i) {
+            for (size_t j = 0; j < rows[i].values.len; ++j) {
+                if (rows[i].values.data[j].s_value) {
+                    free(const_cast<char*>(rows[i].values.data[j].s_value));
+                }
+            }
+            delete[] rows[i].values.data;
+        }
+        delete[] rows;
+    }
+}
+
 #include "emane/application/statisticcontroller.h"
 
 namespace EMANE {

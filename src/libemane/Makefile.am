@@ -200,7 +200,6 @@ libemane_la_SOURCES =                         \
  spectrumservice.cc                           \
  spectrumwindowutils.cc                       \
  statisticregistrarproxy.cc                   \
- statisticservice.cc                          \
  tdmascheduleevent.cc                         \
  timer.cc                                     \
  timerservice.cc                              \
@@ -329,7 +328,6 @@ libemane_la_SOURCES =                         \
  statisticclearupdatehandler.h                \
  statisticqueryhandler.h                      \
  statisticregistrarproxy.h                    \
- statisticservice.h                           \
  statistictableclearupdatehandler.h           \
  statistictablequeryhandler.h                 \
  timerserviceexception.h                      \
