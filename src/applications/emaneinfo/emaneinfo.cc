@@ -48,7 +48,6 @@
 #include "eventagentmanagerimpl.h"
 #include "registrarproxy.h"
 #include "buildidservice.h"
-#include "otamanager.h"
 #include <sstream>
 #include <iostream>
 #include <tuple>
@@ -159,7 +158,6 @@ int main(int argc, char * argv[])
           auto pManager = createManager<EMANE::Application::NEMManagerImpl>();
           buildId = pManager->getBuildId();
           pComponent.reset(pManager);
-          EMANE::OTAManagerSingleton::instance();
         }
       else if(sPluginName == "transportmanager")
         {

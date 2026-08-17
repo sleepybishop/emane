@@ -34,11 +34,16 @@
  */
 
 #include "nemotaadapter.h"
-#include "otamanager.h"
 #include "logservice.h"
 
 #include "emane/utils/threadutils.h"
 #include "emane/upstreamtransport.h"
+
+extern "C" {
+    void emane_c_ota_manager_register_user(std::uint16_t, void*);
+    void emane_c_ota_manager_unregister_user(std::uint16_t);
+    void emane_c_ota_manager_send_packet_cpp(std::uint16_t, const void*, const void*);
+}
 
 EMANE::NEMOTAAdapter::NEMOTAAdapter(NEMId id):
   id_{id},
@@ -49,7 +54,7 @@ void EMANE::NEMOTAAdapter::open()
 {
   bCancel_ = false;
 
-  OTAManagerSingleton::instance()->registerOTAUser(id_,this);
+  emane_c_ota_manager_register_user(id_, this);
 
   thread_ = std::thread{&NEMOTAAdapter::processPacketQueue,this};
 
@@ -76,7 +81,7 @@ void EMANE::NEMOTAAdapter::close()
 {
   try
     {
-      OTAManagerSingleton::instance()->unregisterOTAUser(id_);
+      emane_c_ota_manager_unregister_user(id_);
     }
   catch(...)
     {
@@ -134,7 +139,7 @@ void EMANE::NEMOTAAdapter::processPacketQueue()
         {
           try
             { // id, pkt, ctrl
-              OTAManagerSingleton::instance()->sendOTAPacket(id_, entry.first, entry.second);
+              emane_c_ota_manager_send_packet_cpp(id_, &entry.first, &entry.second);
             }
           catch(std::exception & exp)
             {

@@ -152,7 +152,7 @@ libemane_la_SOURCES =                         \
  observedpowertablepublisher.cc               \
  observedpowertablepublisher.h                \
  orientationformatter.cc                      \
- otamanager.cc rust_c_exports.cc                                \
+  rust_c_exports.cc                                \
  otastatisticpublisher.cc                     \
  otatransmittercontrolmessage.cc              \
  pathlossevent.cc                             \

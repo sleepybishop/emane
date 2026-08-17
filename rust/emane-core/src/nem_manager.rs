@@ -12,16 +12,6 @@ extern "C" {
     fn emane_c_control_port_close();
     fn emane_c_load_antenna_profile(uri: *const c_char);
     fn emane_c_load_spectral_mask(uri: *const c_char);
-    fn emane_c_ota_manager_open(
-        addr: *const c_char,
-        device: *const c_char,
-        loopback: bool,
-        ttl: u8,
-        uuid: *const u8,
-        mtu: u32,
-        part_check_thresh: u16,
-        part_timeout_thresh: u16,
-    );
 }
 
 pub struct NemManager {
@@ -221,13 +211,13 @@ pub extern "C" fn emane_rs_nem_manager_start(manager_ptr: *mut c_void) {
         let addr = CString::new(manager.ota_manager_group_addr.clone()).unwrap();
         let dev = CString::new(manager.ota_manager_group_device.clone()).unwrap();
         unsafe {
-            emane_c_ota_manager_open(
+            crate::ota_manager::emane_rs_ota_manager_open(
                 addr.as_ptr(),
                 dev.as_ptr(),
-                manager.ota_manager_loopback,
                 manager.ota_manager_ttl,
+                manager.ota_manager_loopback,
                 manager.uuid.as_ptr(),
-                manager.ota_manager_mtu,
+                manager.ota_manager_mtu as usize,
                 manager.ota_manager_part_check_threshold,
                 manager.ota_manager_part_timeout_threshold,
             );

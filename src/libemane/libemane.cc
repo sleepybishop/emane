@@ -46,7 +46,6 @@
 #include "nemlayerstaterunning.h"
 #include "nemlayerstatestopped.h"
 #include "nemlayerstateuninitialized.h"
-#include "otamanager.h"
 #include "statisticservice.h"
 #include "timerservice.h"
 #include "transportfactorymanager.h"
@@ -59,7 +58,6 @@ void EMANE::Application::shutdown()
   google::protobuf::ShutdownProtobufLibrary();
 
   
-  OTAManagerSingleton::destroy();
 
   BuildIdServiceSingleton::destroy();
   ConfigurationServiceSingleton::destroy();

@@ -1,6 +1,5 @@
 #include "nemmanagerimpl.h"
 #include "logservice.h"
-#include "otamanager.h"
 #include "timerservice.h"
 #include "emane/configureexception.h"
 #include "emane/platformexception.h"
@@ -10,6 +9,11 @@
 #include "spectralmaskmanager.h"
 
 extern "C" {
+
+    void emane_c_ota_manager_set_stat_packet_count_limit(std::uint32_t);
+    void emane_c_ota_manager_set_stat_event_count_limit(std::uint32_t);
+    void emane_c_ota_manager_set_local_uuid(const unsigned char*);
+    bool emane_rs_ota_manager_open(const char*, const char*, std::uint8_t, bool, const unsigned char*, std::size_t, std::uint16_t, std::uint16_t);
     void* emane_rs_nem_manager_create(const std::uint8_t* uuid_ptr);
     void emane_rs_nem_manager_destroy_manager(void* manager_ptr);
     void emane_rs_nem_manager_add(void* manager_ptr, std::uint16_t nem_id, void* nem_ptr);
@@ -214,11 +218,11 @@ void EMANE::Application::NEMManagerImpl::configure(const ConfigurationUpdate & u
         }
       else if(item.first == "stats.ota.maxpacketcountrows")
         {
-          OTAManagerSingleton::instance()->setStatPacketCountRowLimit(item.second[0].asUINT32());
+          emane_c_ota_manager_set_stat_packet_count_limit(item.second[0].asUINT32());
         }
       else if(item.first == "stats.ota.maxeventcountrows")
         {
-          OTAManagerSingleton::instance()->setStatEventCountRowLimit(item.second[0].asUINT32());
+          emane_c_ota_manager_set_stat_event_count_limit(item.second[0].asUINT32());
         }
       else if(item.first == "spectralmaskmanifesturi")
         {
@@ -303,16 +307,16 @@ extern "C" {
             EMANE::INETAddr inetAddr{addr};
             uuid_t u;
             std::copy(uuid, uuid + 16, std::begin(u));
-            EMANE::OTAManagerSingleton::instance()->open(
-                inetAddr,
-                device ? device : "",
-                loopback,
-                ttl,
-                u,
-                mtu,
-                EMANE::Seconds{part_check_thresh},
-                EMANE::Seconds{part_timeout_thresh}
-            );
+            emane_c_ota_manager_set_local_uuid(u);
+            emane_rs_ota_manager_open(
+              addr,
+              device ? device : "",
+              ttl,
+              loopback,
+              u,
+              mtu,
+              part_check_thresh,
+              part_timeout_thresh);
         } catch(EMANE::OTAException & exp) {
             throw EMANE::StartException(exp.what());
         }

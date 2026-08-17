@@ -45,6 +45,7 @@ pub struct OtaManager {
     u64_sequence_number: u64,
     part_store: HashMap<PartKey, PartsData>,
     last_part_check_time: SystemTime,
+    pub nem_users: HashMap<u16, usize>,
 }
 
 impl OtaManager {
@@ -58,6 +59,7 @@ impl OtaManager {
             u64_sequence_number: 0,
             part_store: HashMap::new(),
             last_part_check_time: SystemTime::now(),
+            nem_users: HashMap::new(),
         }
     }
 }
@@ -75,6 +77,8 @@ extern "C" {
         stat_type: u32,
     );
 
+    fn emane_c_ota_manager_init_publishers();
+
     fn emane_c_ota_manager_deliver_event(
         src_nem: u16,
         event_id: u16,
@@ -82,7 +86,9 @@ extern "C" {
         data_len: usize,
     );
 
-    fn emane_c_ota_manager_deliver_upstream(
+
+    fn emane_c_ota_user_process_packet(
+        p_user: *mut c_void,
         source: u16,
         destination: u16,
         priority: u8,
@@ -92,6 +98,18 @@ extern "C" {
         controls: *const u8,
         controls_len: usize,
     );
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_ota_manager_register_user(id: u16, p_user: *mut c_void) {
+    let mut manager = get_ota_manager().lock().unwrap();
+    manager.nem_users.insert(id, p_user as usize);
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_ota_manager_unregister_user(id: u16) {
+    let mut manager = get_ota_manager().lock().unwrap();
+    manager.nem_users.remove(&id);
 }
 
 #[no_mangle]
@@ -150,6 +168,10 @@ pub extern "C" fn emane_rs_ota_manager_open(
     manager.ota_mtu = ota_mtu;
     manager.part_check_threshold = Duration::from_secs(part_check_threshold_secs as u64);
     manager.part_timeout_threshold = Duration::from_secs(part_timeout_threshold_secs as u64);
+
+    unsafe {
+        emane_c_ota_manager_init_publishers();
+    }
     
     true
 }
@@ -346,20 +368,30 @@ fn handle_ota_message(
     };
     
     if data_size > 0 {
+        let users: Vec<usize> = {
+            let manager = get_ota_manager().lock().unwrap();
+            manager.nem_users.values().copied().collect()
+        };
+
         unsafe {
             // Update TYPE_UPSTREAM_PACKET_SUCCESS = 2
             emane_c_ota_manager_update_stat(remote_uuid.as_ptr(), source, 2);
-            
-            emane_c_ota_manager_deliver_upstream(
-                source,
-                destination,
-                0, // Priority is set to 0 as in original
-                remote_uuid.as_ptr(),
-                data_ptr,
-                data_size,
-                controls_ptr,
-                controls_size
-            );
+        }
+
+        for p_user in users {
+            unsafe {
+                emane_c_ota_user_process_packet(
+                    p_user as *mut c_void,
+                    source,
+                    destination,
+                    0, // Priority is set to 0 as in original
+                    remote_uuid.as_ptr(),
+                    data_ptr,
+                    data_size,
+                    controls_ptr,
+                    controls_size
+                );
+            }
         }
     }
 }
