@@ -95,6 +95,7 @@ namespace EMANE
     std::mutex mutex_;
     std::condition_variable cond_;
     bool bCancel_;
+    void* rs_state_;
 
     void processPacketQueue();
 

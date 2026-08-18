@@ -196,3 +196,4 @@ pub extern "C" fn emane_rs_socket_sendto(
     unsafe { libc::sendto(sock, buf, len, flags, addr, addrlen) }
 }
 pub mod fading_manager;
+pub mod nem_ota_adapter;
