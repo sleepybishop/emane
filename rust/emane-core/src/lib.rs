@@ -195,3 +195,4 @@ pub extern "C" fn emane_rs_socket_sendto(
 ) -> libc::ssize_t {
     unsafe { libc::sendto(sock, buf, len, flags, addr, addrlen) }
 }
+pub mod fading_manager;
