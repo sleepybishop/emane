@@ -1,3 +1,5 @@
 pub mod timestamp_control_message;
 pub mod receive_properties_control_message;
 pub mod tx_while_rx_interference_control_message;
+pub mod rx_antenna_remove_control_message;
+pub mod spectrum_filter_remove_control_message;

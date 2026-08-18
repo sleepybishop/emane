@@ -2,57 +2,46 @@
 /*
  * Copyright (c) 2020 - Adjacent Link LLC, Bridgewater, New Jersey
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "emane/controls/rxantennaremovecontrolmessage.h"
+
+extern "C" {
+    void* emane_rs_controls_rx_antenna_remove_create(uint16_t antenna_index);
+    void* emane_rs_controls_rx_antenna_remove_clone(const void* ptr);
+    void emane_rs_controls_rx_antenna_remove_destroy(void* ptr);
+    uint16_t emane_rs_controls_rx_antenna_remove_get_antenna_index(const void* ptr);
+}
 
 class EMANE::Controls::RxAntennaRemoveControlMessage::Implementation
 {
 public:
   Implementation(AntennaIndex antennaIndex):
-    antennaIndex_{antennaIndex}
+    rs_ptr_{emane_rs_controls_rx_antenna_remove_create(antennaIndex)}
   {}
 
-  const AntennaIndex & getAntennaIndex() const
+  Implementation(const Implementation& other):
+    rs_ptr_{emane_rs_controls_rx_antenna_remove_clone(other.rs_ptr_)}
+  {}
+
+  ~Implementation()
   {
-    return antennaIndex_;
+    if(rs_ptr_) emane_rs_controls_rx_antenna_remove_destroy(rs_ptr_);
+  }
+
+  AntennaIndex getAntennaIndex() const
+  {
+    return emane_rs_controls_rx_antenna_remove_get_antenna_index(rs_ptr_);
   }
 
 private:
-  const AntennaIndex  antennaIndex_;
+  void* rs_ptr_;
 };
 
 EMANE::Controls::RxAntennaRemoveControlMessage::
 RxAntennaRemoveControlMessage(const RxAntennaRemoveControlMessage & msg):
   ControlMessage{IDENTIFIER},
-  pImpl_{msg.pImpl_}
+  pImpl_{new Implementation{*msg.pImpl_}}
 {}
 
 EMANE::Controls::RxAntennaRemoveControlMessage::RxAntennaRemoveControlMessage(AntennaIndex antennaIndex):
@@ -68,13 +57,11 @@ EMANE::Controls::RxAntennaRemoveControlMessage::getAntennaIndex() const
   return pImpl_->getAntennaIndex();
 }
 
-
 EMANE::Controls::RxAntennaRemoveControlMessage *
 EMANE::Controls::RxAntennaRemoveControlMessage::create(AntennaIndex antennaIndex)
 {
   return new RxAntennaRemoveControlMessage{antennaIndex};
 }
-
 
 EMANE::Controls::RxAntennaRemoveControlMessage *
 EMANE::Controls::RxAntennaRemoveControlMessage::clone() const
