@@ -203,3 +203,4 @@ pub mod spectrum_monitor;
 pub mod receive_processor;
 pub mod common_layer_statistics;
 pub mod nem_stateful_layer;
+mod framework_phy_downstream;
