@@ -2,36 +2,13 @@
 /*
  * Copyright (c) 2014 - Adjacent Link LLC, Bridgewater, New Jersey
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "emane/controls/r2riselfmetriccontrolmessageformatter.h"
+
+extern "C" {
+    void emane_rs_format_r2ri_self_metric(uint64_t broadcast_bps, uint64_t max_bps, double interval, void* ctx, void (*add_string)(void*, const char*));
+}
 
 EMANE::Controls::R2RISelfMetricControlMessageFormatter::
 R2RISelfMetricControlMessageFormatter(const R2RISelfMetricControlMessage * pMsg):
@@ -39,13 +16,15 @@ R2RISelfMetricControlMessageFormatter(const R2RISelfMetricControlMessage * pMsg)
 
 EMANE::Strings EMANE::Controls::R2RISelfMetricControlMessageFormatter::operator()() const
 {
-  Strings strings{};
-  
-  strings.push_back("broadcast data rate: " + std::to_string(pMsg_->getBroadcastDataRatebps()));
-  strings.push_back("max data rate: " + std::to_string(pMsg_->getMaxDataRatebps()));
-  strings.push_back("report interval: " + std::to_string(std::chrono::duration_cast
-                                        <EMANE::DoubleSeconds>(pMsg_->getReportInterval()).count()));
-  
+  Strings strings;
+  emane_rs_format_r2ri_self_metric(
+      pMsg_->getBroadcastDataRatebps(),
+      pMsg_->getMaxDataRatebps(),
+      std::chrono::duration_cast<EMANE::DoubleSeconds>(pMsg_->getReportInterval()).count(),
+      &strings,
+      [](void* ctx, const char* s) {
+          static_cast<Strings*>(ctx)->push_back(s);
+      }
+  );
   return strings;
 }
-
