@@ -96,6 +96,7 @@ namespace EMANE
     NEMId id_;
     DatagramSocket udp_;
     Protocol protocol_;
+    void* rs_manager_;
     INETAddr localAddress_;
     INETAddr remoteAddress_;
     std::thread thread_;

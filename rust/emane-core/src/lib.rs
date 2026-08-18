@@ -197,3 +197,4 @@ pub extern "C" fn emane_rs_socket_sendto(
 }
 pub mod fading_manager;
 pub mod nem_ota_adapter;
+pub mod boundary_message_manager;
