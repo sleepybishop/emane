@@ -1,37 +1,15 @@
-#include <cstdint>
-/*
- * Copyright (c) 2020 - Adjacent Link LLC, Bridgewater, New Jersey
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
 
+#include <cstdint>
 #include "emane/controls/mimotransmitpropertiescontrolmessage.h"
+
+extern "C" {
+    void* emane_rs_controls_mimo_tx_props_create();
+    size_t emane_rs_controls_mimo_tx_props_add_frequency_group(void* ptr);
+    void emane_rs_controls_mimo_tx_props_add_frequency_segment(void* ptr, size_t group_idx, uint64_t freq, double power, uint64_t dur, uint64_t off);
+    void emane_rs_controls_mimo_tx_props_add_antenna(void* ptr, size_t fg_idx, uint16_t idx, uint64_t bw, uint16_t sm_idx);
+    void* emane_rs_controls_mimo_tx_props_clone(const void* ptr);
+    void emane_rs_controls_mimo_tx_props_destroy(void* ptr);
+}
 
 class EMANE::Controls::MIMOTransmitPropertiesControlMessage::Implementation
 {
@@ -39,43 +17,76 @@ public:
   Implementation(const FrequencyGroups & frequencyGroups,
                  const Antennas & transmitAntennas):
     frequencyGroups_{frequencyGroups},
-    transmitAntennas_{transmitAntennas}{}
+    transmitAntennas_{transmitAntennas}
+  {
+      init_rust();
+  }
 
   Implementation(FrequencyGroups && frequencyGroups,
                  const Antennas & transmitAntennas):
     frequencyGroups_{std::move(frequencyGroups)},
-    transmitAntennas_{transmitAntennas}{}
+    transmitAntennas_{transmitAntennas}
+  {
+      init_rust();
+  }
 
   Implementation(FrequencyGroups && frequencyGroups,
                  Antennas && transmitAntennas):
     frequencyGroups_{std::move(frequencyGroups)},
-    transmitAntennas_{std::move(transmitAntennas)}{}
-
-  const FrequencyGroups &  getFrequencyGroups() const
+    transmitAntennas_{std::move(transmitAntennas)}
   {
-    return frequencyGroups_;
+      init_rust();
   }
 
-  const Antennas & getTransmitAntennas() const
+  Implementation(const Implementation& other) :
+    frequencyGroups_{other.frequencyGroups_},
+    transmitAntennas_{other.transmitAntennas_}
   {
-    return transmitAntennas_;
+      pRsMsg_ = emane_rs_controls_mimo_tx_props_clone(other.pRsMsg_);
+  }
+
+  ~Implementation() {
+      emane_rs_controls_mimo_tx_props_destroy(pRsMsg_);
+  }
+
+  const FrequencyGroups & getFrequencyGroups() const { return frequencyGroups_; }
+  const Antennas & getTransmitAntennas() const { return transmitAntennas_; }
+
+  Implementation* clone() const {
+      return new Implementation(*this);
   }
 
 private:
-  const FrequencyGroups frequencyGroups_;
-  const Antennas transmitAntennas_;
+  void init_rust() {
+      pRsMsg_ = emane_rs_controls_mimo_tx_props_create();
+      for(const auto& group : frequencyGroups_) {
+          size_t idx = emane_rs_controls_mimo_tx_props_add_frequency_group(pRsMsg_);
+          for(const auto& seg : group) {
+              emane_rs_controls_mimo_tx_props_add_frequency_segment(
+                  pRsMsg_, idx, seg.getFrequencyHz(), seg.getPowerdBm().first, seg.getDuration().count(), seg.getOffset().count()
+              );
+          }
+      }
+      for(const auto& ant : transmitAntennas_) {
+          emane_rs_controls_mimo_tx_props_add_antenna(
+              pRsMsg_, ant.getFrequencyGroupIndex(), ant.getIndex(), ant.getBandwidthHz(), ant.getSpectralMaskIndex()
+          );
+      }
+  }
+
+  void* pRsMsg_;
+  FrequencyGroups frequencyGroups_;
+  Antennas transmitAntennas_;
 };
 
 EMANE::Controls::MIMOTransmitPropertiesControlMessage::
 MIMOTransmitPropertiesControlMessage(const MIMOTransmitPropertiesControlMessage & msg):
   ControlMessage{IDENTIFIER},
-  pImpl_{msg.pImpl_}
+  pImpl_{msg.pImpl_->clone()}
 {}
-
 
 EMANE::Controls::MIMOTransmitPropertiesControlMessage::MIMOTransmitPropertiesControlMessage(const FrequencyGroups & frequencyGroups,
                                                                                             const Antennas & transmitAntennas):
-
   ControlMessage{IDENTIFIER},
   pImpl_{new Implementation{frequencyGroups,transmitAntennas}}{}
 
@@ -90,7 +101,6 @@ EMANE::Controls::MIMOTransmitPropertiesControlMessage::MIMOTransmitPropertiesCon
   pImpl_{new Implementation{std::move(frequencyGroups),std::move(transmitAntennas)}}{}
 
 EMANE::Controls::MIMOTransmitPropertiesControlMessage::~MIMOTransmitPropertiesControlMessage(){}
-
 
 EMANE::Controls::MIMOTransmitPropertiesControlMessage *
 EMANE::Controls::MIMOTransmitPropertiesControlMessage::create(const FrequencyGroups & frequencyGroups,

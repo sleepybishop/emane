@@ -5,3 +5,5 @@ pub mod rx_antenna_remove_control_message;
 pub mod spectrum_filter_remove_control_message;
 pub mod antenna_profile_control_message;
 pub mod mimo_receive_properties_control_message;
+pub mod mimo_transmit_properties_control_message;
+pub mod mimo_tx_while_rx_interference_control_message;
