@@ -2,39 +2,26 @@
 /*
  * Copyright (c) 2014,2020 - Adjacent Link LLC, Bridgewater, New Jersey
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "positionorientationvelocityformatter.h"
 #include "emane/positionformatter.h"
 #include "emane/orientationformatter.h"
 #include "emane/velocityformatter.h"
+
+extern "C" {
+    void emane_rs_format_pov_invalid(void* ctx, void (*add_string)(void*, const char*));
+    void emane_rs_format_pov_start(void* ctx, void (*add_string)(void*, const char*));
+    void emane_rs_format_pov_orientation_none(void* ctx, void (*add_string)(void*, const char*));
+    void emane_rs_format_pov_adjusted_orientation_none(void* ctx, void (*add_string)(void*, const char*));
+    void emane_rs_format_pov_adjusted_orientation_start(void* ctx, void (*add_string)(void*, const char*));
+    void emane_rs_format_pov_velocity_none(void* ctx, void (*add_string)(void*, const char*));
+}
+
+static void add_string_to_list(void* ctx, const char* str) {
+    auto list = static_cast<EMANE::Strings*>(ctx);
+    list->push_back(str);
+}
 
 EMANE::PositionOrientationVelocityFormatter::
 PositionOrientationVelocityFormatter(const PositionOrientationVelocity & pov):
@@ -43,14 +30,16 @@ PositionOrientationVelocityFormatter(const PositionOrientationVelocity & pov):
 
 EMANE::Strings EMANE::PositionOrientationVelocityFormatter::operator()() const
 {
-  Strings strings{{"pov:"}};
+  Strings strings;
 
   if(!pov_.isValid())
     {
-      strings.push_back("invalid");
+      emane_rs_format_pov_invalid(&strings, add_string_to_list);
     }
   else
     {
+      emane_rs_format_pov_start(&strings, add_string_to_list);
+
       strings.splice(strings.end(),PositionFormatter(pov_.getPosition())());
 
       auto optionalOrientation =  pov_.getOrientation();
@@ -61,18 +50,18 @@ EMANE::Strings EMANE::PositionOrientationVelocityFormatter::operator()() const
         }
       else
         {
-          strings.push_back("orientation: none");
+          emane_rs_format_pov_orientation_none(&strings, add_string_to_list);
         }
       auto optionalAdjustedOrientation =  pov_.getAdjustedOrientation();
 
       if(optionalAdjustedOrientation.second)
         {
-          strings.push_back("adjusted");
+          emane_rs_format_pov_adjusted_orientation_start(&strings, add_string_to_list);
           strings.splice(strings.end(),OrientationFormatter(optionalAdjustedOrientation.first)());
         }
       else
         {
-          strings.push_back("adjusted orientation: none");
+          emane_rs_format_pov_adjusted_orientation_none(&strings, add_string_to_list);
         }
 
       auto optionalVelocity = pov_.getVelocity();
@@ -83,7 +72,7 @@ EMANE::Strings EMANE::PositionOrientationVelocityFormatter::operator()() const
         }
       else
         {
-          strings.push_back("velocity: none");
+          emane_rs_format_pov_velocity_none(&strings, add_string_to_list);
         }
     }
 

@@ -488,3 +488,100 @@ pub extern "C" fn emane_rs_format_mimo_doppler_shift(
     add_string(ctx, s1.as_ptr());
     add_string(ctx, s2.as_ptr());
 }
+
+#[no_mangle]
+pub extern "C" fn emane_rs_format_pov_invalid(
+    ctx: *mut std::os::raw::c_void,
+    add_string: AddStringCallback,
+) {
+    let s1 = CString::new("pov:").unwrap();
+    let s2 = CString::new("invalid").unwrap();
+    add_string(ctx, s1.as_ptr());
+    add_string(ctx, s2.as_ptr());
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_format_pov_start(
+    ctx: *mut std::os::raw::c_void,
+    add_string: AddStringCallback,
+) {
+    let s1 = CString::new("pov:").unwrap();
+    add_string(ctx, s1.as_ptr());
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_format_pov_orientation_none(
+    ctx: *mut std::os::raw::c_void,
+    add_string: AddStringCallback,
+) {
+    let s1 = CString::new("orientation: none").unwrap();
+    add_string(ctx, s1.as_ptr());
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_format_pov_adjusted_orientation_none(
+    ctx: *mut std::os::raw::c_void,
+    add_string: AddStringCallback,
+) {
+    let s1 = CString::new("adjusted orientation: none").unwrap();
+    add_string(ctx, s1.as_ptr());
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_format_pov_adjusted_orientation_start(
+    ctx: *mut std::os::raw::c_void,
+    add_string: AddStringCallback,
+) {
+    let s1 = CString::new("adjusted").unwrap();
+    add_string(ctx, s1.as_ptr());
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_format_pov_velocity_none(
+    ctx: *mut std::os::raw::c_void,
+    add_string: AddStringCallback,
+) {
+    let s1 = CString::new("velocity: none").unwrap();
+    add_string(ctx, s1.as_ptr());
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_format_location_info_start(
+    ctx: *mut std::os::raw::c_void,
+    add_string: AddStringCallback,
+) {
+    let s1 = CString::new("location info:").unwrap();
+    let s2 = CString::new("local").unwrap();
+    add_string(ctx, s1.as_ptr());
+    add_string(ctx, s2.as_ptr());
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_format_location_info_remote(
+    ctx: *mut std::os::raw::c_void,
+    add_string: AddStringCallback,
+) {
+    let s1 = CString::new("remote").unwrap();
+    add_string(ctx, s1.as_ptr());
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_format_location_info_distance(
+    distance: f64,
+    ctx: *mut std::os::raw::c_void,
+    add_string: AddStringCallback,
+) {
+    let s1 = CString::new(format!("distance: {}", distance)).unwrap();
+    add_string(ctx, s1.as_ptr());
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_format_location_event_nem(
+    nem_id: u16,
+    ctx: *mut std::os::raw::c_void,
+    add_string: AddStringCallback,
+) {
+    let s1 = CString::new(format!("nem: {}", nem_id)).unwrap();
+    add_string(ctx, s1.as_ptr());
+}
+
