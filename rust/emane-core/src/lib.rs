@@ -200,3 +200,5 @@ pub mod nem_ota_adapter;
 pub mod boundary_message_manager;
 pub mod spectrum_monitor;
 pub mod receive_processor;
+pub mod common_layer_statistics;
+pub mod nem_stateful_layer;

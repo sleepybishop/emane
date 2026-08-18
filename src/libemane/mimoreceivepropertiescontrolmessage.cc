@@ -1,37 +1,15 @@
-#include <cstdint>
-/*
- * Copyright (c) 2020-2021 - Adjacent Link LLC, Bridgewater, New Jersey
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
 
+#include <cstdint>
 #include "emane/controls/mimoreceivepropertiescontrolmessage.h"
+
+extern "C" {
+    void* emane_rs_controls_mimo_rx_props_create(uint64_t sot, uint64_t propagation);
+    size_t emane_rs_controls_mimo_rx_props_add_antenna_info(void* ptr, uint16_t rx_idx, uint16_t tx_idx, uint64_t span, double sens);
+    void emane_rs_controls_mimo_rx_props_add_frequency_segment(void* ptr, size_t info_idx, uint64_t freq, double rx_power, uint64_t dur, uint64_t off);
+    void emane_rs_controls_mimo_rx_props_add_doppler_shift(void* ptr, uint64_t freq, int64_t shift);
+    void* emane_rs_controls_mimo_rx_props_clone(const void* ptr);
+    void emane_rs_controls_mimo_rx_props_destroy(void* ptr);
+}
 
 class EMANE::Controls::MIMOReceivePropertiesControlMessage::Implementation
 {
@@ -43,7 +21,10 @@ public:
     sot_{sot},
     propagation_{propagation},
     antennaReceiveInfos_{antennaReceiveInfos},
-    dopplerShifts_{dopplerShifts}{}
+    dopplerShifts_{dopplerShifts}
+  {
+      init_rust();
+  }
 
   Implementation(const TimePoint & sot,
                  const Microseconds & propagation,
@@ -52,39 +33,66 @@ public:
     sot_{sot},
     propagation_{propagation},
     antennaReceiveInfos_(std::move(antennaReceiveInfos)),
-    dopplerShifts_{std::move(dopplerShifts)}{}
-
-  const TimePoint & getTxTime() const
+    dopplerShifts_{std::move(dopplerShifts)}
   {
-    return sot_;
+      init_rust();
   }
 
-  const Microseconds & getPropagationDelay() const
+  Implementation(const Implementation& other) :
+    sot_{other.sot_},
+    propagation_{other.propagation_},
+    antennaReceiveInfos_{other.antennaReceiveInfos_},
+    dopplerShifts_{other.dopplerShifts_}
   {
-    return propagation_;
+      pRsMsg_ = emane_rs_controls_mimo_rx_props_clone(other.pRsMsg_);
   }
 
-  const AntennaReceiveInfos & getAntennaReceiveInfos() const
-  {
-    return antennaReceiveInfos_;
+  ~Implementation() {
+      emane_rs_controls_mimo_rx_props_destroy(pRsMsg_);
   }
 
-  const DopplerShifts & getDopplerShifts() const
-  {
-    return dopplerShifts_;
+  const TimePoint & getTxTime() const { return sot_; }
+  const Microseconds & getPropagationDelay() const { return propagation_; }
+  const AntennaReceiveInfos & getAntennaReceiveInfos() const { return antennaReceiveInfos_; }
+  const DopplerShifts & getDopplerShifts() const { return dopplerShifts_; }
+
+  Implementation* clone() const {
+      return new Implementation(*this);
   }
 
 private:
-  const TimePoint sot_;
-  const Microseconds propagation_;
-  const AntennaReceiveInfos antennaReceiveInfos_;
-  const DopplerShifts dopplerShifts_;
+  void init_rust() {
+      pRsMsg_ = emane_rs_controls_mimo_rx_props_create(
+          std::chrono::duration_cast<std::chrono::microseconds>(sot_.time_since_epoch()).count(),
+          propagation_.count()
+      );
+      for(const auto& info : antennaReceiveInfos_) {
+          size_t idx = emane_rs_controls_mimo_rx_props_add_antenna_info(
+              pRsMsg_, info.getRxAntennaIndex(), info.getTxAntennaIndex(), info.getSpan().count(), info.getReceiverSensitivitydBm()
+          );
+          for(const auto& seg : info.getFrequencySegments()) {
+              emane_rs_controls_mimo_rx_props_add_frequency_segment(
+                  pRsMsg_, idx, seg.getFrequencyHz(), seg.getRxPowerdBm(), seg.getDuration().count(), seg.getOffset().count()
+              );
+          }
+      }
+      for(const auto& ds : dopplerShifts_) {
+          emane_rs_controls_mimo_rx_props_add_doppler_shift(pRsMsg_, ds.first, ds.second);
+      }
+  }
+
+  void* pRsMsg_;
+  TimePoint sot_;
+  Microseconds propagation_;
+  AntennaReceiveInfos antennaReceiveInfos_;
+  DopplerShifts dopplerShifts_;
 };
 
 EMANE::Controls::MIMOReceivePropertiesControlMessage::
 MIMOReceivePropertiesControlMessage(const MIMOReceivePropertiesControlMessage & msg):
   ControlMessage{IDENTIFIER},
-  pImpl_{msg.pImpl_}{}
+  pImpl_{msg.pImpl_->clone()}
+{}
 
 EMANE::Controls::MIMOReceivePropertiesControlMessage::MIMOReceivePropertiesControlMessage(const TimePoint & sot,
                                                                                           const Microseconds & propagation,
@@ -97,12 +105,10 @@ EMANE::Controls::MIMOReceivePropertiesControlMessage::MIMOReceivePropertiesContr
                                                                                           const Microseconds & propagation,
                                                                                           AntennaReceiveInfos && antennaReceiveInfos,
                                                                                           DopplerShifts && dopplerShifts):
-
   ControlMessage{IDENTIFIER},
   pImpl_{new Implementation{sot,propagation,std::move(antennaReceiveInfos),std::move(dopplerShifts)}}{}
 
 EMANE::Controls::MIMOReceivePropertiesControlMessage::~MIMOReceivePropertiesControlMessage(){}
-
 
 EMANE::Controls::MIMOReceivePropertiesControlMessage *
 EMANE::Controls::MIMOReceivePropertiesControlMessage::create(const TimePoint & sot,
