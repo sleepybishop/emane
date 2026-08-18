@@ -86,3 +86,59 @@ pub extern "C" fn emane_rs_format_velocity(
     let s = CString::new(format!("mag: {}", mag)).unwrap();
     add_string(ctx, s.as_ptr());
 }
+
+#[no_mangle]
+pub extern "C" fn emane_rs_format_antenna_profile_element(
+    nem_id: u16,
+    profile_id: u16,
+    azimuth: f64,
+    elevation: f64,
+    ctx: *mut std::os::raw::c_void,
+    add_string: AddStringCallback,
+) {
+    let s = CString::new(format!(
+        "nem: {} profile: {} antenna az: {} antenna el: {}",
+        nem_id, profile_id, azimuth, elevation
+    )).unwrap();
+    add_string(ctx, s.as_ptr());
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_format_comm_effect_element(
+    nem_id: u16,
+    latency_sec: f64,
+    jitter_sec: f64,
+    prob_loss: f32,
+    prob_dup: f32,
+    unicast_bps: u64,
+    broadcast_bps: u64,
+    ctx: *mut std::os::raw::c_void,
+    add_string: AddStringCallback,
+) {
+    let s = CString::new(format!(
+        "nem: {} latency: {} jitter: {} loss: {} dup: {} unicast bps: {} broadcast bps: {}",
+        nem_id, latency_sec, jitter_sec, prob_loss, prob_dup, unicast_bps, broadcast_bps
+    )).unwrap();
+    add_string(ctx, s.as_ptr());
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_format_fading_selection_element(
+    nem_id: u16,
+    fading_model: i32, // Events::FadingModel
+    ctx: *mut std::os::raw::c_void,
+    add_string: AddStringCallback,
+) {
+    let model_str = match fading_model {
+        0 => "none", // NONE
+        1 => "nakagami", // NAKAGAMI
+        2 => "lognormal", // LOGNORMAL
+        _ => "unknown",
+    };
+    
+    let s = CString::new(format!(
+        "nem: {} model: {}",
+        nem_id, model_str
+    )).unwrap();
+    add_string(ctx, s.as_ptr());
+}
