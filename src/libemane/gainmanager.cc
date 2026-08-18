@@ -1,345 +1,124 @@
 #include <cstdint>
-/*
- * Copyright (c) 2013-2014,2021 - Adjacent Link LLC, Bridgewater,
- * New Jersey
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
-
-
 #include "gainmanager.h"
-#include "emane/utils/conversionutils.h"
+#include "positionutils.h"
+#include "locationinfo.h"
 
 extern "C" {
-    void* emane_rs_gain_manager_create();
+    void* emane_rs_gain_manager_create(uint16_t nemId, uint16_t rxAntennaIndex, void* antennaManager);
     void emane_rs_gain_manager_destroy(void* ptr);
-    void emane_rs_gain_manager_set_cache(
-        void* ptr, uint16_t tx_nem_id, uint16_t tx_antenna_idx,
-        uint64_t tx_antenna_seq, uint64_t location_seq, double remote_gain, double local_gain
-    );
-    bool emane_rs_gain_manager_get_cache(
-        void* ptr, uint16_t tx_nem_id, uint16_t tx_antenna_idx,
-        uint64_t tx_antenna_seq, uint64_t location_seq,
-        uint64_t rx_antenna_seq,
-        double* out_remote_gain, double* out_local_gain
-    );
+    
+    struct EMANE_GainResult {
+        double remote_gain;
+        double local_gain;
+        int status; 
+        bool is_cache;
+    };
+    
+    EMANE_GainResult emane_rs_gain_manager_determine_gain(void* ptr, uint16_t tx_nem_id, uint16_t tx_antenna_index, const void* location_info);
+
+    // C FFI trampolines
+    double emane_c_location_info_get_distance(const void* loc) {
+        return static_cast<const EMANE::LocationInfo*>(loc)->getDistanceMeters();
+    }
+    bool emane_c_location_info_is_valid(const void* loc) {
+        return static_cast<const EMANE::LocationInfo*>(loc)->isValid();
+    }
+    double emane_c_location_info_get_altitude(const void* loc, bool is_local) {
+        auto loc_info = static_cast<const EMANE::LocationInfo*>(loc);
+        if (is_local) return loc_info->getLocalPOV().getPosition().getAltitudeMeters();
+        return loc_info->getRemotePOV().getPosition().getAltitudeMeters();
+    }
+    uint64_t emane_c_location_info_get_sequence_number(const void* loc) {
+        return static_cast<const EMANE::LocationInfo*>(loc)->getSequenceNumber();
+    }
+
+    struct EMANE_Direction {
+        double azimuth;
+        double elevation;
+        double distance;
+    };
+    EMANE_Direction emane_c_utils_calculate_direction_by_neu(
+        const void* loc, 
+        double local_north, double local_east, double local_up,
+        double remote_north, double remote_east, double remote_up) 
+    {
+        auto loc_info = static_cast<const EMANE::LocationInfo*>(loc);
+        EMANE::PositionNEU local_ant(local_north, local_east, local_up);
+        EMANE::PositionNEU remote_ant(remote_north, remote_east, remote_up);
+        auto res = EMANE::Utils::calculateDirection(
+            loc_info->getLocalPOV(), local_ant,
+            loc_info->getRemotePOV(), remote_ant
+        );
+        return { std::get<0>(res), std::get<1>(res), std::get<2>(res) };
+    }
+
+    struct EMANE_LookupAngles {
+        double azimuth;
+        double elevation;
+    };
+    EMANE_LookupAngles emane_c_utils_calculate_lookup_angles(
+        double dAzReference, double dAzPointing,
+        double dElReference, double dElPointing) 
+    {
+        auto res = EMANE::Utils::calculateLookupAngles(dAzReference, dAzPointing, dElReference, dElPointing);
+        return { res.first, res.second };
+    }
+
+    bool emane_c_utils_check_horizon(double height1, double height2, double dist) {
+        return EMANE::Utils::checkHorizon(height1, height2, dist);
+    }
+    
+    bool emane_c_antenna_manager_get_info(
+        void* am_ptr, uint16_t nemId, uint16_t index,
+        bool* out_is_omni, double* out_fixed_gain,
+        bool* out_has_pointing, uint16_t* out_profile_id,
+        double* out_pointing_azimuth, double* out_pointing_elevation,
+        uint64_t* out_seq)
+    {
+        auto am = static_cast<EMANE::AntennaManager*>(am_ptr);
+        auto info = am->getAntennaInfo(nemId, index);
+        if (!info.second) return false;
+        
+        *out_seq = info.first.u64UpdateSequence_;
+        const auto& ant = info.first.antenna_;
+        *out_is_omni = ant.isIdealOmni();
+        *out_fixed_gain = ant.getFixedGaindBi().first;
+        
+        auto pointing = ant.getPointing();
+        *out_has_pointing = pointing.second;
+        if (pointing.second) {
+            *out_profile_id = pointing.first.getProfileId();
+            *out_pointing_azimuth = pointing.first.getAzimuthDegrees();
+            *out_pointing_elevation = pointing.first.getElevationDegrees();
+        }
+        return true;
+    }
 }
 
-#include "antennaprofilemanifest.h"
-#include "positionutils.h"
-#include "antennaprofileexception.h"
-#include "logservice.h"
-#include "locationinfoformatter.h"
-#include "positionneuformatter.h"
-
 EMANE::GainManager::AntennaPatternInfo::AntennaPatternInfo():
-  pPattern_{},
-  pBlockage_{},
-  placement_{}{}
+  pPattern_{}, pBlockage_{}, placement_{}{}
 
 EMANE::GainManager::AntennaPatternInfo::AntennaPatternInfo(AntennaPattern * pPattern,
                                                            AntennaPattern * pBlockage,
                                                            const PositionNEU & placement):
-  pPattern_{pPattern},
-  pBlockage_{pBlockage},
-  placement_{placement}{}
+  pPattern_{pPattern}, pBlockage_{pBlockage}, placement_{placement}{}
 
-EMANE::GainManager::GainManager(NEMId nemId,
-            AntennaIndex rxAntennaIndex,
-            AntennaManager & antennaManager):
-  id_{nemId},
-  rxAntennaIndex_{rxAntennaIndex},
-  antennaManager_{antennaManager},
-  rs_ptr_{emane_rs_gain_manager_create()}
+EMANE::GainManager::GainManager(NEMId nemId, AntennaIndex rxAntennaIndex, AntennaManager & antennaManager):
+  id_{nemId}, rxAntennaIndex_{rxAntennaIndex}, antennaManager_{antennaManager},
+  rs_ptr_{emane_rs_gain_manager_create(nemId, rxAntennaIndex, &antennaManager)}
 {}
 
-void
-EMANE::GainManager::setGainCache(NEMId transmitterId,
-                                      const AntennaManager::AntennaInfo & txAntennaInfo,
-                                      const LocationInfo & locationPairInfo,
-                                      double dRemoteGaindBi,
-                                      double dLocalGaindBi)
-{
-  emane_rs_gain_manager_set_cache(rs_ptr_, transmitterId, txAntennaInfo.antenna_.getIndex(), txAntennaInfo.u64UpdateSequence_, locationPairInfo.getSequenceNumber(), dRemoteGaindBi, dLocalGaindBi);
+EMANE::GainManager::~GainManager() {
+    if(rs_ptr_) emane_rs_gain_manager_destroy(rs_ptr_);
 }
 
-std::tuple<double,double,bool>
-EMANE::GainManager::getGainCache(NEMId transmitterId,
-                                 const AntennaManager::AntennaInfo & txAntennaInfo,
-                                 const AntennaManager::AntennaInfo & rxAntennaInfo,
-                                 const LocationInfo & locationPairInfo)
-{
-  double dRemoteGaindBi{};
-  double dLocalGaindBi{};
-  bool found = emane_rs_gain_manager_get_cache(rs_ptr_, transmitterId, txAntennaInfo.antenna_.getIndex(), txAntennaInfo.u64UpdateSequence_, locationPairInfo.getSequenceNumber(), rxAntennaInfo.u64UpdateSequence_, &dRemoteGaindBi, &dLocalGaindBi);
-  if(found) return std::make_tuple(dRemoteGaindBi,dLocalGaindBi,true);
-  return {};
-}
+void EMANE::GainManager::setGainCache(NEMId, const AntennaManager::AntennaInfo &, const LocationInfo &, double, double) {}
+std::tuple<double,double,bool> EMANE::GainManager::getGainCache(NEMId, const AntennaManager::AntennaInfo &, const AntennaManager::AntennaInfo &, const LocationInfo &) { return {}; }
 
-EMANE::GainManager::GainInfo
-EMANE::GainManager::determineGain(NEMId transmitterId,
+EMANE::GainManager::GainInfo EMANE::GainManager::determineGain(NEMId transmitterId,
                                   AntennaIndex txAntennaIndex,
                                   const LocationInfo & locationPairInfo)
 {
-  auto remoteAntennaInfo = antennaManager_.getAntennaInfo(transmitterId,
-                                                                  txAntennaIndex);
-
-  auto localAntennaInfo = antennaManager_.getAntennaInfo(id_,
-                                                                 rxAntennaIndex_);
-
-  if(!remoteAntennaInfo.second || !localAntennaInfo.second)
-    {
-      return std::make_tuple(0,0,GainStatus::ERROR_PROFILEINFO,false);
-    }
-
-  auto cacheEntry = getGainCache(transmitterId,
-                                 remoteAntennaInfo.first,
-                                 localAntennaInfo.first,
-                                 locationPairInfo);
-
-  if(std::get<2>(cacheEntry))
-    {
-      return std::make_tuple(std::get<0>(cacheEntry),
-                             std::get<1>(cacheEntry),
-                             GainStatus::SUCCESS,
-                             true);
-    }
-
-  GainInfo gainInfo{};
-
-  const auto & remoteAntenna = remoteAntennaInfo.first.antenna_;
-
-  const auto & localAntenna = localAntennaInfo.first.antenna_;
-
-  double dRemoteAntennaGaindBi{};
-  double dLocalAntennaGaindBi{};
-
-  if(!remoteAntenna.isIdealOmni())
-    {
-
-      if(!locationPairInfo.isValid())
-        {
-          return std::make_tuple(0,0,GainStatus::ERROR_LOCATIONINFO,false);
-        }
-
-      auto remotePointing = remoteAntenna.getPointing();
-
-      // we have the profile info w/ pattern info
-      if(remotePointing.second && remoteAntennaInfo.first.pPattern_)
-        {
-          // calculate the direction: azimuth, elvation and distance
-          auto direction =
-            Utils::calculateDirection(locationPairInfo.getRemotePOV(),
-                                      remoteAntennaInfo.first.placement_,
-                                      locationPairInfo.getLocalPOV(),
-                                      localAntennaInfo.first.placement_);
-
-          // adjust the direction azimuth and elevation based on the antenna pointing azimuth and elvation
-          auto lookupAngles =
-            Utils::calculateLookupAngles(std::get<0>(direction),
-                                         remotePointing.first.getAzimuthDegrees(),
-                                         std::get<1>(direction),
-                                         remotePointing.first.getElevationDegrees());
-
-          double dTxAntennaGaindBi{remoteAntennaInfo.first.pPattern_->getGain(std::round(lookupAngles.first),
-                                                                              std::round(lookupAngles.second))};
-
-          // get the blockage, if specified
-          //  Note: no adjustment is necessary to the direction azimuth and elvation
-
-          double dTxAntennaBlockagedBi{remoteAntennaInfo.first.pBlockage_ ?
-            remoteAntennaInfo.first.pBlockage_->getGain(std::round(std::get<0>(direction)),
-                                                        std::round(std::get<1>(direction))) :
-            0};
-
-
-          LOGGER_VERBOSE_LOGGING_FN_VARGS(*LogServiceSingleton::instance(),
-                                          DEBUG_LEVEL,
-                                          [this,&remoteAntennaInfo,&localAntennaInfo]()
-                                          {
-                                            Strings strings;
-
-                                            strings.push_back("remote antenna");
-                                            strings.splice(strings.end(),PositionNEUFormatter(remoteAntennaInfo.first.placement_)());
-
-                                            strings.push_back("local antenna");
-                                            strings.splice(strings.end(),PositionNEUFormatter(localAntennaInfo.first.placement_)());
-
-                                            return strings;
-                                          },
-                                          "PHYI %03hu GainManager::%s remote calc tx antenna gain: %lf tx antenna"
-                                          " blockage: %lf direction az: %lf el: %lf dist: %lf remote antenna az: %lf el: %lf"
-                                          " lookup bearing: %lf lookup el: %lf",
-                                          id_,
-                                          __func__,
-                                          dTxAntennaGaindBi,
-                                          dTxAntennaBlockagedBi,
-                                          std::get<0>(direction),
-                                          std::get<1>(direction),
-                                          std::get<2>(direction),
-                                          remotePointing.first.getAzimuthDegrees(),
-                                          remotePointing.first.getElevationDegrees(),
-                                          lookupAngles.first,
-                                          lookupAngles.second);
-
-          dRemoteAntennaGaindBi = dTxAntennaGaindBi + dTxAntennaBlockagedBi;
-
-        }
-      else
-        {
-          // profile info is missing
-          return std::make_tuple(0,0,GainStatus::ERROR_PROFILEINFO,false);
-        }
-    }
-  else
-    {
-      dRemoteAntennaGaindBi = remoteAntenna.getFixedGaindBi().first;
-    }
-
-  const auto & localPointing = localAntenna.getPointing();
-
-  if(!localAntenna.isIdealOmni())
-    {
-      if(!locationPairInfo.isValid())
-        {
-          return std::make_tuple(0,0,GainStatus::ERROR_LOCATIONINFO,false);
-        }
-
-      // we have the profile info w/ pattern info
-      if(localPointing.second && localAntennaInfo.first.pPattern_)
-        {
-          // calculate the direction: azimuth, elvation and distance
-          auto direction =
-            Utils::calculateDirection(locationPairInfo.getLocalPOV(),
-                                      localAntennaInfo.first.placement_,
-                                      locationPairInfo.getRemotePOV(),
-                                      remoteAntennaInfo.first.placement_);
-
-          // adjust the direction azimuth and elevation based on the antenna pointing azimuth and elvation
-          auto lookupAngles =
-            Utils::calculateLookupAngles(std::get<0>(direction),
-                                         localPointing.first.getAzimuthDegrees(),
-                                         std::get<1>(direction),
-                                         localPointing.first.getElevationDegrees());
-
-          // get the local receiver antenna gain
-          double dRxAntennaGaindBi{localAntennaInfo.first.pPattern_->getGain(std::round(lookupAngles.first),
-                                                                             std::round(lookupAngles.second))};
-
-          // get the blockage, if specified
-          //  Note: no adjustment is necessary to the direction azimuth and elvation
-          double dRxAntennaBlockagedBi{localAntennaInfo.first.pBlockage_ ?
-            localAntennaInfo.first.pBlockage_->getGain(std::round(std::get<0>(direction)),
-                                                       std::round(std::get<1>(direction))) :
-            0};
-
-          LOGGER_VERBOSE_LOGGING_FN_VARGS(*LogServiceSingleton::instance(),
-                                          DEBUG_LEVEL,
-                                          [this,&remoteAntennaInfo,&localAntennaInfo]()
-                                          {
-                                            Strings strings;
-
-                                            strings.push_back("local antenna");
-                                            strings.splice(strings.end(),PositionNEUFormatter(localAntennaInfo.first.placement_)());
-
-                                            strings.push_back("remote antenna");
-                                            strings.splice(strings.end(),PositionNEUFormatter(remoteAntennaInfo.first.placement_)());
-
-                                            return strings;
-                                          },
-                                          "PHYI %03hu GainManager::%s local calc rx antenna gain: %lf rx antenna"
-                                          " blockage: %lf direction az: %lf el: %lf dist: %lf local antenna az: %lf el: %lf"
-                                          " lookup bearing: %lf lookup el: %lf",
-                                          id_,
-                                          __func__,
-                                          dRxAntennaGaindBi,
-                                          dRxAntennaBlockagedBi,
-                                          std::get<0>(direction),
-                                          std::get<1>(direction),
-                                          std::get<2>(direction),
-                                          localPointing.first.getAzimuthDegrees(),
-                                          localPointing.first.getElevationDegrees(),
-                                          lookupAngles.first,
-                                          lookupAngles.second);
-
-          dLocalAntennaGaindBi = dRxAntennaGaindBi + dRxAntennaBlockagedBi;
-        }
-      else
-        {
-          // profile info is missing
-          return std::make_tuple(0,0,GainStatus::ERROR_PROFILEINFO,false);
-        }
-    }
-  else
-    {
-      dLocalAntennaGaindBi = localAntenna.getFixedGaindBi().first;
-    }
-
-  const auto & localPosition = locationPairInfo.getLocalPOV().getPosition();
-  const auto & remotePosition = locationPairInfo.getRemotePOV().getPosition();
-  double dDistanceMeters{locationPairInfo.getDistanceMeters()};
-
-  // check if antennas are below the horizon
-  if(locationPairInfo.isValid() &&
-     dDistanceMeters > 10 &&
-     Utils::checkHorizon(localPosition.getAltitudeMeters() +
-                         localAntennaInfo.first.placement_.getUpMeters(),
-                         remotePosition.getAltitudeMeters() +
-                         remoteAntennaInfo.first.placement_.getUpMeters(),
-                         dDistanceMeters) == false)
-    {
-      // below horizon
-      return std::make_tuple(0,0,GainStatus::ERROR_HORIZON,false);
-    }
-  else
-    {
-      setGainCache(transmitterId,
-                   remoteAntennaInfo.first,
-                   locationPairInfo,
-                   dRemoteAntennaGaindBi,
-                   dLocalAntennaGaindBi);
-
-      LOGGER_VERBOSE_LOGGING(*LogServiceSingleton::instance(),
-                             DEBUG_LEVEL,
-                             "PHYI %03hu GainManager::%s tx antenna index: %hu"
-                             " rx antenna index: %hu tx gain: %lf rx gain: %lf",
-                             id_,
-                             __func__,
-                             remoteAntenna.getIndex(),
-                             rxAntennaIndex_,
-                             dRemoteAntennaGaindBi,
-                             dLocalAntennaGaindBi);
-    }
-
-  return std::make_tuple(dRemoteAntennaGaindBi,dLocalAntennaGaindBi,GainStatus::SUCCESS,false);
-}
-
-EMANE::GainManager::~GainManager() {
-  if(rs_ptr_) emane_rs_gain_manager_destroy(rs_ptr_);
+    auto res = emane_rs_gain_manager_determine_gain(rs_ptr_, transmitterId, txAntennaIndex, &locationPairInfo);
+    return std::make_tuple(res.remote_gain, res.local_gain, static_cast<GainStatus>(res.status), res.is_cache);
 }

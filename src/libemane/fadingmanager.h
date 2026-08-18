@@ -43,10 +43,14 @@
 #include <map>
 #include <memory>
 
+extern "C" {
+  struct emane_rs_fadingmanager;
+  struct emane_rs_fadingalgorithmstore;
+}
+
 namespace EMANE
 {
-  using FadingAlgorithmStore = std::map<Events::FadingModel,
-                                        std::unique_ptr<FadingAlgorithm>>;
+  using FadingAlgorithmStore = emane_rs_fadingalgorithmstore*;
 
   using FadingInfo = std::pair<Events::FadingModel,const void *>;
 
@@ -56,6 +60,7 @@ namespace EMANE
     FadingManager(NEMId id,
                   PlatformServiceProvider * pPlatformService,
                   const std::string & sPrefix);
+    ~FadingManager();
 
     void initialize(Registrar & registrar);
 
@@ -85,20 +90,9 @@ namespace EMANE
     NEMId id_;
     PlatformServiceProvider * pPlatformService_;
     std::string sPrefix_;
-    using FadingAlgorithmManagers = std::map<std::string,
-                                             std::unique_ptr<FadingAlgorithmManager>>;
+    emane_rs_fadingmanager* pRustFadingManager_;
 
-    using TxNEMFadingSelections = std::map<NEMId,
-                                           std::pair<Events::FadingModel,
-                                                     FadingAlgorithmManager *>>;
-
-    TxNEMFadingSelections TxNEMFadingSelections_;
-    bool bFading_;
-    FadingAlgorithmManagers fadingAlgorithmManagers_;
-    FadingAlgorithmManager * pFadingAlgorithmManagerForAll_;
-
-    void configure_i(const ConfigurationUpdate & update,
-                     void (FadingAlgorithmManager::*)(const ConfigurationUpdate&));
+    void configure_i(const ConfigurationUpdate & update);
   };
 };
 

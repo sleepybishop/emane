@@ -199,3 +199,4 @@ pub mod fading_manager;
 pub mod nem_ota_adapter;
 pub mod boundary_message_manager;
 pub mod spectrum_monitor;
+pub mod receive_processor;

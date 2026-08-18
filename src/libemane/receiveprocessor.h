@@ -50,6 +50,7 @@ namespace EMANE
   class ReceiveProcessor
   {
   public:
+    ~ReceiveProcessor();
     ReceiveProcessor(NEMId id,
                      std::uint16_t u16SubId,
                      AntennaIndex rxAntennaIndex,
@@ -148,18 +149,9 @@ namespace EMANE
                             const Controls::AntennaSelfInterferences & antennaInterferences,
                             const std::pair<FilterData,bool> & optionalFilterData);
 
+
   private:
-    NEMId id_;
-    std::uint16_t u16SubId_;
-    AntennaIndex rxAntennaIndex_;
-    GainManager gainManager_;
-    SpectrumMonitor * pSpectrumMonitor_;
-    PropagationModelAlgorithm * pPropagationModelAlgorithm_;
-    FadingAlgorithmStore fadingAlgorithmStore_;
-    bool bPopulateReceivePowerMap_;
-    bool bPopulateObservedPowerMap_;
-    std::uint64_t u64SpectrumMonitorUpdateSequence_;
-    bool bDopplerShift_;
+    void* rs_ptr_;
   };
 }
 
