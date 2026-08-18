@@ -1,4 +1,3 @@
-#include <cstdint>
 /*
  * Copyright (c) 2020 - Adjacent Link LLC, Bridgewater, New Jersey
  * All rights reserved.
@@ -32,23 +31,57 @@
  */
 
 #include "emane/controls/spectrumfilterdatacontrolmessage.h"
+#include <cstdint>
+
+extern "C" {
+  void* emane_rs_controls_spectrum_filter_data_create(const uint8_t* data, size_t len);
+  void* emane_rs_controls_spectrum_filter_data_clone(const void* ptr);
+  void emane_rs_controls_spectrum_filter_data_destroy(void* ptr);
+  const uint8_t* emane_rs_controls_spectrum_filter_data_get_filter_data(const void* ptr, size_t* len);
+}
 
 class EMANE::Controls::SpectrumFilterDataControlMessage::Implementation
 {
 public:
-  Implementation(const FilterData & filterData):
-    filterData_{filterData}{}
+  Implementation(const FilterData & filterData)
+  {
+    pImpl_ = emane_rs_controls_spectrum_filter_data_create(
+      reinterpret_cast<const uint8_t*>(filterData.data()),
+      filterData.size()
+    );
+    filterDataCached_ = false;
+  }
 
-  Implementation(const Implementation & impl):
-    filterData_{impl.filterData_}{}
+  Implementation(const Implementation & impl)
+  {
+    pImpl_ = emane_rs_controls_spectrum_filter_data_clone(impl.pImpl_);
+    filterDataCached_ = false;
+  }
+
+  ~Implementation()
+  {
+    emane_rs_controls_spectrum_filter_data_destroy(pImpl_);
+  }
 
   const FilterData & getFilterData() const
   {
+    if(!filterDataCached_)
+      {
+        size_t len = 0;
+        const uint8_t* data = emane_rs_controls_spectrum_filter_data_get_filter_data(pImpl_, &len);
+        if(data && len > 0)
+          {
+            filterData_.assign(reinterpret_cast<const char*>(data), len);
+          }
+        filterDataCached_ = true;
+      }
     return filterData_;
   }
 
 private:
-  FilterData filterData_;
+  void* pImpl_;
+  mutable FilterData filterData_;
+  mutable bool filterDataCached_;
 };
 
 EMANE::Controls::SpectrumFilterDataControlMessage::

@@ -33,6 +33,37 @@
 
 #include "emane/controls/spectrumfilteraddcontrolmessage.h"
 
+extern "C" {
+  void * emane_spectrum_filter_add_control_message_create(std::uint16_t filter_index,
+                                                          std::uint8_t antenna_index,
+                                                          std::uint64_t frequency_hz,
+                                                          std::uint64_t bandwidth_hz,
+                                                          std::uint64_t sub_band_bin_size_hz,
+                                                          void * filter_match_criterion);
+
+  void * emane_spectrum_filter_add_control_message_clone(const void * msg);
+  void emane_spectrum_filter_add_control_message_destroy(void * msg);
+
+  std::uint16_t emane_spectrum_filter_add_control_message_get_filter_index(const void * msg);
+  std::uint8_t emane_spectrum_filter_add_control_message_get_antenna_index(const void * msg);
+  std::uint64_t emane_spectrum_filter_add_control_message_get_frequency_hz(const void * msg);
+  std::uint64_t emane_spectrum_filter_add_control_message_get_bandwidth_hz(const void * msg);
+  std::uint64_t emane_spectrum_filter_add_control_message_get_sub_band_bin_size_hz(const void * msg);
+  const void * emane_spectrum_filter_add_control_message_get_filter_match_criterion(const void * msg);
+
+  void * emane_filter_match_criterion_clone(const void * ptr) {
+    if (!ptr) return nullptr;
+    const EMANE::FilterMatchCriterion * criterion = static_cast<const EMANE::FilterMatchCriterion*>(ptr);
+    return criterion->clone();
+  }
+
+  void emane_filter_match_criterion_destroy(void * ptr) {
+    if (ptr) {
+      delete static_cast<const EMANE::FilterMatchCriterion*>(ptr);
+    }
+  }
+}
+
 class EMANE::Controls::SpectrumFilterAddControlMessage::Implementation
 {
 public:
@@ -42,58 +73,58 @@ public:
                  std::uint64_t u64BandwidthHz,
                  std::uint64_t u64SubBandBinSizeHz,
                  const FilterMatchCriterion * pFilterMatchCriterion):
-    filterIndex_{filterIndex},
-    antennaIndex_{antennaIndex},
-    u64FrequencyHz_{u64FrequencyHz},
-    u64BandwidthHz_{u64BandwidthHz},
-    u64SubBandBinSizeHz_{u64SubBandBinSizeHz},
-    pFilterMatchCriterion_{pFilterMatchCriterion}{}
+    rust_obj_{emane_spectrum_filter_add_control_message_create(
+        filterIndex,
+        antennaIndex,
+        u64FrequencyHz,
+        u64BandwidthHz,
+        u64SubBandBinSizeHz,
+        const_cast<void*>(static_cast<const void*>(pFilterMatchCriterion))
+    )}
+  {}
 
   Implementation(const Implementation & impl):
-    filterIndex_{impl.filterIndex_},
-    antennaIndex_{impl.antennaIndex_},
-    u64FrequencyHz_{impl.u64FrequencyHz_},
-    u64BandwidthHz_{impl.u64BandwidthHz_},
-    u64SubBandBinSizeHz_{impl.u64SubBandBinSizeHz_},
-    pFilterMatchCriterion_{impl.pFilterMatchCriterion_->clone()}{}
+    rust_obj_{emane_spectrum_filter_add_control_message_clone(impl.rust_obj_)}
+  {}
+
+  ~Implementation()
+  {
+    emane_spectrum_filter_add_control_message_destroy(rust_obj_);
+  }
 
   FilterIndex getFilterIndex() const
   {
-    return filterIndex_;
+    return emane_spectrum_filter_add_control_message_get_filter_index(rust_obj_);
   }
 
   AntennaIndex getAntennaIndex() const
   {
-    return antennaIndex_;
+    return emane_spectrum_filter_add_control_message_get_antenna_index(rust_obj_);
   }
 
   std::uint64_t getBandwidthHz() const
   {
-    return u64BandwidthHz_;
+    return emane_spectrum_filter_add_control_message_get_bandwidth_hz(rust_obj_);
   }
 
   std::uint64_t getFrequencyHz() const
   {
-    return u64FrequencyHz_;
+    return emane_spectrum_filter_add_control_message_get_frequency_hz(rust_obj_);
   }
 
   std::size_t getSubBandBinSizeHz() const
   {
-    return u64SubBandBinSizeHz_;
+    return emane_spectrum_filter_add_control_message_get_sub_band_bin_size_hz(rust_obj_);
   }
 
   const FilterMatchCriterion * getFilterMatchCriterion() const
   {
-    return pFilterMatchCriterion_.get();
+    return static_cast<const FilterMatchCriterion *>(
+        emane_spectrum_filter_add_control_message_get_filter_match_criterion(rust_obj_));
   }
 
 private:
-  const FilterIndex filterIndex_;
-  const AntennaIndex antennaIndex_;
-  const std::uint64_t u64FrequencyHz_;
-  const std::uint64_t u64BandwidthHz_;
-  const std::uint64_t u64SubBandBinSizeHz_;
-  std::unique_ptr<const FilterMatchCriterion> pFilterMatchCriterion_;
+  void * rust_obj_;
 };
 
 EMANE::Controls::SpectrumFilterAddControlMessage::

@@ -35,27 +35,69 @@
 #include "emane/controls/r2riqueuemetriccontrolmessage.h"
 #include "radiotorouter.pb.h"
 
+extern "C" {
+    void* emane_rs_controls_r2ri_queue_metric_create();
+    void emane_rs_controls_r2ri_queue_metric_add_metric(void* ptr, uint32_t queue_id, uint32_t max_size, uint32_t current_depth, uint32_t num_discards, uint64_t avg_delay_microsec);
+    void* emane_rs_controls_r2ri_queue_metric_clone(const void* ptr);
+    void emane_rs_controls_r2ri_queue_metric_destroy(void* ptr);
+}
+
 class EMANE::Controls::R2RIQueueMetricControlMessage::Implementation
 {
 public:
-  Implementation(){}
+  Implementation(): queueMetrics_{}
+  {
+    pRsMsg_ = emane_rs_controls_r2ri_queue_metric_create();
+  }
 
   Implementation(const R2RIQueueMetrics & queueMetrics):
-    queueMetrics_{queueMetrics}{}
+    queueMetrics_{queueMetrics}
+  {
+    init_rust();
+  }
+
+  Implementation(const Implementation& other) :
+    queueMetrics_{other.queueMetrics_}
+  {
+    pRsMsg_ = emane_rs_controls_r2ri_queue_metric_clone(other.pRsMsg_);
+  }
+
+  ~Implementation() {
+    emane_rs_controls_r2ri_queue_metric_destroy(pRsMsg_);
+  }
 
   const R2RIQueueMetrics & getQueueMetrics() const
   {
     return queueMetrics_;
   }
 
+  Implementation* clone() const {
+    return new Implementation(*this);
+  }
+
 private:
+  void init_rust() {
+    pRsMsg_ = emane_rs_controls_r2ri_queue_metric_create();
+    for(const auto& m : queueMetrics_) {
+      emane_rs_controls_r2ri_queue_metric_add_metric(
+          pRsMsg_, 
+          m.getQueueId(), 
+          m.getMaxSize(), 
+          m.getCurrentDepth(), 
+          m.getNumDiscards(), 
+          static_cast<std::uint64_t>(m.getAvgDelay().count())
+      );
+    }
+  }
+
+  void* pRsMsg_;
   const R2RIQueueMetrics queueMetrics_;
 };
 
 EMANE::Controls::R2RIQueueMetricControlMessage::
 R2RIQueueMetricControlMessage(const R2RIQueueMetricControlMessage & msg):
   ControlMessage{IDENTIFIER},
-  pImpl_{new Implementation{*msg.pImpl_}}
+  pImpl_{msg.pImpl_->clone()}
 {}
 
 EMANE::Controls::R2RIQueueMetricControlMessage::~R2RIQueueMetricControlMessage(){}

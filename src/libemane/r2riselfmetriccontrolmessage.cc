@@ -35,6 +35,12 @@
 #include "emane/controls/r2riselfmetriccontrolmessage.h"
 #include "radiotorouter.pb.h"
 
+extern "C" {
+    void* emane_rs_controls_r2ri_self_metric_create(uint64_t broadcast_data_rate_bps, uint64_t max_data_rate_bps, int64_t report_interval_micros);
+    void* emane_rs_controls_r2ri_self_metric_clone(const void* ptr);
+    void emane_rs_controls_r2ri_self_metric_destroy(void* ptr);
+}
+
 class EMANE::Controls::R2RISelfMetricControlMessage::Implementation
 {
 public:
@@ -42,14 +48,36 @@ public:
   Implementation():
     u64BroadcastDataRatebps_{},
     u64MaxDataRatebps_{},
-    reportInteral_{Microseconds::zero()}{}
+    reportInteral_{Microseconds::zero()}
+  {
+      pRsMsg_ = emane_rs_controls_r2ri_self_metric_create(0, 0, 0);
+  }
 
   Implementation(std::uint64_t u64BroadcastDataRatebps,
                  std::uint64_t u64MaxDataRatebps,
                  const Microseconds & reportInteral):
     u64BroadcastDataRatebps_{u64BroadcastDataRatebps},
     u64MaxDataRatebps_{u64MaxDataRatebps},
-    reportInteral_{reportInteral}{}
+    reportInteral_{reportInteral}
+  {
+      pRsMsg_ = emane_rs_controls_r2ri_self_metric_create(
+          u64BroadcastDataRatebps_,
+          u64MaxDataRatebps_,
+          reportInteral_.count()
+      );
+  }
+
+  Implementation(const Implementation& other) :
+    u64BroadcastDataRatebps_{other.u64BroadcastDataRatebps_},
+    u64MaxDataRatebps_{other.u64MaxDataRatebps_},
+    reportInteral_{other.reportInteral_}
+  {
+      pRsMsg_ = emane_rs_controls_r2ri_self_metric_clone(other.pRsMsg_);
+  }
+
+  ~Implementation() {
+      emane_rs_controls_r2ri_self_metric_destroy(pRsMsg_);
+  }
 
   std::uint64_t getBroadcastDataRatebps() const
   {
@@ -66,7 +94,12 @@ public:
     return reportInteral_;
   }
 
+  Implementation* clone() const {
+      return new Implementation(*this);
+  }
+
 private:
+  void* pRsMsg_;
   const std::uint64_t u64BroadcastDataRatebps_;
   const std::uint64_t u64MaxDataRatebps_;
   const Microseconds reportInteral_;
@@ -75,7 +108,7 @@ private:
 EMANE::Controls::R2RISelfMetricControlMessage::
 R2RISelfMetricControlMessage(const R2RISelfMetricControlMessage & msg):
   ControlMessage{IDENTIFIER},
-  pImpl_{new Implementation{*msg.pImpl_}}
+  pImpl_{msg.pImpl_->clone()}
 {}
 
 EMANE::Controls::R2RISelfMetricControlMessage::

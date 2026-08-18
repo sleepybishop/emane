@@ -1,4 +1,3 @@
-#include <cstdint>
 /*
  * Copyright (c) 2014 - Adjacent Link LLC, Bridgewater, New Jersey
  * All rights reserved.
@@ -31,7 +30,15 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <cstdint>
 #include "emane/controls/frequencyofinterestcontrolmessage.h"
+
+extern "C" {
+    void* emane_rs_controls_foi_create(uint64_t bandwidth_hz);
+    void emane_rs_controls_foi_add_frequency(void* ptr, uint64_t freq);
+    void* emane_rs_controls_foi_clone(const void* ptr);
+    void emane_rs_controls_foi_destroy(void* ptr);
+}
 
 class EMANE::Controls::FrequencyOfInterestControlMessage::Implementation
 {
@@ -39,7 +46,21 @@ public:
   Implementation(std::uint64_t u64BandwidthHz,
                  const FrequencySet & frequencySet):
     u64BandwidthHz_{u64BandwidthHz},
-    frequencySet_{frequencySet}{}
+    frequencySet_{frequencySet}
+  {
+      init_rust();
+  }
+
+  Implementation(const Implementation& other) :
+    u64BandwidthHz_{other.u64BandwidthHz_},
+    frequencySet_{other.frequencySet_}
+  {
+      pRsMsg_ = emane_rs_controls_foi_clone(other.pRsMsg_);
+  }
+
+  ~Implementation() {
+      emane_rs_controls_foi_destroy(pRsMsg_);
+  }
 
   std::uint64_t getBandwidthHz() const
   {
@@ -50,8 +71,20 @@ public:
   {
     return frequencySet_;
   }
+
+  Implementation* clone() const {
+      return new Implementation(*this);
+  }
   
 private:
+  void init_rust() {
+      pRsMsg_ = emane_rs_controls_foi_create(u64BandwidthHz_);
+      for (auto freq : frequencySet_) {
+          emane_rs_controls_foi_add_frequency(pRsMsg_, freq);
+      }
+  }
+
+  void* pRsMsg_;
   const std::uint64_t u64BandwidthHz_;
   const FrequencySet frequencySet_;
 };
@@ -59,7 +92,7 @@ private:
 EMANE::Controls::FrequencyOfInterestControlMessage::
 FrequencyOfInterestControlMessage(const FrequencyOfInterestControlMessage & msg):
   ControlMessage{IDENTIFIER},
-  pImpl_{new Implementation{*msg.pImpl_}}
+  pImpl_{msg.pImpl_->clone()}
 {}
 
 EMANE::Controls::FrequencyOfInterestControlMessage::

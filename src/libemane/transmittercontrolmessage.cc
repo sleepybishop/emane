@@ -33,25 +33,57 @@
 
 #include "emane/controls/transmittercontrolmessage.h"
 
+extern "C" {
+    void* emane_rs_controls_transmitter_create();
+    void emane_rs_controls_transmitter_add(void* ptr, uint16_t nem_id, double power_dbm);
+    void* emane_rs_controls_transmitter_clone(const void* ptr);
+    void emane_rs_controls_transmitter_destroy(void* ptr);
+}
+
 class EMANE::Controls::TransmitterControlMessage::Implementation
 {
 public:
   Implementation(const Transmitters & transmitters):
-    transmitters_{transmitters}{}
+    transmitters_{transmitters}
+  {
+      init_rust();
+  }
   
+  Implementation(const Implementation& other) :
+    transmitters_{other.transmitters_}
+  {
+      pRsMsg_ = emane_rs_controls_transmitter_clone(other.pRsMsg_);
+  }
+
+  ~Implementation() {
+      emane_rs_controls_transmitter_destroy(pRsMsg_);
+  }
+
   const Transmitters & getTransmitters() const
   {
     return transmitters_;
   }
   
+  Implementation* clone() const {
+      return new Implementation(*this);
+  }
+
 private:
+  void init_rust() {
+      pRsMsg_ = emane_rs_controls_transmitter_create();
+      for(const auto& t : transmitters_) {
+          emane_rs_controls_transmitter_add(pRsMsg_, t.getNEMId(), t.getPowerdBm());
+      }
+  }
+
+  void* pRsMsg_;
   const Transmitters transmitters_;
 };
 
 EMANE::Controls::TransmitterControlMessage::
 TransmitterControlMessage(const TransmitterControlMessage & msg):
   ControlMessage{IDENTIFIER},
-  pImpl_{new Implementation{*msg.pImpl_}}
+  pImpl_{msg.pImpl_->clone()}
 {}
 
 EMANE::Controls::TransmitterControlMessage::TransmitterControlMessage(const Transmitters & transmitters):

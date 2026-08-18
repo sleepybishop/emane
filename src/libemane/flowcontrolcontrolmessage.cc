@@ -3,57 +3,54 @@
  * Copyright (c) 2013-2014,2016 - Adjacent Link LLC, Bridgewater,
  * New Jersey
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "emane/controls/flowcontrolcontrolmessage.h"
 #include "flowcontrol.pb.h"
 
+extern "C" {
+    void* emane_rs_controls_flow_control_create(uint16_t tokens);
+    void* emane_rs_controls_flow_control_clone(const void* ptr);
+    void emane_rs_controls_flow_control_destroy(void* ptr);
+}
+
 class EMANE::Controls::FlowControlControlMessage::Implementation
 {
 public:
   Implementation(std::uint16_t u16Tokens):
-    u16Tokens_{u16Tokens}{}
+    u16Tokens_{u16Tokens}
+  {
+      pRsMsg_ = emane_rs_controls_flow_control_create(u16Tokens_);
+  }
+
+  Implementation(const Implementation& other) :
+    u16Tokens_{other.u16Tokens_}
+  {
+      pRsMsg_ = emane_rs_controls_flow_control_clone(other.pRsMsg_);
+  }
+
+  ~Implementation() {
+      emane_rs_controls_flow_control_destroy(pRsMsg_);
+  }
 
   std::uint16_t getTokens() const
   {
     return u16Tokens_;
   }
 
+  Implementation* clone() const {
+      return new Implementation(*this);
+  }
+
 private:
+  void* pRsMsg_;
   const std::uint16_t u16Tokens_;
 };
 
 EMANE::Controls::FlowControlControlMessage::
 FlowControlControlMessage(const FlowControlControlMessage & msg):
   ControlMessage{IDENTIFIER},
-  pImpl_{new Implementation{*msg.pImpl_}}
+  pImpl_{msg.pImpl_->clone()}
 {}
 
 EMANE::Controls::FlowControlControlMessage::FlowControlControlMessage(std::uint16_t u16Tokens):

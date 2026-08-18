@@ -33,19 +33,54 @@
 
 #include "emane/controls/rxantennaaddcontrolmessage.h"
 
+extern "C" {
+    void* emane_rs_controls_rx_antenna_add_create(
+        uint16_t antenna_index,
+        double fixed_gain_dbi,
+        uint16_t pointing_profile_id,
+        double pointing_azimuth,
+        double pointing_elevation,
+        bool pointing_is_valid,
+        bool is_ideal_omni,
+        bool is_profile_defined,
+        uint16_t frequency_group_index,
+        uint64_t bandwidth_hz,
+        uint16_t spectral_mask_index
+    );
+    void emane_rs_controls_rx_antenna_add_add_frequency(void* ptr, uint64_t frequency_hz);
+    void* emane_rs_controls_rx_antenna_add_clone(const void* ptr);
+    void emane_rs_controls_rx_antenna_add_destroy(void* ptr);
+}
+
 class EMANE::Controls::RxAntennaAddControlMessage::Implementation
 {
 public:
   Implementation(const Antenna & antenna,
                  const FrequencySet & frequencyOfInterestSet):
     antenna_{antenna},
-    frequencyOfInterestSet_{frequencyOfInterestSet}{}
+    frequencyOfInterestSet_{frequencyOfInterestSet}
+  {
+      init_rust();
+  }
 
   Implementation(const Antenna & antenna,
                  FrequencySet && frequencyOfInterestSet):
     antenna_{antenna},
-    frequencyOfInterestSet_{std::move(frequencyOfInterestSet)}{}
+    frequencyOfInterestSet_{std::move(frequencyOfInterestSet)}
+  {
+      init_rust();
+  }
 
+  Implementation(const Implementation& other) :
+    antenna_{other.antenna_},
+    frequencyOfInterestSet_{other.frequencyOfInterestSet_}
+  {
+      pRsMsg_ = emane_rs_controls_rx_antenna_add_clone(other.pRsMsg_);
+  }
+
+  ~Implementation() {
+      emane_rs_controls_rx_antenna_add_destroy(pRsMsg_);
+  }
 
   const Antenna & getAntenna() const
   {
@@ -57,7 +92,43 @@ public:
     return frequencyOfInterestSet_;
   }
 
+  Implementation* clone() const {
+      return new Implementation(*this);
+  }
+
 private:
+  void init_rust() {
+      bool is_ideal_omni = antenna_.isIdealOmni();
+      bool is_profile_defined = antenna_.isProfileDefined();
+      double fixed_gain = antenna_.getFixedGaindBi().first;
+
+      auto pointing_pair = antenna_.getPointing();
+      const auto & pointing = pointing_pair.first;
+      bool pointing_is_valid = pointing.isValid();
+      uint16_t profile_id = pointing.getProfileId();
+      double az = pointing.getAzimuthDegrees();
+      double el = pointing.getElevationDegrees();
+
+      pRsMsg_ = emane_rs_controls_rx_antenna_add_create(
+          antenna_.getIndex(),
+          fixed_gain,
+          profile_id,
+          az,
+          el,
+          pointing_is_valid,
+          is_ideal_omni,
+          is_profile_defined,
+          antenna_.getFrequencyGroupIndex(),
+          antenna_.getBandwidthHz(),
+          antenna_.getSpectralMaskIndex()
+      );
+
+      for(auto freq : frequencyOfInterestSet_) {
+          emane_rs_controls_rx_antenna_add_add_frequency(pRsMsg_, freq);
+      }
+  }
+
+  void* pRsMsg_;
   const Antenna antenna_;
   const FrequencySet frequencyOfInterestSet_;
 };
@@ -65,7 +136,7 @@ private:
 EMANE::Controls::RxAntennaAddControlMessage::
 RxAntennaAddControlMessage(const RxAntennaAddControlMessage & msg):
   ControlMessage{IDENTIFIER},
-  pImpl_{msg.pImpl_}
+  pImpl_{msg.pImpl_->clone()}
 {}
 
 EMANE::Controls::RxAntennaAddControlMessage::RxAntennaAddControlMessage(const Antenna & antenna,

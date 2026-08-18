@@ -34,13 +34,39 @@
 
 #include "emane/controls/frequencycontrolmessage.h"
 
+extern "C" {
+    void* emane_rs_controls_freq_create(uint64_t bandwidth_hz);
+    void emane_rs_controls_freq_add_segment(void* ptr, uint64_t freq, double power, uint64_t duration, uint64_t offset);
+    void* emane_rs_controls_freq_clone(const void* ptr);
+    void emane_rs_controls_freq_destroy(void* ptr);
+}
+
 class EMANE::Controls::FrequencyControlMessage::Implementation
 {
 public:
   Implementation(std::uint64_t u64BandwidthHz,
                  const FrequencySegments & frequencySegments):
     u64BandwidthHz_{u64BandwidthHz},
-    frequencySegments_{frequencySegments}{}
+    frequencySegments_{frequencySegments}
+  {
+      pRsMsg_ = emane_rs_controls_freq_create(u64BandwidthHz_);
+      for(const auto& seg : frequencySegments_) {
+          emane_rs_controls_freq_add_segment(
+              pRsMsg_, seg.getFrequencyHz(), seg.getRxPowerdBm(), seg.getDuration().count(), seg.getOffset().count()
+          );
+      }
+  }
+
+  Implementation(const Implementation& other) :
+    u64BandwidthHz_{other.u64BandwidthHz_},
+    frequencySegments_{other.frequencySegments_}
+  {
+      pRsMsg_ = emane_rs_controls_freq_clone(other.pRsMsg_);
+  }
+
+  ~Implementation() {
+      emane_rs_controls_freq_destroy(pRsMsg_);
+  }
 
   std::uint64_t getBandwidthHz() const
   {
@@ -53,6 +79,7 @@ public:
   }
 
 private:
+  void* pRsMsg_;
   const std::uint64_t u64BandwidthHz_;
   const FrequencySegments frequencySegments_;
 };
@@ -69,7 +96,6 @@ EMANE::Controls::FrequencyControlMessage::FrequencyControlMessage(std::uint64_t 
   pImpl_{new Implementation{u64BandwidthHz,frequencySegments}}{}
 
 EMANE::Controls::FrequencyControlMessage::~FrequencyControlMessage(){}
-
 
 EMANE::Controls::FrequencyControlMessage *
 EMANE::Controls::FrequencyControlMessage::create(std::uint64_t u64BandwidthHz,

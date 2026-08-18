@@ -33,30 +33,47 @@
 
 #include "emane/controls/serializedcontrolmessage.h"
 
+extern "C" {
+    void* emane_controls_serialized_create(std::uint16_t id, const void* data, size_t length);
+    void emane_controls_serialized_destroy(void* msg);
+    void* emane_controls_serialized_clone(const void* msg);
+    std::uint16_t emane_controls_serialized_get_id(const void* msg);
+    const void* emane_controls_serialized_get_serialization_data(const void* msg);
+    size_t emane_controls_serialized_get_serialization_length(const void* msg);
+}
+
 class EMANE::Controls::SerializedControlMessage::Implementation
 {
 public:
-  Implementation(ControlMessageId id,
-                 const void * pData,
-                 size_t length):
-    serializedId_(id),
-    sSerialization_(reinterpret_cast<const char *>(pData),length){}
+  Implementation(ControlMessageId id, const void * pData, size_t length)
+  {
+    msg_ = emane_controls_serialized_create(id, pData, length);
+  }
+
+  Implementation(const Implementation & other)
+  {
+    msg_ = emane_controls_serialized_clone(other.msg_);
+  }
   
-  ~Implementation(){}
+  ~Implementation()
+  {
+    emane_controls_serialized_destroy(msg_);
+  }
 
   ControlMessageId getSerializedId() const
   {
-    return serializedId_;
+    return emane_controls_serialized_get_id(msg_);
   }
 
   std::string getSerialization() const
   {
-    return sSerialization_;
+    const char * data = reinterpret_cast<const char *>(emane_controls_serialized_get_serialization_data(msg_));
+    size_t len = emane_controls_serialized_get_serialization_length(msg_);
+    return std::string(data, len);
   }
 
 private:
-  const ControlMessageId serializedId_;
-  const std::string sSerialization_;
+  void* msg_;
 };
 
 EMANE::Controls::SerializedControlMessage::

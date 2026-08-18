@@ -34,22 +34,59 @@
 
 #include "emane/controls/otatransmittercontrolmessage.h"
 #include "otatransmitter.pb.h"
+#include <vector>
+
+extern "C" {
+    struct OtaTransmitterControlMessage;
+
+    OtaTransmitterControlMessage* emane_ota_transmitter_control_message_create(const std::uint16_t* nem_ids, size_t num_nem_ids);
+    OtaTransmitterControlMessage* emane_ota_transmitter_control_message_clone(const OtaTransmitterControlMessage* msg);
+    void emane_ota_transmitter_control_message_destroy(OtaTransmitterControlMessage* msg);
+    void emane_ota_transmitter_control_message_get_transmitters(const OtaTransmitterControlMessage* msg, std::uint16_t** out_nem_ids, size_t* out_num_nem_ids);
+    void emane_ota_transmitter_control_message_free_transmitters(std::uint16_t* nem_ids, size_t num_nem_ids);
+}
 
 class EMANE::Controls::OTATransmitterControlMessage::Implementation
 {
 public:
-  Implementation(){}
+  Implementation(const OTATransmitters & otaTransmitters)
+  {
+      std::vector<std::uint16_t> vec(otaTransmitters.begin(), otaTransmitters.end());
+      msg_ = emane_ota_transmitter_control_message_create(vec.data(), vec.size());
+  }
 
-  Implementation(const OTATransmitters & otaTransmitters):
-    otaTransmitters_{otaTransmitters}{}
+  Implementation(const Implementation & impl)
+  {
+      msg_ = emane_ota_transmitter_control_message_clone(impl.msg_);
+  }
+
+  ~Implementation()
+  {
+      emane_ota_transmitter_control_message_destroy(msg_);
+  }
 
   const OTATransmitters & getOTATransmitters() const
   {
-    return otaTransmitters_;
+      if (cachedTransmitters_.empty())
+      {
+          std::uint16_t* ids = nullptr;
+          size_t num = 0;
+          emane_ota_transmitter_control_message_get_transmitters(msg_, &ids, &num);
+          if (ids)
+          {
+              for (size_t i = 0; i < num; ++i)
+              {
+                  cachedTransmitters_.insert(ids[i]);
+              }
+              emane_ota_transmitter_control_message_free_transmitters(ids, num);
+          }
+      }
+      return cachedTransmitters_;
   }
 
 private:
-  const OTATransmitters otaTransmitters_;
+  OtaTransmitterControlMessage* msg_;
+  mutable OTATransmitters cachedTransmitters_;
 };
 
 EMANE::Controls::OTATransmitterControlMessage::
@@ -75,10 +112,7 @@ EMANE::Controls::OTATransmitterControlMessage *
 EMANE::Controls::OTATransmitterControlMessage::create(const Serialization & serialization)
 {
   OTATransmitters otaTransmitters;
-
   EMANEMessage::OTATransmitterControlMessage msg;
-
-  msg.ParseFromString(serialization);
 
   if(!msg.ParseFromString(serialization))
     {
@@ -93,7 +127,6 @@ EMANE::Controls::OTATransmitterControlMessage::create(const Serialization & seri
   return new OTATransmitterControlMessage{otaTransmitters};
 }
 
-
 EMANE::Controls::OTATransmitterControlMessage *
 EMANE::Controls::OTATransmitterControlMessage::create(const OTATransmitters & otaTransmitters)
 {
@@ -103,13 +136,11 @@ EMANE::Controls::OTATransmitterControlMessage::create(const OTATransmitters & ot
 EMANE::Serialization EMANE::Controls::OTATransmitterControlMessage::serialize() const
 {
   Serialization serialization;
-
   EMANEMessage::OTATransmitterControlMessage msg;
 
   const OTATransmitters & otaTransmitters = pImpl_->getOTATransmitters();
 
   OTATransmitters::const_iterator iter = otaTransmitters.begin();
-
   for(; iter != otaTransmitters.end(); ++iter)
     {
       msg.add_nemid(*iter);
@@ -122,7 +153,6 @@ EMANE::Serialization EMANE::Controls::OTATransmitterControlMessage::serialize() 
 
   return serialization;
 }
-
 
 EMANE::Controls::OTATransmitterControlMessage *
 EMANE::Controls::OTATransmitterControlMessage::clone() const
