@@ -2,6 +2,7 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
+pub mod framework_phy;
 pub mod control_port;
 pub mod xml;
 pub mod regex;

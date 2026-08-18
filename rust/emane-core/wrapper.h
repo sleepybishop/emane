@@ -5,3 +5,5 @@
 #include <emane/any.h>
 #include <emane/event.h>
 #include <emane/nemlayer.h>
+#include <emane/commonphyheader.h>
+#include <emane/controls/antennaselfinterference.h>

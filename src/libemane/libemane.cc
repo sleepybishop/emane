@@ -40,12 +40,7 @@
 #include "eventgeneratorfactorymanager.h"
 #include "layerfactorymanager.h"
 #include "logservice.h"
-#include "nemlayerstateconfigured.h"
-#include "nemlayerstatedestroyed.h"
-#include "nemlayerstateinitialized.h"
-#include "nemlayerstaterunning.h"
-#include "nemlayerstatestopped.h"
-#include "nemlayerstateuninitialized.h"
+
 #include "transportfactorymanager.h"
 
 void EMANE::Application::initialize(){}
@@ -60,12 +55,7 @@ void EMANE::Application::shutdown()
   BuildIdServiceSingleton::destroy();
   ConfigurationServiceSingleton::destroy();
 
-  NEMLayerStateConfiguredSingleton::destroy();
-  NEMLayerStateDestroyedSingleton::destroy();
-  NEMLayerStateInitializedSingleton::destroy();
-  NEMLayerStateRunningSingleton::destroy();
-  NEMLayerStateStoppedSingleton::destroy();
-  NEMLayerStateUninitializedSingleton::destroy();
+
 
   LayerFactoryManagerSingleton::destroy();
   TransportFactoryManagerSingleton::destroy();

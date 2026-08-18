@@ -35,7 +35,7 @@
 #define EMANENEMSTATEFULLAYER_HEADER_
 
 #include "emane/nemlayer.h"
-#include "nemlayerstateuninitialized.h"
+
 
 #include <memory>
 

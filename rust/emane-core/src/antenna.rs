@@ -186,7 +186,7 @@ impl AntennaProfileManifest {
 
 static mut MANAGER: Option<AntennaProfileManifest> = None;
 
-fn get_manager() -> &'static mut AntennaProfileManifest {
+pub fn get_manager() -> &'static mut AntennaProfileManifest {
     unsafe {
         if MANAGER.is_none() {
             MANAGER = Some(AntennaProfileManifest::new());

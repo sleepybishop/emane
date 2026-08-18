@@ -19,8 +19,6 @@ emaneinc_HEADERS =                       \
  statistichistogramtable.h               \
  statistichistogramtable.inl             \
  threadutils.h                           \
- timer.h                                 \
- timer.inl                               \
  runningaverage.h                        \
  commonlayerstatistics.h                 \
  vectorio.h                              \

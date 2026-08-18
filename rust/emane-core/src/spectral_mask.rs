@@ -252,7 +252,7 @@ fn db_to_milliwatt(db: f64) -> f64 {
 
 static mut MANAGER: Option<SpectralMaskManager> = None;
 
-fn get_manager() -> &'static mut SpectralMaskManager {
+pub fn get_manager() -> &'static mut SpectralMaskManager {
     unsafe {
         if MANAGER.is_none() {
             MANAGER = Some(SpectralMaskManager::new());

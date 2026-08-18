@@ -47,10 +47,10 @@ struct EmaneLookupAngles {
 
 #[repr(C)]
 pub struct EmaneGainResult {
-    remote_gain: f64,
-    local_gain: f64,
-    status: c_int,
-    is_cache: bool,
+    pub remote_gain: f64,
+    pub local_gain: f64,
+    pub status: c_int,
+    pub is_cache: bool,
 }
 
 struct AntennaInfo {

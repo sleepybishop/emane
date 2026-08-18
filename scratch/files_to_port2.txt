@@ -1,0 +1,11 @@
+src/libemane/frequencyofinterestcontrolmessage.cc
+src/libemane/otatransmittercontrolmessage.cc
+src/libemane/r2rineighbormetriccontrolmessage.cc
+src/libemane/r2riqueuemetriccontrolmessage.cc
+src/libemane/r2riselfmetriccontrolmessage.cc
+src/libemane/rxantennaaddcontrolmessage.cc
+src/libemane/rxantennaupdatecontrolmessage.cc
+src/libemane/serializedcontrolmessage.cc
+src/libemane/spectrumfilteraddcontrolmessage.cc
+src/libemane/spectrumfilterdatacontrolmessage.cc
+src/libemane/transmittercontrolmessage.cc

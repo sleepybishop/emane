@@ -133,13 +133,6 @@ libemane_la_SOURCES =                         \
   nembuilder_c.cc                                \
  nemimpl.cc                                   \
  nemlayerstack.cc                             \
- nemlayerstate.cc                             \
- nemlayerstateconfigured.cc                   \
- nemlayerstatedestroyed.cc                    \
- nemlayerstateinitialized.cc                  \
- nemlayerstaterunning.cc                      \
- nemlayerstatestopped.cc                      \
- nemlayerstateuninitialized.cc                \
  nemmanagerimpl.cc                            \
  nemnetworkadapter.cc                         \
  nemotaadapter.cc                             \
@@ -274,13 +267,6 @@ libemane_la_SOURCES =                         \
  nakagamifadingalgorithmmanager.h             \
  nemimpl.h                                    \
  nemlayerstack.h                              \
- nemlayerstateconfigured.h                    \
- nemlayerstatedestroyed.h                     \
- nemlayerstate.h                              \
- nemlayerstateinitialized.h                   \
- nemlayerstaterunning.h                       \
- nemlayerstatestopped.h                       \
- nemlayerstateuninitialized.h                 \
  nemmanagerimpl.h                             \
  nemnetworkadapter.h                          \
  nemotaadapter.h                              \
