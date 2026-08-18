@@ -116,7 +116,7 @@ pub fn process_downstream_packet(phy: &mut FrameworkPhy, pkt: *mut c_void, msgs:
     unsafe {
         emane_c_framework_phy_downstream_stub_process_outbound(phy.common_layer_statistics, pkt, 0);
         emane_c_framework_phy_downstream_stub_send_downstream_packet(
-            phy as *mut _ as *mut c_void,
+            phy.cpp_this,
             phy_header,
             pkt,
             downstream_control_messages,
@@ -126,7 +126,7 @@ pub fn process_downstream_packet(phy: &mut FrameworkPhy, pkt: *mut c_void, msgs:
     if phy.compatibility_mode == 1 && _d_tx_while_rx_interference_rx_power_milli_watt > 0.0 {
         unsafe {
             emane_c_framework_phy_downstream_stub_process_self_interference(
-                phy as *mut _ as *mut c_void,
+                phy.cpp_this,
                 0, // DEFAULT_ANTENNA_INDEX
                 0, // now
                 _tx_time_stamp,

@@ -33,6 +33,13 @@
  */
 
 #include "frameworkphy.h"
+#include "rust_ffi.h"
+
+extern "C" {
+    void* emane_rs_framework_phy_create(void* cpp_this);
+    void emane_rs_framework_phy_destroy(void* ptr);
+    void emane_rs_framework_phy_process_upstream_packet(void* ptr, const void* hdr, void* pkt, const void* msgs);
+}
 
 #include "emane/commonphyheader.h"
 #include "emane/configureexception.h"
@@ -123,6 +130,7 @@ EMANE::FrameworkPHY::FrameworkPHY(NEMId id,
                                   PlatformServiceProvider * pPlatformService,
                                   SpectrumService * pSpectrumService):
   PHYLayerImplementor{id, pPlatformService},
+  rs_state_{emane_rs_framework_phy_create(this)},
   pSpectrumService_{pSpectrumService},
   antennaManager_{},
   locationManager_{id},
@@ -158,7 +166,7 @@ EMANE::FrameworkPHY::FrameworkPHY(NEMId id,
   spectralMaskIndex_{DEFAULT_SPECTRAL_MASK_INDEX},
   bRadioSilenceEnable_{}{}
 
-EMANE::FrameworkPHY::~FrameworkPHY(){}
+EMANE::FrameworkPHY::~FrameworkPHY() { emane_rs_framework_phy_destroy(rs_state_); }
 
 void EMANE::FrameworkPHY::initialize(Registrar & registrar)
 {
@@ -1793,418 +1801,17 @@ void EMANE::FrameworkPHY::processDownstreamPacket_i(const TimePoint & now,
 
 void EMANE::FrameworkPHY::processUpstreamPacket(const CommonPHYHeader & commonPHYHeader,
                                                 UpstreamPacket & pkt,
-                                                const ControlMessages &)
+                                                const ControlMessages & msgs)
 {
-  processUpstreamPacket_i(Clock::now(),commonPHYHeader,pkt,{});
+  emane_rs_framework_phy_process_upstream_packet(rs_state_, &commonPHYHeader, &pkt, &msgs);
 }
 
-void EMANE::FrameworkPHY::processUpstreamPacket_i(const TimePoint & now,
-                                                  const CommonPHYHeader & commonPHYHeader,
-                                                  UpstreamPacket & pkt,
+void EMANE::FrameworkPHY::processUpstreamPacket_i(const TimePoint &,
+                                                  const CommonPHYHeader &,
+                                                  UpstreamPacket &,
                                                   const ControlMessages &)
 {
-  LOGGER_VERBOSE_LOGGING_FN_VARGS(pPlatformService_->logService(),
-                                  DEBUG_LEVEL,
-                                  std::bind(&CommonPHYHeader::format, std::ref(commonPHYHeader)),
-                                  "PHYI %03hu FrameworkPHY::%s Common PHY Header",
-                                  id_,
-                                  __func__);
-
-  commonLayerStatistics_.processInbound(pkt);
-
-  const  auto & pktInfo = pkt.getPacketInfo();
-
-  bool bInBand{commonPHYHeader.getRegistrationId() == REGISTERED_EMANE_PHY_FRAMEWORK &&
-               u16SubId_ == commonPHYHeader.getSubId()};
-
-  if(compatibilityMode_ == CompatibilityMode::MODE_1)
-    {
-      createDefaultAntennaIfNeeded();
-    }
-  else
-    {
-      if(receiveProcessors_.empty())
-        {
-          commonLayerStatistics_.processOutbound(pkt,
-                                                 std::chrono::duration_cast<Microseconds>(Clock::now() - now),
-                                                 DROP_CODE_MISSING_CONTROL);
-
-          LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
-                                  ERROR_LEVEL,
-                                  "PHYI %03hu FrameworkPHY::%s "
-                                  " src %hu, dst %hu, drop no rx antennas in use",
-                                  id_,
-                                  __func__,
-                                  pktInfo.getSource(),
-                                  pktInfo.getDestination());
-
-          //drop
-          return;
-        }
-    }
-
-  // unless this is an in-band packet, it will only be processed if
-  // noise processing is on
-  if(bInBand || noiseMode_ != NoiseMode::NONE)
-    {
-      Controls::AntennaReceiveInfos antennaReceiveInfos{};
-      Controls::DopplerShifts dopplerShifts{};
-      std::set<TimePoint> mimoSoT{};
-      std::set<Microseconds> mimoPropagationDelay{};
-      std::vector<std::pair<LocationInfo,bool>> locationInfos{};
-      std::vector<std::pair<FadingInfo,bool>> fadingSelections{};
-
-      for(const auto & transmitter : commonPHYHeader.getTransmitters())
-        {
-          locationInfos.push_back(locationManager_.getLocationInfo(transmitter.getNEMId()));
-
-          fadingSelections.push_back(fadingManager_.getFadingSelection(transmitter.getNEMId()));
-
-          for(const auto & txAntenna : commonPHYHeader.getTransmitAntennas())
-            {
-              antennaManager_.update(transmitter.getNEMId(),txAntenna);
-            }
-        }
-
-      // Note: the processing pool, if enabled, is used to process
-      // receive paths per receive antenna. The emane thread/messaging
-      // model uses a functor queue to guarantee the processing of
-      // framework messages (event, upstream packet and/or control,
-      // downstream packet and/or control, running-state
-      // configuration, and timers. No new message processing occurs
-      // until the current message processing is complete. This allows
-      // the processing pool to access internal state without
-      // additional locks. Care must me taken when extending
-      // functionality so no inter-thread communication occurs between
-      // pool threads, otherwise additional locks will be necessary.
-      //
-      // The processing pool can reduce the amount of processing time
-      // for an upstream message that contains a large number of
-      // frequency segments and/or a large number of transmit antenna
-      // (MIMO). Without a processing pool receive paths are
-      // calculated serially in a loop. There is a threshold where
-      // serial processing is faster than the context switching of the
-      // thread pool. Server and scenario benchmarking should be used
-      // to determine whether processing pool usage is appropriate.
-      // Additionally, if the number of cores available to a running
-      // emane process is less than the processing pool size worse
-      // performance may be encountered.
-
-      std::vector<std::future<ReceiveProcessor::ProcessResult>> futures{};
-
-      std::list<ReceiveProcessor::ProcessResult> results{};
-
-      for(auto & receiveProcessorEntry : receiveProcessors_)
-        {
-          auto & pReceiveProcessor = receiveProcessorEntry.second;
-
-          if(processingPool_.isRunning())
-            {
-              futures.push_back(processingPool_.submit(std::bind(&ReceiveProcessor::process,pReceiveProcessor.get(),
-                                                                 std::cref(now),
-                                                                 std::cref(commonPHYHeader),
-                                                                 std::cref(locationInfos),
-                                                                 std::cref(fadingSelections),
-                                                                 bInBand)));
-            }
-          else
-            {
-              results.push_back(pReceiveProcessor->process(now,
-                                                           commonPHYHeader,
-                                                           locationInfos,
-                                                           fadingSelections,
-                                                           bInBand));
-            }
-        }
-
-      // wait for all results
-      if(processingPool_.isRunning())
-        {
-          for(auto & future : futures)
-            {
-              results.push_back(std::move(future.get()));
-            }
-        }
-
-      bool bNotFOI{};
-
-      for(auto & result : results)
-        {
-          if(result.status_ == ReceiveProcessor::ProcessResult::Status::SUCCESS)
-            {
-              if(result.mimoSoT_.time_since_epoch().count() != 0)
-                {
-                  mimoSoT.insert(result.mimoSoT_);
-                  mimoPropagationDelay.insert(result.mimoPropagationDelay_);
-                }
-
-              antennaReceiveInfos.insert(antennaReceiveInfos.end(),
-                                         std::make_move_iterator(result.antennaReceiveInfos_.begin()),
-                                         std::make_move_iterator(result.antennaReceiveInfos_.end()));
-
-              dopplerShifts.insert(std::make_move_iterator(result.dopplerShifts_.begin()),
-                                   std::make_move_iterator(result.dopplerShifts_.end()));
-
-              if(result.bGainCacheHit_)
-                {
-                  ++*pGainCacheHit_;
-                }
-              else
-                {
-                  ++*pGainCacheMiss_;
-                }
-
-              for(const auto & entry : result.receivePowerMap_)
-                {
-                  receivePowerTablePublisher_.update(std::get<0>(entry.first),
-                                                     std::get<1>(entry.first),
-                                                     std::get<2>(entry.first),
-                                                     std::get<3>(entry.first),
-                                                     std::get<0>(entry.second),
-                                                     std::get<1>(entry.second),
-                                                     std::get<2>(entry.second),
-                                                     std::get<3>(entry.second),
-                                                     std::get<4>(entry.second),
-                                                     std::get<5>(entry.second),
-                                                     commonPHYHeader.getTxTime());
-                }
-
-              for(const auto & entry : result.observedPowerMap_)
-                {
-                  observedPowerTablePublisher_.update(std::get<0>(entry.first),
-                                                      std::get<1>(entry.first),
-                                                      std::get<2>(entry.first),
-                                                      std::get<3>(entry.first),
-                                                      std::get<0>(entry.second),
-                                                      std::get<1>(entry.second),
-                                                      commonPHYHeader.getTxTime());
-                }
-            }
-          else
-            {
-              std::string sReason{"unknown"};
-              LogLevel logLevel{DEBUG_LEVEL};
-
-              Microseconds processingDuration{std::chrono::duration_cast<Microseconds>(Clock::now() - now)};
-
-              switch(result.status_)
-                {
-                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_ANTENNA_FREQ_INDEX:
-                  commonLayerStatistics_.processOutbound(pkt,
-                                                         processingDuration,
-                                                         DROP_CODE_ANTENNA_FREQ_INDEX);
-                  sReason = "transmit antenna frequency index invalid";
-                  logLevel = ERROR_LEVEL;
-                  break;
-
-                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_FADINGMANAGER_LOCATION:
-                  commonLayerStatistics_.processOutbound(pkt,
-                                                         processingDuration,
-                                                         DROP_CODE_FADINGMANAGER_LOCATION);
-                  sReason = "FadingManager missing location information";
-                  break;
-
-                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_FADINGMANAGER_ALGORITHM:
-                  commonLayerStatistics_.processOutbound(pkt,
-                                                         processingDuration,
-                                                         DROP_CODE_FADINGMANAGER_ALGORITHM);
-
-                  sReason = "FadingManager unknown algorithm";
-                  logLevel = ERROR_LEVEL;
-                  break;
-
-                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_FADINGMANAGER_SELECTION:
-                  commonLayerStatistics_.processOutbound(pkt,
-                                                         processingDuration,
-                                                         DROP_CODE_FADINGMANAGER_SELECTION);
-
-                  sReason = "FadingManager unknown fading selection for transmitter";
-
-                  break;
-
-                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_GAINMANAGER_LOCATION:
-                  commonLayerStatistics_.processOutbound(pkt,
-                                                         processingDuration,
-                                                         DROP_CODE_GAINMANAGER_LOCATION);
-
-                  sReason = "GainManager missing location information";
-                  break;
-
-                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_GAINMANAGER_ANTENNAPROFILE:
-                  commonLayerStatistics_.processOutbound(pkt,
-                                                         processingDuration,
-                                                         DROP_CODE_GAINMANAGER_ANTENNAPROFILE);
-                  sReason = "GainManager unknown antenna profile";
-                  logLevel = ERROR_LEVEL;
-                  break;
-
-                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_GAINMANAGER_HORIZON:
-                  commonLayerStatistics_.processOutbound(pkt,
-                                                         processingDuration,
-                                                         DROP_CODE_GAINMANAGER_HORIZON);
-                  sReason = "GainManager below horizon";
-                  break;
-
-                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_GAINMANAGER_ANTENNA_INDEX:
-                  commonLayerStatistics_.processOutbound(pkt,
-                                                         processingDuration,
-                                                         DROP_CODE_GAINMANAGER_ANTENNA_INDEX);
-                  sReason = "GainManager unknown antenna index";
-                  logLevel = ERROR_LEVEL;
-                  break;
-
-                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_PROPAGATIONMODEL:
-                  commonLayerStatistics_.processOutbound(pkt,
-                                                         processingDuration,
-                                                         DROP_CODE_PROPAGATIONMODEL);
-                  sReason = "propagation model missing information";
-                  break;
-
-                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_SPECTRUM_CLAMP:
-                  commonLayerStatistics_.processOutbound(pkt,
-                                                         processingDuration,
-                                                         DROP_CODE_SPECTRUM_CLAMP);
-                  sReason = "SpectrumManager detected request range error";
-                  break;
-
-                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_NOT_FOI:
-                  bNotFOI = true;
-                  break;
-
-                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_OUT_OF_BAND:
-                  commonLayerStatistics_.processOutbound(pkt,
-                                                         processingDuration,
-                                                         DROP_CODE_OUT_OF_BAND);
-                  sReason = "out-of-band message, not for this waveform";
-                  break;
-
-                default:
-                  break;
-                }
-
-              if(!bNotFOI)
-                {
-                  LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
-                                          logLevel,
-                                          "PHYI %03hu FrameworkPHY::%s "
-                                          " src %hu, dst %hu, drop %s",
-                                          id_,
-                                          __func__,
-                                          pktInfo.getSource(),
-                                          pktInfo.getDestination(),
-                                          sReason.c_str());
-
-                  // drop
-                  return;
-                }
-            }
-        }
-
-      if(!antennaReceiveInfos.empty())
-        {
-          commonLayerStatistics_.processOutbound(pkt,
-                                                 std::chrono::duration_cast<Microseconds>(Clock::now() - now));
-
-          if(compatibilityMode_ == CompatibilityMode::MODE_1)
-            {
-              const auto & defaultAntennaReceiveInfo = antennaReceiveInfos[0];
-              const auto & firstTxAntenna = commonPHYHeader.getTransmitAntennas()[0];
-
-              /** [physicallayer-sendupstreampacket-snippet] */
-              sendUpstreamPacket(pkt,
-                                 {Controls::FrequencyControlMessage::create(firstTxAntenna.getBandwidthHz(),
-                                                                            defaultAntennaReceiveInfo.getFrequencySegments()),
-                                  Controls::ReceivePropertiesControlMessage::create(*mimoSoT.begin(),
-                                                                                    *mimoPropagationDelay.begin(),
-                                                                                    defaultAntennaReceiveInfo.getSpan(),
-                                                                                    defaultAntennaReceiveInfo.getReceiverSensitivitydBm())});
-              /** [physicallayer-sendupstreampacket-snippet] */
-            }
-          else
-            {
-              sendUpstreamPacket(pkt,
-                                 {Controls::MIMOReceivePropertiesControlMessage::create(*mimoSoT.begin(),
-                                                                                        *mimoPropagationDelay.begin(),
-                                                                                        std::move(antennaReceiveInfos),
-                                                                                        std::move(dopplerShifts))});
-            }
-
-          if(*mimoSoT.begin() != commonPHYHeader.getTxTime())
-            {
-              ++*pTimeSyncThresholdRewrite_;
-            }
-        }
-      else
-        {
-          if(bNotFOI)
-            {
-              commonLayerStatistics_.processOutbound(pkt,
-                                                     std::chrono::duration_cast<Microseconds>(Clock::now() - now),
-                                                     DROP_CODE_NOT_FOI);
-
-              LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
-                                      DEBUG_LEVEL,
-                                      "PHYI %03hu FrameworkPHY::%s"
-                                      " src %hu, dst %hu, drop message"
-                                      " frequency not in frequency of interest list.",
-                                      id_,
-                                      __func__,
-                                      pktInfo.getSource(),
-                                      pktInfo.getDestination());
-            }
-          else
-            {
-              if(bRxSensitivityPromiscuousModeEnable_ && compatibilityMode_ == CompatibilityMode::MODE_2)
-                {
-                  sendUpstreamPacket(pkt);
-                }
-
-              if(*mimoSoT.begin() != commonPHYHeader.getTxTime())
-                {
-                  ++*pTimeSyncThresholdRewrite_;
-                }
-
-              // below rx sensitivy on all antenna
-              commonLayerStatistics_.processOutbound(pkt,
-                                                     std::chrono::duration_cast<Microseconds>(Clock::now() - now),
-                                                     DROP_CODE_RX_SENSITIVITY);
-
-              LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
-                                      DEBUG_LEVEL,
-                                      "PHYI %03hu FrameworkPHY::%s src %hu, dst %hu,"
-                                      " drop below receiver sensitivity",
-                                      id_,
-                                      __func__,
-                                      pktInfo.getSource(),
-                                      pktInfo.getDestination());
-
-            }
-
-          // drop
-          return;
-        }
-
-    }
-  else
-    {
-      commonLayerStatistics_.processOutbound(pkt,
-                                             std::chrono::duration_cast<Microseconds>(Clock::now() - now),
-                                             DROP_CODE_OUT_OF_BAND);
-
-      LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
-                              DEBUG_LEVEL,
-                              "PHYI %03hu FrameworkPHY::%s src %hu, dst %hu,"
-                              " drop out of band",
-                              id_,
-                              __func__,
-                              pktInfo.getSource(),
-                              pktInfo.getDestination());
-
-      // drop
-      return;
-    }
 }
-
 
 /** [eventservice-processevent-snippet] */
 void EMANE::FrameworkPHY::processEvent(const EventId & eventId,

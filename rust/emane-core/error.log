@@ -1,4 +1,16 @@
     Checking emane-core v0.1.0 (/home/joe/src/sleepybishop/emane/rust/emane-core)
+error: expected identifier, found `:`
+   --> emane-core/src/framework_phy.rs:50:21
+    |
+ 48 | impl FrameworkPhy {
+    |                   - while parsing this item list starting here
+ 49 |     pub fn new() -> Self {
+ 50 |             cpp_this: std::ptr::null_mut(),
+    |                     ^ expected identifier
+...
+151 | }
+    | - the item list ends here
+
 warning: unused import: `std::os::raw::c_char`
  --> emane-core/src/control_port.rs:6:5
   |
@@ -126,6 +138,37 @@ warning: unused import: `std::ffi::CStr`
   |
 3 | use std::ffi::CStr;
   |     ^^^^^^^^^^^^^^
+
+error[E0599]: no associated function or constant named `new` found for struct `FrameworkPhy` in the current scope
+   --> emane-core/src/framework_phy.rs:167:58
+    |
+  4 | pub struct FrameworkPhy {
+    | ----------------------- associated function or constant `new` not found for this struct
+...
+167 |     Box::into_raw(Box::new({ let mut phy = FrameworkPhy::new(); phy.cpp...
+    |                                                          ^^^ associated function or constant not found in `FrameworkPhy`
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following trait defines an item `new`, perhaps you need to implement it:
+            candidate #1: `UniformSampler`
+
+error[E0599]: no method named `initialize` found for mutable reference `&mut FrameworkPhy` in the current scope
+   --> emane-core/src/framework_phy.rs:180:9
+    |
+180 |     phy.initialize(registrar);
+    |         ^^^^^^^^^^ method not found in `&mut FrameworkPhy`
+
+error[E0599]: no method named `configure` found for mutable reference `&mut FrameworkPhy` in the current scope
+   --> emane-core/src/framework_phy.rs:186:9
+    |
+186 |     phy.configure(update);
+    |         ^^^^^^^^^ method not found in `&mut FrameworkPhy`
+
+error[E0599]: no method named `process_upstream_packet` found for mutable reference `&mut FrameworkPhy` in the current scope
+   --> emane-core/src/framework_phy.rs:197:9
+    |
+197 |     phy.process_upstream_packet(common_phy_header, pkt, control_messages);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^ method not found in `&mut FrameworkPhy`
 
 warning: unnecessary `unsafe` block
    --> emane-core/src/control_port.rs:296:29
@@ -387,271 +430,6 @@ warning: unused variable: `result_ptr`
 330 |     result_ptr: *mut c_void
     |     ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_result_ptr`
 
-warning: field `name` is never read
-  --> emane-core/src/statistics.rs:85:5
-   |
-84 | pub struct StatisticInfo {
-   |            ------------- field in this struct
-85 |     name: String,
-   |     ^^^^
-   |
-   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-warning: field `name` is never read
-  --> emane-core/src/statistics.rs:93:5
-   |
-92 | pub struct StatisticTableInfo {
-   |            ------------------ field in this struct
-93 |     name: String,
-   |     ^^^^
-
-warning: function `is_clearable` is never used
-   --> emane-core/src/statistics.rs:124:4
-    |
-124 | fn is_clearable(properties: u64) -> bool {
-    |    ^^^^^^^^^^^^
-
-warning: function `emane_c_log_debug` is never used
-  --> emane-core/src/event_service.rs:11:8
-   |
-11 |     fn emane_c_log_debug(msg: *const c_char);
-   |        ^^^^^^^^^^^^^^^^^
-
-warning: field `nem_id` is never read
-  --> emane-core/src/neighbor_metric_manager.rs:21:5
-   |
-20 | struct NeighborData {
-   |        ------------ field in this struct
-21 |     nem_id: u16,
-   |     ^^^^^^
-   |
-   = note: `NeighborData` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
-
-warning: fields `nem_id` and `last_neighbor_status_update_time` are never read
-  --> emane-core/src/neighbor_metric_manager.rs:71:5
-   |
-70 | pub struct NeighborMetricManager {
-   |            --------------------- fields in this struct
-71 |     nem_id: u16,
-   |     ^^^^^^
-...
-75 |     last_neighbor_status_update_time: Duration,
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: field `nem_id` is never read
-  --> emane-core/src/queue_metric_manager.rs:38:5
-   |
-37 | pub struct QueueMetricManager {
-   |            ------------------ field in this struct
-38 |     nem_id: u16,
-   |     ^^^^^^
-
-warning: field `nem_id` is never read
-  --> emane-core/src/rf_signal_table.rs:38:5
-   |
-37 | pub struct RFSignalTable {
-   |            ------------- field in this struct
-38 |     nem_id: u16,
-   |     ^^^^^^
-
-warning: field `id` is never read
- --> emane-core/src/tdma_mac.rs:6:5
-  |
-5 | pub struct TdmaMac {
-  |            ------- field in this struct
-6 |     id: u16,
-  |     ^^
-
-warning: function `emane_c_mac_plugin_configure` is never used
-  --> emane-core/src/mac_layer.rs:18:8
-   |
-18 |     fn emane_c_mac_plugin_configure(plugin: *mut c_void, update: *mut c_...
-   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: field `id` is never read
-  --> emane-core/src/nem_impl.rs:12:5
-   |
-11 | pub struct NemImpl {
-   |            ------- field in this struct
-12 |     id: u16,
-   |     ^^
-
-warning: field `nem_id` is never read
-  --> emane-core/src/location_manager.rs:10:5
-   |
- 9 | pub struct LocationManagerImpl {
-   |            ------------------- field in this struct
-10 |     nem_id: u16,
-   |     ^^^^^^
-
-warning: field `nem_id` is never read
-  --> emane-core/src/fading_manager.rs:13:5
-   |
-12 | pub struct FadingManager {
-   |            ------------- field in this struct
-13 |     nem_id: u16,
-   |     ^^^^^^
-
-warning: field `id` is never read
-  --> emane-core/src/boundary_message_manager.rs:14:5
-   |
-13 | pub struct BoundaryMessageManagerState {
-   |            --------------------------- field in this struct
-14 |     id: u16,
-   |     ^^
-
-warning: fields `transmitter_spectral_mask_cache` and `filter_transmitter_spectral_mask_cache` are never read
-   --> emane-core/src/spectrum_monitor.rs:97:5
-    |
- 87 | pub struct SpectrumMonitor {
-    |            --------------- fields in this struct
-...
- 97 |     transmitter_spectral_mask_cache: HashMap<u64, (HashMap<u64, Vec<Noi...
-    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-...
-109 |     filter_transmitter_spectral_mask_cache: HashMap<u64, (HashMap<u64, ...
-    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: function `doppler_shift` is never used
-   --> emane-core/src/spectrum_monitor.rs:112:4
-    |
-112 | fn doppler_shift(freq: u64, doppler_factor: f64) -> i64 {
-    |    ^^^^^^^^^^^^^
-
-warning: function `emane_rs_filter_match` is never used
-  --> emane-core/src/spectrum_monitor.rs:56:8
-   |
-56 |     fn emane_rs_filter_match(
-   |        ^^^^^^^^^^^^^^^^^^^^^
-
-warning: function `emane_c_location_infos_size` is never used
-  --> emane-core/src/receive_processor.rs:40:8
-   |
-40 |     fn emane_c_location_infos_size(vec_ptr: *const c_void) -> usize;
-   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: function `emane_c_fading_infos_size` is never used
-  --> emane-core/src/receive_processor.rs:43:8
-   |
-43 |     fn emane_c_fading_infos_size(vec_ptr: *const c_void) -> usize;
-   |        ^^^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: `extern` block uses type `[u64; 4]`, which is not FFI-safe
-   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:567:80
-    |
-567 | ..., bWithPort: bool) -> std_string;
-    |                          ^^^^^^^^^^ not FFI-safe
-    |
-    = help: consider passing a pointer to the array
-    = note: passing raw arrays by value is not FFI-safe
-    = note: `#[warn(improper_ctypes)]` on by default
-
-warning: `extern` block uses type `[u64; 4]`, which is not FFI-safe
-   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:886:58
-    |
-886 |     pub fn EMANE_Any_asString(this: *const EMANE_Any) -> std_string;
-    |                                                          ^^^^^^^^^^ not FFI-safe
-    |
-    = help: consider passing a pointer to the array
-    = note: passing raw arrays by value is not FFI-safe
-
-warning: `extern` block uses type `[u64; 4]`, which is not FFI-safe
-   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:896:58
-    |
-896 |     pub fn EMANE_Any_toString(this: *const EMANE_Any) -> std_string;
-    |                                                          ^^^^^^^^^^ not FFI-safe
-    |
-    = help: consider passing a pointer to the array
-    = note: passing raw arrays by value is not FFI-safe
-
-warning: `extern` block uses type `[u64; 4]`, which is not FFI-safe
-   --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:901:37
-    |
-901 |     pub fn EMANE_Any_create(sValue: std_string, type_: EMANE_Any_Type) ...
-    |                                     ^^^^^^^^^^ not FFI-safe
-    |
-    = help: consider passing a pointer to the array
-    = note: passing raw arrays by value is not FFI-safe
-
-warning: `extern` block uses type `[u64; 4]`, which is not FFI-safe
-    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:1195:67
-     |
-1195 | ...st EMANE_Any_Type) -> std_string;
-     |                          ^^^^^^^^^^ not FFI-safe
-     |
-     = help: consider passing a pointer to the array
-     = note: passing raw arrays by value is not FFI-safe
-
-warning: `extern` block uses type `[u64; 3]`, which is not FFI-safe
-    --> /home/joe/src/sleepybishop/emane/rust/target/debug/build/emane-core-c3219bf29e4a4789/out/bindings.rs:2990:80
-     |
-2990 | ...CommonPHYHeader) -> EMANE_Strings;
-     |                        ^^^^^^^^^^^^^ not FFI-safe
-     |
-     = help: consider passing a pointer to the array
-     = note: passing raw arrays by value is not FFI-safe
-
-warning: unused return value of `Box::<T>::from_raw` that must be used
-   --> emane-core/src/neighbor_metric_manager.rs:320:18
-    |
-320 |         unsafe { Box::from_raw(ptr); }
-    |                  ^^^^^^^^^^^^^^^^^^
-    |
-    = note: call `drop(Box::from_raw(ptr))` if you intend to drop the `Box`
-    = note: `#[warn(unused_must_use)]` (part of `#[warn(unused)]`) on by default
-help: use `let _ = ...` to ignore the resulting value
-    |
-320 |         unsafe { let _ = Box::from_raw(ptr); }
-    |                  +++++++
-
-warning: unused return value of `Box::<T>::from_raw` that must be used
-   --> emane-core/src/queue_metric_manager.rs:123:18
-    |
-123 |         unsafe { Box::from_raw(ptr); }
-    |                  ^^^^^^^^^^^^^^^^^^
-    |
-    = note: call `drop(Box::from_raw(ptr))` if you intend to drop the `Box`
-help: use `let _ = ...` to ignore the resulting value
-    |
-123 |         unsafe { let _ = Box::from_raw(ptr); }
-    |                  +++++++
-
-warning: creating a shared reference to mutable static
-   --> emane-core/src/spectral_mask.rs:257:12
-    |
-257 |         if MANAGER.is_none() {
-    |            ^^^^^^^^^^^^^^^^^ shared reference to mutable static
-    |
-    = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
-    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
-    = note: `#[warn(static_mut_refs)]` (part of `#[warn(rust_2024_compatibility)]`) on by default
-
-warning: creating a mutable reference to mutable static
-   --> emane-core/src/spectral_mask.rs:260:9
-    |
-260 |         MANAGER.as_mut().unwrap()
-    |         ^^^^^^^^^^^^^^^^ mutable reference to mutable static
-    |
-    = note: mutable references to mutable statics are dangerous; it's undefined behavior if any other pointer to the static is used or if any other reference is created for the static while the mutable reference lives
-    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
-
-warning: creating a shared reference to mutable static
-   --> emane-core/src/antenna.rs:191:12
-    |
-191 |         if MANAGER.is_none() {
-    |            ^^^^^^^^^^^^^^^^^ shared reference to mutable static
-    |
-    = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
-    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
-
-warning: creating a mutable reference to mutable static
-   --> emane-core/src/antenna.rs:194:9
-    |
-194 |         MANAGER.as_mut().unwrap()
-    |         ^^^^^^^^^^^^^^^^ mutable reference to mutable static
-    |
-    = note: mutable references to mutable statics are dangerous; it's undefined behavior if any other pointer to the static is used or if any other reference is created for the static while the mutable reference lives
-    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
-
-warning: `emane-core` (lib) generated 91 warnings (run `cargo fix --lib -p emane-core` to apply 45 suggestions)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.68s
+For more information about this error, try `rustc --explain E0599`.
+warning: `emane-core` (lib) generated 60 warnings
+error: could not compile `emane-core` (lib) due to 5 previous errors; 60 warnings emitted

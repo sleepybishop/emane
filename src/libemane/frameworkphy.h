@@ -104,6 +104,7 @@ namespace EMANE
     SpectrumMonitor & getSpectrumMonitor();
 
   private:
+    void* rs_state_;
     SpectrumService * pSpectrumService_;
     AntennaManager antennaManager_;
     LocationManager locationManager_;

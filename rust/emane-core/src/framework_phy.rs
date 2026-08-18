@@ -2,6 +2,7 @@ use std::os::raw::c_void;
 use std::collections::HashSet;
 
 pub struct FrameworkPhy {
+    pub cpp_this: *mut c_void,
     pub p_spectrum_service: *mut c_void,
     pub antenna_manager: *mut c_void,
     pub location_manager: *mut c_void,
@@ -47,6 +48,7 @@ pub struct FrameworkPhy {
 impl FrameworkPhy {
     pub fn new() -> Self {
         Self {
+            cpp_this: std::ptr::null_mut(),
             p_spectrum_service: std::ptr::null_mut(),
             antenna_manager: std::ptr::null_mut(),
             location_manager: std::ptr::null_mut(),
@@ -114,10 +116,10 @@ impl FrameworkPhy {
             // Emulate processUpstreamPacket_i
             emane_c_framework_phy_common_layer_statistics_process_inbound(self.common_layer_statistics, pkt);
             
-            let is_in_band = emane_c_framework_phy_check_in_band(self as *mut _ as *mut c_void, common_phy_header);
+            let is_in_band = emane_c_framework_phy_check_in_band(self.cpp_this, common_phy_header);
             
             if self.compatibility_mode == 1 {
-                emane_c_framework_phy_create_default_antenna_if_needed(self as *mut _ as *mut c_void);
+                emane_c_framework_phy_create_default_antenna_if_needed(self.cpp_this);
             } else {
                 let rx_processors_empty = emane_c_framework_phy_receive_processors_is_empty(self.receive_processors);
                 if rx_processors_empty {
@@ -129,7 +131,7 @@ impl FrameworkPhy {
             if is_in_band || self.noise_mode != 0 /* NONE */ {
                 // FFI stub for the large receiveProcessor loop and result processing
                 let dropped = emane_c_framework_phy_process_receive_processors(
-                    self as *mut _ as *mut c_void,
+                    self.cpp_this,
                     common_phy_header,
                     pkt,
                     is_in_band,
@@ -160,8 +162,8 @@ extern "C" {
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_framework_phy_create() -> *mut c_void {
-    Box::into_raw(Box::new(FrameworkPhy::new())) as *mut c_void
+pub extern "C" fn emane_rs_framework_phy_create(cpp_this: *mut c_void) -> *mut c_void {
+    Box::into_raw(Box::new({ let mut phy = FrameworkPhy::new(); phy.cpp_this = cpp_this; phy })) as *mut c_void
 }
 
 #[no_mangle]
