@@ -170,3 +170,28 @@ pub mod location_manager;
 pub mod antenna_manager;
 pub mod gain_manager;
 pub mod formatters;
+
+#[no_mangle]
+pub extern "C" fn emane_rs_nop_file_descriptor_service() {
+    println!("FileDescriptorService not available to component");
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_socket_close(sock: libc::c_int) -> libc::c_int {
+    if sock != -1 {
+        unsafe { libc::close(sock); }
+    }
+    -1
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_socket_sendto(
+    sock: libc::c_int,
+    buf: *const libc::c_void,
+    len: libc::size_t,
+    flags: libc::c_int,
+    addr: *const libc::sockaddr,
+    addrlen: libc::socklen_t,
+) -> libc::ssize_t {
+    unsafe { libc::sendto(sock, buf, len, flags, addr, addrlen) }
+}
