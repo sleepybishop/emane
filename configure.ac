@@ -195,7 +195,6 @@ AC_CONFIG_FILES([Makefile
  include/emane/models/tdma/Makefile
  include/emane/version.h
  src/Makefile
- src/libemanexmlparser/Makefile 
  src/libemane/Makefile
  src/libemane/libemane.pc
  src/applications/Makefile

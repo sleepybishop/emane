@@ -40,7 +40,6 @@
 #include "registrarproxy.h"
 #include "frameworkphy.h"
 #include "antennaprofilemanifest.h"
-#include "statisticservice.h"
 #include "spectralmaskmanager.h"
 
 #include "emane/configurationupdate.h"
