@@ -445,3 +445,70 @@ EMANE::Models::IEEE80211ABG::MACStatistics::incrementTxOneHopNbrListEventCount()
   ++*pNumTxOneHopNbrListEvents_;
 }
 
+
+
+// Rust FFI Wrappers
+extern "C" void emane_ieee80211abg_macstatistics_incrementDownstreamUnicastDataDiscardDueToRetries(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementDownstreamUnicastDataDiscardDueToRetries();
+}
+extern "C" void emane_ieee80211abg_macstatistics_incrementDownstreamUnicastRtsCtsDataDiscardDueToRetries(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementDownstreamUnicastRtsCtsDataDiscardDueToRetries();
+}
+extern "C" void emane_ieee80211abg_macstatistics_incrementDownstreamUnicastDataDiscardDueToTxop(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementDownstreamUnicastDataDiscardDueToTxop();
+}
+extern "C" void emane_ieee80211abg_macstatistics_incrementDownstreamBroadcastDataDiscardDueToTxop(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementDownstreamBroadcastDataDiscardDueToTxop();
+}
+extern "C" void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastDataDiscardDueToSinr(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementUpstreamUnicastDataDiscardDueToSinr();
+}
+extern "C" void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastDataDiscardDueToSinr(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementUpstreamBroadcastDataDiscardDueToSinr();
+}
+extern "C" void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastDataDiscardDueToClobberRxDuringTx(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementUpstreamUnicastDataDiscardDueToClobberRxDuringTx();
+}
+extern "C" void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastDataDiscardDueToClobberRxDuringTx(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementUpstreamBroadcastDataDiscardDueToClobberRxDuringTx();
+}
+extern "C" void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastDataDiscardDueToClobberRxHiddenBusy(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementUpstreamUnicastDataDiscardDueToClobberRxHiddenBusy();
+}
+extern "C" void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastDataDiscardDueToClobberRxHiddenBusy(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementUpstreamBroadcastDataDiscardDueToClobberRxHiddenBusy();
+}
+extern "C" void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastNoiseHiddenRx(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementUpstreamBroadcastNoiseHiddenRx();
+}
+extern "C" void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastNoiseHiddenRx(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementUpstreamUnicastNoiseHiddenRx();
+}
+extern "C" void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastNoiseRxCommon(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementUpstreamBroadcastNoiseRxCommon();
+}
+extern "C" void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastNoiseRxCommon(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementUpstreamUnicastNoiseRxCommon();
+}
+extern "C" void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastRtsCtsDataRxFromPhy(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementUpstreamUnicastRtsCtsDataRxFromPhy();
+}
+extern "C" void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastCtsRxFromPhy(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementUpstreamUnicastCtsRxFromPhy();
+}
+extern "C" void emane_ieee80211abg_macstatistics_incrementRxOneHopNbrListEventCount(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementRxOneHopNbrListEventCount();
+}
+extern "C" void emane_ieee80211abg_macstatistics_incrementRxOneHopNbrListInvalidEventCount(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementRxOneHopNbrListInvalidEventCount();
+}
+extern "C" void emane_ieee80211abg_macstatistics_incrementTxOneHopNbrListEventCount(void* pStat) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->incrementTxOneHopNbrListEventCount();
+}
+
+extern "C" void emane_ieee80211abg_macstatistics_updateOneHopNbrHighWaterMark(void* pStat, size_t num) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->updateOneHopNbrHighWaterMark(num);
+}
+extern "C" void emane_ieee80211abg_macstatistics_updateTwoHopNbrHighWaterMark(void* pStat, size_t num) {
+  static_cast<EMANE::Models::IEEE80211ABG::MACStatistics*>(pStat)->updateTwoHopNbrHighWaterMark(num);
+}

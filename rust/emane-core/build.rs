@@ -53,5 +53,5 @@ fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     println!("cargo:rustc-link-search=native={}/../../src/libemane/.libs", manifest_dir);
     println!("cargo:rustc-link-lib=dylib=emane");
-    cc::Build::new().file("src/tdma_stubs.c").compile("tdma_stubs");
+    cc::Build::new().file("src/tdma_stubs.c").file("src/ieee80211abg_stubs.c").compile("tdma_stubs");
 }
