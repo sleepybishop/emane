@@ -68,6 +68,8 @@ namespace EMANE
            RX_WRONGFREQ,
            RX_LOCK};
 
+        SlotStatusTablePublisher();
+        ~SlotStatusTablePublisher();
         void registerStatistics(StatisticRegistrar & registrar);
 
         void update(std::uint32_t u32RelativeIndex,
@@ -94,24 +96,11 @@ namespace EMANE
         StatisticNumeric<std::uint64_t> * pRxSlotErrorRxWrongFrequency_;
         StatisticNumeric<std::uint64_t> * pRxSlotErrorRxLock_;
 
-        using TxSlotCounterMap = std::map<std::uint32_t,
-                                          std::tuple<std::uint64_t, // valid
-                                                     std::uint64_t, // missed
-                                                     std::uint64_t, // too big for slot
-                                                     std::array<std::uint64_t,8> // quantile
-                                                     >>;
+        
 
-        using RxSlotCounterMap = std::map<std::uint32_t,
-                                          std::tuple<std::uint64_t, // valid
-                                                     std::uint64_t, // missed
-                                                     std::uint64_t, // rx during idle
-                                                     std::uint64_t, // rx during tx
-                                                     std::uint64_t, // rx too long for slot
-                                                     std::uint64_t, // rx wrong freq for slot
-                                                     std::uint64_t, // rx lock
-                                                     std::array<std::uint64_t,8>>>;
-        TxSlotCounterMap txSlotCounterMap_;
-        RxSlotCounterMap rxSlotCounterMap_;
+        
+        void* pImpl_;
+        
 
         void updateRx(std::uint32_t u32RelativeIndex,
                       std::uint32_t u32RelativeFrameIndex,

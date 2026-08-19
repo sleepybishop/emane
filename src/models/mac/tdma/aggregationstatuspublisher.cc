@@ -1,41 +1,34 @@
 /*
  * Copyright (c) 2015 - Adjacent Link LLC, Bridgewater, New Jersey
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * ...
  */
 
 #include "aggregationstatuspublisher.h"
 
+extern "C" void* emane_rs_tdma_aggregation_publisher_create();
+extern "C" void emane_rs_tdma_aggregation_publisher_destroy(void*);
+extern "C" void emane_rs_tdma_aggregation_publisher_update(void* impl, void* table, uint64_t num_components);
+
+extern "C" void emane_tdma_aggregation_table_add_row(void* pTable, uint64_t key, uint64_t components, uint64_t count) {
+  auto table = static_cast<EMANE::StatisticTable<std::uint64_t>*>(pTable);
+  table->addRow(key, {EMANE::Any{components}, EMANE::Any{static_cast<long>(count)}});
+}
+
+extern "C" void emane_tdma_aggregation_table_set_cell(void* pTable, uint64_t key, uint64_t count) {
+  auto table = static_cast<EMANE::StatisticTable<std::uint64_t>*>(pTable);
+  table->setCell(key, 1, EMANE::Any{static_cast<long>(count)});
+}
+
 EMANE::Models::TDMA::AggregationStatusPublisher::AggregationStatusPublisher():
   pAggregationHistogramTable_{},
-  aggregationHistogram_{}
+  pImpl_{emane_rs_tdma_aggregation_publisher_create()}
 {}
+
+EMANE::Models::TDMA::AggregationStatusPublisher::~AggregationStatusPublisher()
+{
+  emane_rs_tdma_aggregation_publisher_destroy(pImpl_);
+}
 
 void EMANE::Models::TDMA::AggregationStatusPublisher::registerStatistics(StatisticRegistrar & statisticRegistrar)
 {
@@ -48,24 +41,5 @@ void EMANE::Models::TDMA::AggregationStatusPublisher::registerStatistics(Statist
 
 void EMANE::Models::TDMA::AggregationStatusPublisher::update(const MessageComponents & components)
 {
-  std::uint64_t u64NumberComponents{components.size()};
-
-  auto iter = aggregationHistogram_.find(u64NumberComponents);
-
-  if(iter == aggregationHistogram_.end())
-    {
-      aggregationHistogram_.insert({u64NumberComponents,1});
-
-      pAggregationHistogramTable_->addRow(u64NumberComponents,
-                                          {Any{u64NumberComponents},
-                                              Any{1L}});
-    }
-  else
-    {
-      ++iter->second;
-
-      pAggregationHistogramTable_->setCell(u64NumberComponents,
-                                           1,
-                                           Any{iter->second});
-    }
+  emane_rs_tdma_aggregation_publisher_update(pImpl_, pAggregationHistogramTable_, components.size());
 }

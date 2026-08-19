@@ -1,380 +1,78 @@
-/*
- * Copyright (c) 2015-2016,2018 - Adjacent Link LLC, Bridgewater,
- * New Jersey
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
-
 #include "slotstatustablepublisher.h"
+
+extern "C" void* emane_rs_tdma_slot_publisher_create();
+extern "C" void emane_rs_tdma_slot_publisher_destroy(void*);
+extern "C" void emane_rs_tdma_slot_publisher_register(void* impl, EMANE::StatisticRegistrar * pRegistrar, 
+    void* txTable, void* rxTable,
+    void* txValid, void* txMissed, void* txTooBig,
+    void* rxValid, void* rxMissed, void* rxIdle, void* rxTx, void* rxTooLong, void* rxWrongFreq, void* rxLock);
+
+extern "C" void emane_rs_tdma_slot_publisher_update(void* impl, uint32_t u32RelativeIndex, uint32_t u32RelativeFrameIndex, uint32_t u32RelativeSlotIndex, int status, double dSlotRemainingRatio);
+extern "C" void emane_rs_tdma_slot_publisher_clear(void* impl);
+
+extern "C" void emane_tdma_slot_table_add_row_tx(void* pTable, uint32_t key, uint32_t v1, uint32_t v2, uint64_t v3, uint64_t v4, uint64_t v5, uint64_t v6, uint64_t v7, uint64_t v8, uint64_t v9, uint64_t v10, uint64_t v11, uint64_t v12, uint64_t v13) {
+  auto table = static_cast<EMANE::StatisticTable<std::uint32_t>*>(pTable);
+  table->addRow(key, {EMANE::Any{key}, EMANE::Any{v1}, EMANE::Any{v2}, EMANE::Any{static_cast<long>(v3)}, EMANE::Any{static_cast<long>(v4)}, EMANE::Any{static_cast<long>(v5)}, EMANE::Any{static_cast<long>(v6)}, EMANE::Any{static_cast<long>(v7)}, EMANE::Any{static_cast<long>(v8)}, EMANE::Any{static_cast<long>(v9)}, EMANE::Any{static_cast<long>(v10)}, EMANE::Any{static_cast<long>(v11)}, EMANE::Any{static_cast<long>(v12)}, EMANE::Any{static_cast<long>(v13)}});
+}
+
+extern "C" void emane_tdma_slot_table_add_row_rx(void* pTable, uint32_t key, uint32_t v1, uint32_t v2, uint64_t v3, uint64_t v4, uint64_t v5, uint64_t v6, uint64_t v7, uint64_t v8, uint64_t v9, uint64_t v10, uint64_t v11, uint64_t v12, uint64_t v13, uint64_t v14, uint64_t v15, uint64_t v16, uint64_t v17) {
+  auto table = static_cast<EMANE::StatisticTable<std::uint32_t>*>(pTable);
+  table->addRow(key, {EMANE::Any{key}, EMANE::Any{v1}, EMANE::Any{v2}, EMANE::Any{static_cast<long>(v3)}, EMANE::Any{static_cast<long>(v4)}, EMANE::Any{static_cast<long>(v5)}, EMANE::Any{static_cast<long>(v6)}, EMANE::Any{static_cast<long>(v7)}, EMANE::Any{static_cast<long>(v8)}, EMANE::Any{static_cast<long>(v9)}, EMANE::Any{static_cast<long>(v10)}, EMANE::Any{static_cast<long>(v11)}, EMANE::Any{static_cast<long>(v12)}, EMANE::Any{static_cast<long>(v13)}, EMANE::Any{static_cast<long>(v14)}, EMANE::Any{static_cast<long>(v15)}, EMANE::Any{static_cast<long>(v16)}, EMANE::Any{static_cast<long>(v17)}});
+}
+
+extern "C" void emane_tdma_slot_table_set_cell(void* pTable, uint32_t key, size_t column, uint64_t value) {
+  auto table = static_cast<EMANE::StatisticTable<std::uint32_t>*>(pTable);
+  table->setCell(key, column, EMANE::Any{static_cast<long>(value)});
+}
+
+extern "C" void emane_tdma_numeric_u64_add(void* pNumeric, uint64_t val) {
+  *static_cast<EMANE::StatisticNumeric<std::uint64_t>*>(pNumeric) += val;
+}
+
+EMANE::Models::TDMA::SlotStatusTablePublisher::SlotStatusTablePublisher():
+  pImpl_{emane_rs_tdma_slot_publisher_create()}
+{}
+
+EMANE::Models::TDMA::SlotStatusTablePublisher::~SlotStatusTablePublisher()
+{
+  emane_rs_tdma_slot_publisher_destroy(pImpl_);
+}
 
 void EMANE::Models::TDMA::SlotStatusTablePublisher::registerStatistics(StatisticRegistrar & statisticRegistrar)
 {
-  pTxSlotStatusTable_ =
+  auto pTxSlotStatusTable =
     statisticRegistrar.registerTable<std::uint32_t>("TxSlotStatusTable",
-                                                    {"Index",
-                                                        "Frame",
-                                                        "Slot",
-                                                        "Valid",
-                                                        "Missed",
-                                                        "Big",
-                                                        ".25",
-                                                        ".50",
-                                                        ".75",
-                                                        "1.0",
-                                                        "1.25",
-                                                        "1.50",
-                                                        "1.75",
-                                                        ">1.75"},
+                                                    {"Index","Frame","Slot","Valid","Missed","Big",".25",".50",".75","1.0","1.25","1.50","1.75",">1.75"},
                                                     StatisticProperties::NONE,
                                                     "Shows the number of Tx slot opportunities that were valid or missed based on slot timing deadlines");
 
-  pRxSlotStatusTable_ =
+  auto pRxSlotStatusTable =
     statisticRegistrar.registerTable<std::uint32_t>("RxSlotStatusTable",
-                                                    {"Index",
-                                                        "Frame",
-                                                        "Slot",
-                                                        "Valid",
-                                                        "Missed",
-                                                        "Idle",
-                                                        "Tx",
-                                                        "Long",
-                                                        "Freq",
-                                                        "Lock",
-                                                        ".25",
-                                                        ".50",
-                                                        ".75",
-                                                        "1.0",
-                                                        "1.25",
-                                                        "1.50",
-                                                        "1.75",
-                                                        ">1.75"},
+                                                    {"Index","Frame","Slot","Valid","Missed","Idle","Tx","Long","Freq","Lock",".25",".50",".75","1.0","1.25","1.50","1.75",">1.75"},
                                                     StatisticProperties::NONE,
-                                                    "Shows the number of Rx slot receptions that were valid or missed based on slot timing deadlines");
+                                                    "Shows the number of Rx slot opportunities that were valid or missed based on slot timing deadlines");
 
+  auto pTxSlotValid = statisticRegistrar.registerNumeric<std::uint64_t>("TxSlotValid", StatisticProperties::CLEARABLE, "Total valid Tx slots");
+  auto pTxSlotErrorMissed = statisticRegistrar.registerNumeric<std::uint64_t>("TxSlotErrorMissed", StatisticProperties::CLEARABLE, "Total missed Tx slots");
+  auto pTxSlotErrorTooBig = statisticRegistrar.registerNumeric<std::uint64_t>("TxSlotErrorTooBig", StatisticProperties::CLEARABLE, "Total too big Tx slots");
 
-  pTxSlotValid_ =
-    statisticRegistrar.registerNumeric<std::uint64_t>("numTxSlotValid",
-                                                      StatisticProperties::NONE,
-                                                      "Number of valid Tx slots");
+  auto pRxSlotValid = statisticRegistrar.registerNumeric<std::uint64_t>("RxSlotValid", StatisticProperties::CLEARABLE, "Total valid Rx slots");
+  auto pRxSlotErrorMissed = statisticRegistrar.registerNumeric<std::uint64_t>("RxSlotErrorMissed", StatisticProperties::CLEARABLE, "Total missed Rx slots");
+  auto pRxSlotErrorRxDuringIdle = statisticRegistrar.registerNumeric<std::uint64_t>("RxSlotErrorRxDuringIdle", StatisticProperties::CLEARABLE, "Total rx during idle Rx slots");
+  auto pRxSlotErrorRxDuringTx = statisticRegistrar.registerNumeric<std::uint64_t>("RxSlotErrorRxDuringTx", StatisticProperties::CLEARABLE, "Total rx during tx Rx slots");
+  auto pRxSlotErrorRxTooLong = statisticRegistrar.registerNumeric<std::uint64_t>("RxSlotErrorRxTooLong", StatisticProperties::CLEARABLE, "Total rx too long Rx slots");
+  auto pRxSlotErrorRxWrongFrequency = statisticRegistrar.registerNumeric<std::uint64_t>("RxSlotErrorRxWrongFrequency", StatisticProperties::CLEARABLE, "Total rx wrong frequency Rx slots");
+  auto pRxSlotErrorRxLock = statisticRegistrar.registerNumeric<std::uint64_t>("RxSlotErrorRxLock", StatisticProperties::CLEARABLE, "Total rx lock Rx slots");
 
-  pTxSlotErrorMissed_ =
-    statisticRegistrar.registerNumeric<std::uint64_t>("numTxSlotErrorMissed",
-                                                      StatisticProperties::NONE,
-                                                      "Number of Tx slot missed errors.");
+  emane_rs_tdma_slot_publisher_register(pImpl_, &statisticRegistrar, pTxSlotStatusTable, pRxSlotStatusTable, pTxSlotValid, pTxSlotErrorMissed, pTxSlotErrorTooBig, pRxSlotValid, pRxSlotErrorMissed, pRxSlotErrorRxDuringIdle, pRxSlotErrorRxDuringTx, pRxSlotErrorRxTooLong, pRxSlotErrorRxWrongFrequency, pRxSlotErrorRxLock);
+}
 
-  pTxSlotErrorTooBig_ =
-    statisticRegistrar.registerNumeric<std::uint64_t>("numTxSlotErrorTooBig",
-                                                      StatisticProperties::NONE,
-                                                      "Number of Tx slot too big errors.");
-
-  pRxSlotValid_ =
-    statisticRegistrar.registerNumeric<std::uint64_t>("numRxSlotValid",
-                                                      StatisticProperties::NONE,
-                                                      "Number of valid Rx slots");
-
-  pRxSlotErrorMissed_ =
-    statisticRegistrar.registerNumeric<std::uint64_t>("numRxSlotErrorMissed",
-                                                      StatisticProperties::NONE,
-                                                      "Number of Rx slot missed errors.");
-
-  pRxSlotErrorRxDuringIdle_ =
-    statisticRegistrar.registerNumeric<std::uint64_t>("numRxSlotErrorRxDuringIdle",
-                                                      StatisticProperties::NONE,
-                                                      "Number of Rx slot rx during idle errors.");
-
-  pRxSlotErrorRxDuringTx_ =
-    statisticRegistrar.registerNumeric<std::uint64_t>("numRxSlotErrorRxDuringTx",
-                                                      StatisticProperties::NONE,
-                                                      "Number of Rx slot during tx errors.");
-
-  pRxSlotErrorRxTooLong_ =
-    statisticRegistrar.registerNumeric<std::uint64_t>("numRxSlotErrorRxTooLong",
-                                                      StatisticProperties::NONE,
-                                                      "Number of Rx slot rx too long errors.");
-
-  pRxSlotErrorRxWrongFrequency_ =
-    statisticRegistrar.registerNumeric<std::uint64_t>("numRxSlotErrorRxWrongFrequency",
-                                                      StatisticProperties::NONE,
-                                                      "Number of Rx slot rx wrong frequency errors.");
-
-  pRxSlotErrorRxLock_ =
-    statisticRegistrar.registerNumeric<std::uint64_t>("numRxSlotErrorRxLock",
-                                                      StatisticProperties::NONE,
-                                                      "Number of Rx slot rx lock errors.");
+void EMANE::Models::TDMA::SlotStatusTablePublisher::update(std::uint32_t u32RelativeIndex, std::uint32_t u32RelativeFrameIndex, std::uint32_t u32RelativeSlotIndex, Status status, double dSlotRemainingRatio)
+{
+  emane_rs_tdma_slot_publisher_update(pImpl_, u32RelativeIndex, u32RelativeFrameIndex, u32RelativeSlotIndex, static_cast<int>(status), dSlotRemainingRatio);
 }
 
 void EMANE::Models::TDMA::SlotStatusTablePublisher::clear()
-
 {
-  pTxSlotStatusTable_->clear();
-  pRxSlotStatusTable_->clear();
-
-  txSlotCounterMap_.clear();
-  rxSlotCounterMap_.clear();
-}
-
-void EMANE::Models::TDMA::SlotStatusTablePublisher::update(std::uint32_t u32RelativeIndex,
-                                                           std::uint32_t u32RelativeSlotIndex,
-                                                           std::uint32_t u32RelativeFrameIndex,
-                                                           Status status,
-                                                           double dSlotRemainingRatio)
-{
-  switch(status)
-    {
-    case Status::TX_GOOD:
-    case Status::TX_MISSED:
-    case Status::TX_TOOBIG:
-      updateTx(u32RelativeIndex,
-               u32RelativeSlotIndex,
-               u32RelativeFrameIndex,
-               status,
-               dSlotRemainingRatio);
-      break;
-
-    case Status::RX_GOOD:
-    case Status::RX_MISSED:
-    case Status::RX_IDLE:
-    case Status::RX_TX:
-    case Status::RX_TOOLONG:
-    case Status::RX_WRONGFREQ:
-    case Status::RX_LOCK:
-      updateRx(u32RelativeIndex,
-               u32RelativeSlotIndex,
-               u32RelativeFrameIndex,
-               status,
-               dSlotRemainingRatio);
-      break;
-    }
-}
-
-void EMANE::Models::TDMA::SlotStatusTablePublisher::updateTx(std::uint32_t u32RelativeIndex,
-                                                             std::uint32_t u32RelativeSlotIndex,
-                                                             std::uint32_t u32RelativeFrameIndex,
-                                                             Status status,
-                                                             double dSlotPortionRatio)
-{
-  auto iter = txSlotCounterMap_.find(u32RelativeIndex);
-
-  if(iter == txSlotCounterMap_.end())
-    {
-      iter = txSlotCounterMap_.insert({u32RelativeIndex,std::make_tuple(0ULL,0ULL,0ULL,std::array<std::uint64_t,8>())}).first;
-
-      pTxSlotStatusTable_->addRow(u32RelativeIndex,
-                                  {Any{u32RelativeIndex},
-                                      Any{u32RelativeSlotIndex},
-                                        Any{u32RelativeFrameIndex},
-                                          Any{0L},
-                                            Any{0L},
-                                              Any{0L},
-                                                Any{0L},
-                                                  Any{0L},
-                                                    Any{0L},
-                                                      Any{0L},
-                                                        Any{0L},
-                                                          Any{0L},
-                                                            Any{0L},
-                                                              Any{0L}});
-
-    }
-
-  auto & valid = std::get<0>(iter->second);
-  auto & missed = std::get<1>(iter->second);
-  auto & toobig = std::get<2>(iter->second);
-  auto & quantile = std::get<3>(iter->second);
-
-  switch(status)
-    {
-    case Status::TX_GOOD:
-      ++*pTxSlotValid_;
-      pTxSlotStatusTable_->setCell(u32RelativeIndex,3,Any{++valid});
-      break;
-    case Status::TX_MISSED:
-      ++*pTxSlotErrorMissed_;
-      pTxSlotStatusTable_->setCell(u32RelativeIndex,4,Any{++missed});
-      break;
-    case Status::TX_TOOBIG:
-      ++*pTxSlotErrorTooBig_;
-      pTxSlotStatusTable_->setCell(u32RelativeIndex,5,Any{++toobig});
-      break;
-    default:
-      break;
-    }
-
-  int iQuantileIndex {};
-
-  if(dSlotPortionRatio <= 0.25)
-    {
-      iQuantileIndex = 0;
-    }
-  else if(dSlotPortionRatio <= 0.50)
-    {
-      iQuantileIndex = 1;
-    }
-  else if(dSlotPortionRatio <= 0.75)
-    {
-      iQuantileIndex = 2;
-    }
-  else if(dSlotPortionRatio <= 1.00)
-    {
-      iQuantileIndex = 3;
-    }
-  else if(dSlotPortionRatio <= 1.25)
-    {
-      iQuantileIndex = 4;
-    }
-  else if(dSlotPortionRatio <= 1.50)
-    {
-      iQuantileIndex = 5;
-    }
-  else if(dSlotPortionRatio <= 1.75)
-    {
-      iQuantileIndex = 6;
-    }
-  else
-    {
-      iQuantileIndex = 7;
-    }
-
-  pTxSlotStatusTable_->setCell(u32RelativeIndex,iQuantileIndex+6,Any{++quantile[iQuantileIndex]});
-}
-
-void EMANE::Models::TDMA::SlotStatusTablePublisher::updateRx(std::uint32_t u32RelativeIndex,
-                                                             std::uint32_t u32RelativeSlotIndex,
-                                                             std::uint32_t u32RelativeFrameIndex,
-                                                             Status status,
-                                                             double dSlotPortionRatio)
-{
-  auto iter = rxSlotCounterMap_.find(u32RelativeIndex);
-
-  if(iter == rxSlotCounterMap_.end())
-    {
-      iter = rxSlotCounterMap_.insert({u32RelativeIndex,std::make_tuple(0ULL,0ULL,0ULL,0ULL,0ULL,0ULL,0ULL,std::array<std::uint64_t,8>())}).first;
-
-      pRxSlotStatusTable_->addRow(u32RelativeIndex,
-                                  {Any{u32RelativeIndex},
-                                      Any{u32RelativeSlotIndex},
-                                        Any{u32RelativeFrameIndex},
-                                          Any{0L},
-                                            Any{0L},
-                                              Any{0L},
-                                                Any{0L},
-                                                  Any{0L},
-                                                    Any{0L},
-                                                      Any{0L},
-                                                        Any{0L},
-                                                          Any{0L},
-                                                            Any{0L},
-                                                              Any{0L},
-                                                                Any{0L},
-                                                                  Any{0L},
-                                                                    Any{0L},
-                                                                      Any{0L}});
-
-    }
-
-  auto & valid = std::get<0>(iter->second);
-  auto & missed = std::get<1>(iter->second);
-  auto & rxidle = std::get<2>(iter->second);
-  auto & rxtx = std::get<3>(iter->second);
-  auto & rxtoolong = std::get<4>(iter->second);
-  auto & rxwrongfreq = std::get<5>(iter->second);
-  auto & rxlock = std::get<6>(iter->second);
-  auto & quantile = std::get<7>(iter->second);
-
-  switch(status)
-    {
-    case Status::RX_GOOD:
-      ++*pRxSlotValid_;
-      pRxSlotStatusTable_->setCell(u32RelativeIndex,3,Any{++valid});
-      break;
-    case Status::RX_MISSED:
-      ++*pRxSlotErrorMissed_;
-      pRxSlotStatusTable_->setCell(u32RelativeIndex,4,Any{++missed});
-      break;
-    case Status::RX_IDLE:
-      ++*pRxSlotErrorRxDuringIdle_;
-      pRxSlotStatusTable_->setCell(u32RelativeIndex,5,Any{++rxidle});
-      break;
-    case Status::RX_TX:
-      ++*pRxSlotErrorRxDuringTx_;
-      pRxSlotStatusTable_->setCell(u32RelativeIndex,6,Any{++rxtx});
-      break;
-    case Status::RX_TOOLONG:
-      ++*pRxSlotErrorRxTooLong_;
-      pRxSlotStatusTable_->setCell(u32RelativeIndex,7,Any{++rxtoolong});
-      break;
-    case Status::RX_WRONGFREQ:
-      ++*pRxSlotErrorRxWrongFrequency_;
-      pRxSlotStatusTable_->setCell(u32RelativeIndex,8,Any{++rxwrongfreq});
-      break;
-    case Status::RX_LOCK:
-      ++*pRxSlotErrorRxLock_;
-      pRxSlotStatusTable_->setCell(u32RelativeIndex,9,Any{++rxlock});
-      break;
-    default:
-      break;
-    }
-
-  int iQuantileIndex {};
-
-  if(dSlotPortionRatio <= 0.25)
-    {
-      iQuantileIndex = 0;
-    }
-  else if(dSlotPortionRatio <= 0.50)
-    {
-      iQuantileIndex = 1;
-    }
-  else if(dSlotPortionRatio <= 0.75)
-    {
-      iQuantileIndex = 2;
-    }
-  else if(dSlotPortionRatio <= 1.00)
-    {
-      iQuantileIndex = 3;
-    }
-  else if(dSlotPortionRatio <= 1.25)
-    {
-      iQuantileIndex = 4;
-    }
-  else if(dSlotPortionRatio <= 1.50)
-    {
-      iQuantileIndex = 5;
-    }
-  else if(dSlotPortionRatio <= 1.75)
-    {
-      iQuantileIndex = 6;
-    }
-  else
-    {
-      iQuantileIndex = 7;
-    }
-
-  pRxSlotStatusTable_->setCell(u32RelativeIndex,iQuantileIndex+10,Any{++quantile[iQuantileIndex]});
+  emane_rs_tdma_slot_publisher_clear(pImpl_);
 }

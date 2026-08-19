@@ -53,17 +53,17 @@ namespace EMANE
       {
       public:
         AggregationStatusPublisher();
+        ~AggregationStatusPublisher();
 
         void registerStatistics(StatisticRegistrar & registrar);
 
         void update(const MessageComponents & components);
 
       private:
-        StatisticTable<uint64_t> * pAggregationHistogramTable_;
+        StatisticTable<std::uint64_t> * pAggregationHistogramTable_;
+        void * pImpl_;
 
-        using AggregationHistogram = std::map<uint64_t,std::uint64_t>;
-
-        AggregationHistogram aggregationHistogram_;
+        
       };
     }
   }

@@ -1,482 +1,191 @@
-/*
- * Copyright (c) 2015,2017-2018 - Adjacent Link LLC, Bridgewater,
- * New Jersey
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
-
 #include "receivemanager.h"
 #include "emane/utils/spectrumwindowutils.h"
 
-EMANE::Models::TDMA::ReceiveManager::ReceiveManager(NEMId id,
-                                                    DownstreamTransport * pDownstreamTransport,
-                                                    LogServiceProvider * pLogService,
-                                                    RadioServiceProvider * pRadioService,
-                                                    Scheduler * pScheduler,
-                                                    PacketStatusPublisher * pPacketStatusPublisher,
-                                                    NeighborMetricManager * pNeighborMetricManager):
-  id_{id},
-  pDownstreamTransport_{pDownstreamTransport},
-  pLogService_{pLogService},
-  pRadioService_{pRadioService},
-  pScheduler_{pScheduler},
-  pPacketStatusPublisher_{pPacketStatusPublisher},
-  pNeighborMetricManager_{pNeighborMetricManager},
-  pendingInfo_{{},{{},{},{},{}},{},{},{},{},{},{}},
-  u64PendingAbsoluteSlotIndex_{},
-  distribution_{0.0, 1.0},
-  bPromiscuousMode_{},
-  fragmentCheckThreshold_{2},
-  fragmentTimeoutThreshold_{5}{}
+// FFI Declarations
+struct FFIFrequencySegment {
+    uint64_t frequency_hz;
+    double rx_power_dbm;
+    uint64_t duration_micro;
+};
+
+struct FFIReceiveManagerCallbacks {
+    void* rm_cpp;
+    void (*log_error)(void*, uint16_t, const char*);
+    void (*log_debug)(void*, uint16_t, const char*);
+    bool (*spectrum_request_and_noise)(void*, uint64_t, uint64_t, uint64_t, double, double*, bool*);
+    void (*publish_inbound)(void*, uint16_t, uint16_t, uint8_t, size_t, uint32_t);
+    void (*publish_inbound_component)(void*, uint16_t, uint32_t, uint32_t, uint16_t, uint8_t, const uint8_t*, size_t, bool, uint32_t, uint32_t, uint64_t, bool);
+    void (*publish_inbound_message)(void*, uint16_t, const void*, uint32_t);
+    void (*update_neighbor_rx_metric)(void*, uint16_t, uint64_t, const uint8_t*, double, double, uint64_t, uint64_t, uint64_t);
+    void (*send_upstream_packet)(void*, uint16_t, uint16_t, uint8_t, uint64_t, const uint8_t*, const uint8_t*, size_t);
+    void (*process_packet_meta_info)(void*, uint16_t, uint64_t, double, double, uint64_t);
+    void (*process_scheduler_packet)(void*, uint16_t, uint16_t, uint8_t, uint64_t, const uint8_t*, const uint8_t*, size_t, uint64_t, double, double, uint64_t);
+};
+
+extern "C" void* tdma_receivemanager_new(uint16_t id, const FFIReceiveManagerCallbacks* callbacks);
+extern "C" void tdma_receivemanager_free(void* rm);
+extern "C" void tdma_receivemanager_set_promiscuous_mode(void* rm, bool enable);
+extern "C" void tdma_receivemanager_load_curves(void* rm, const char* file);
+extern "C" void tdma_receivemanager_set_fragment_check_threshold(void* rm, uint64_t seconds);
+extern "C" void tdma_receivemanager_set_fragment_timeout_threshold(void* rm, uint64_t seconds);
+extern "C" bool tdma_receivemanager_enqueue(
+    void* rm, const uint8_t* bmm_bytes, size_t bmm_len, uint16_t src, uint16_t dst, uint64_t ctime,
+    const uint8_t* uuid, size_t length, uint64_t sor, const FFIFrequencySegment* segments, size_t segments_count,
+    uint64_t span, uint64_t begin_time, uint64_t seq
+);
+extern "C" void tdma_receivemanager_process(void* rm, uint64_t u64AbsoluteSlotIndex);
+
+// Callbacks
+extern "C" {
+    static void cb_log_error(void* ptr, uint16_t id, const char* msg) {
+        auto rm = static_cast<EMANE::Models::TDMA::ReceiveManager*>(ptr);
+        LOGGER_VERBOSE_LOGGING(*rm->getLogService(), EMANE::ERROR_LEVEL, "%s", msg);
+    }
+    static void cb_log_debug(void* ptr, uint16_t id, const char* msg) {
+        auto rm = static_cast<EMANE::Models::TDMA::ReceiveManager*>(ptr);
+        LOGGER_VERBOSE_LOGGING(*rm->getLogService(), EMANE::DEBUG_LEVEL, "%s", msg);
+    }
+    static bool cb_spectrum_request_and_noise(void* ptr, uint64_t freq, uint64_t span_micro, uint64_t sor_micro, double rx_power_dbm, double* out_noise, bool* out_signal_in_noise) {
+        auto rm = static_cast<EMANE::Models::TDMA::ReceiveManager*>(ptr);
+        try {
+            auto window = rm->getRadioService()->spectrumService().request(
+                freq, std::chrono::microseconds(span_micro), EMANE::TimePoint(std::chrono::microseconds(sor_micro))
+            );
+            std::tie(*out_noise, *out_signal_in_noise) = EMANE::Utils::maxBinNoiseFloor(window, rx_power_dbm);
+            return true;
+        } catch(EMANE::SpectrumServiceException &) {
+            return false;
+        }
+    }
+    static void cb_publish_inbound(void* ptr, uint16_t src, uint16_t dst, uint8_t priority, size_t length, uint32_t action) {
+        auto rm = static_cast<EMANE::Models::TDMA::ReceiveManager*>(ptr);
+        rm->getPacketStatusPublisher()->inbound(src, dst, priority, length, static_cast<EMANE::Models::TDMA::PacketStatusPublisher::InboundAction>(action));
+    }
+    static void cb_publish_inbound_component(void* ptr, uint16_t src, uint32_t action, uint32_t msg_type, uint16_t dst, uint8_t priority, const uint8_t* data, size_t data_len, bool is_fragment, uint32_t fragment_index, uint32_t fragment_offset, uint64_t fragment_sequence, bool more_fragments) {
+        (void)is_fragment; // Not used in MessageComponent ctor
+        auto rm = static_cast<EMANE::Models::TDMA::ReceiveManager*>(ptr);
+        EMANE::Utils::VectorIO vectorIO;
+        vectorIO.push_back(EMANE::Utils::make_iovec(const_cast<uint8_t*>(data), data_len));
+        EMANE::Models::TDMA::MessageComponent mc(
+            static_cast<EMANE::Models::TDMA::MessageComponent::Type>(msg_type),
+            dst, priority,
+            vectorIO, fragment_index, fragment_offset, fragment_sequence, more_fragments
+        );
+        rm->getPacketStatusPublisher()->inbound(src, mc, static_cast<EMANE::Models::TDMA::PacketStatusPublisher::InboundAction>(action));
+    }
+    static void cb_publish_inbound_message(void* ptr, uint16_t src, const void* bmm_ptr, uint32_t action) {
+        auto rm = static_cast<EMANE::Models::TDMA::ReceiveManager*>(ptr);
+        auto bmm = static_cast<const EMANE::Models::TDMA::BaseModelMessage*>(bmm_ptr);
+        rm->getPacketStatusPublisher()->inbound(src, bmm->getMessages(), static_cast<EMANE::Models::TDMA::PacketStatusPublisher::InboundAction>(action));
+    }
+    static void cb_update_neighbor_rx_metric(void* ptr, uint16_t src, uint64_t seq, const uint8_t* uuid, double sinr, double noise, uint64_t sor_micro, uint64_t dur_micro, uint64_t datarate) {
+        auto rm = static_cast<EMANE::Models::TDMA::ReceiveManager*>(ptr);
+        rm->getNeighborMetricManager()->updateNeighborRxMetric(
+            src, seq, *reinterpret_cast<const uuid_t*>(uuid), sinr, noise,
+            EMANE::TimePoint(std::chrono::microseconds(sor_micro)),
+            std::chrono::microseconds(dur_micro), datarate
+        );
+    }
+    static void cb_send_upstream_packet(void* ptr, uint16_t src, uint16_t dst, uint8_t priority, uint64_t ctime_micro, const uint8_t* uuid, const uint8_t* data, size_t len) {
+        auto rm = static_cast<EMANE::Models::TDMA::ReceiveManager*>(ptr);
+        EMANE::PacketInfo pktInfo(src, dst, priority, EMANE::TimePoint(std::chrono::microseconds(ctime_micro)), *reinterpret_cast<const uuid_t*>(uuid));
+        EMANE::UpstreamPacket pkt(pktInfo, data, len);
+        rm->getDownstreamTransport()->sendUpstreamPacket(pkt);
+    }
+    static void cb_process_packet_meta_info(void* ptr, uint16_t src, uint64_t slot_index, double rx_power, double sinr, uint64_t datarate) {
+        auto rm = static_cast<EMANE::Models::TDMA::ReceiveManager*>(ptr);
+        EMANE::Models::TDMA::PacketMetaInfo pmi{src, slot_index, rx_power, sinr, datarate};
+        rm->getScheduler()->processPacketMetaInfo(pmi);
+    }
+    static void cb_process_scheduler_packet(void* ptr, uint16_t src, uint16_t dst, uint8_t priority, uint64_t ctime_micro, const uint8_t* uuid, const uint8_t* data, size_t len, uint64_t slot_index, double rx_power, double sinr, uint64_t datarate) {
+        auto rm = static_cast<EMANE::Models::TDMA::ReceiveManager*>(ptr);
+        EMANE::PacketInfo pktInfo(src, dst, priority, EMANE::TimePoint(std::chrono::microseconds(ctime_micro)), *reinterpret_cast<const uuid_t*>(uuid));
+        EMANE::UpstreamPacket pkt(pktInfo, data, len);
+        EMANE::Models::TDMA::PacketMetaInfo pmi{src, slot_index, rx_power, sinr, datarate};
+        rm->getScheduler()->processSchedulerPacket(pkt, pmi);
+    }
+}
+
+EMANE::Models::TDMA::ReceiveManager::ReceiveManager(
+    NEMId id, DownstreamTransport * pDownstreamTransport, LogServiceProvider * pLogService,
+    RadioServiceProvider * pRadioService, Scheduler * pScheduler, PacketStatusPublisher * pPacketStatusPublisher, NeighborMetricManager *pNeighborMetricManager
+) :
+    id_{id},
+    pDownstreamTransport_{pDownstreamTransport},
+    pLogService_{pLogService},
+    pRadioService_{pRadioService},
+    pScheduler_{pScheduler},
+    pPacketStatusPublisher_{pPacketStatusPublisher},
+    pNeighborMetricManager_{pNeighborMetricManager}
+{
+    FFIReceiveManagerCallbacks cbs;
+    cbs.rm_cpp = this;
+    cbs.log_error = cb_log_error;
+    cbs.log_debug = cb_log_debug;
+    cbs.spectrum_request_and_noise = cb_spectrum_request_and_noise;
+    cbs.publish_inbound = cb_publish_inbound;
+    cbs.publish_inbound_component = cb_publish_inbound_component;
+    cbs.publish_inbound_message = cb_publish_inbound_message;
+    cbs.update_neighbor_rx_metric = cb_update_neighbor_rx_metric;
+    cbs.send_upstream_packet = cb_send_upstream_packet;
+    cbs.process_packet_meta_info = cb_process_packet_meta_info;
+    cbs.process_scheduler_packet = cb_process_scheduler_packet;
+    rm_ = tdma_receivemanager_new(id, &cbs);
+}
+
+EMANE::Models::TDMA::ReceiveManager::~ReceiveManager()
+{
+    tdma_receivemanager_free(rm_);
+}
 
 void EMANE::Models::TDMA::ReceiveManager::setPromiscuousMode(bool bEnable)
 {
-  bPromiscuousMode_ = bEnable;
+    tdma_receivemanager_set_promiscuous_mode(rm_, bEnable);
 }
 
 void EMANE::Models::TDMA::ReceiveManager::loadCurves(const std::string & sPCRFileName)
 {
-  porManager_.load(sPCRFileName);
+    tdma_receivemanager_load_curves(rm_, sPCRFileName.c_str());
 }
 
 void EMANE::Models::TDMA::ReceiveManager::setFragmentCheckThreshold(const std::chrono::seconds & threshold)
 {
-  fragmentCheckThreshold_ = threshold;
+    tdma_receivemanager_set_fragment_check_threshold(rm_, threshold.count());
 }
 
 void EMANE::Models::TDMA::ReceiveManager::setFragmentTimeoutThreshold(const std::chrono::seconds & threshold)
 {
-  fragmentTimeoutThreshold_ = threshold;
+    tdma_receivemanager_set_fragment_timeout_threshold(rm_, threshold.count());
 }
 
-
-bool
-EMANE::Models::TDMA::ReceiveManager::enqueue(BaseModelMessage && baseModelMessage,
-                                             const PacketInfo & pktInfo,
-                                             size_t length,
-                                             const TimePoint & startOfReception,
-                                             const FrequencySegments & frequencySegments,
-                                             const Microseconds & span,
-                                             const TimePoint & beginTime,
-                                             std::uint64_t u64PacketSequence)
-{
-  bool bReturn{};
-  std::uint64_t u64AbsoluteSlotIndex{baseModelMessage.getAbsoluteSlotIndex()};
-
-  if(!u64PendingAbsoluteSlotIndex_)
-    {
-      u64PendingAbsoluteSlotIndex_ = u64AbsoluteSlotIndex;
-
-      pendingInfo_ = std::make_tuple(std::move(baseModelMessage),
-                                     pktInfo,
-                                     length,
-                                     startOfReception,
-                                     frequencySegments,
-                                     span,
-                                     beginTime,
-                                     u64PacketSequence);
-      bReturn = true;
-    }
-  else if(u64PendingAbsoluteSlotIndex_ < u64AbsoluteSlotIndex)
-    {
-      process(u64AbsoluteSlotIndex);
-
-      u64PendingAbsoluteSlotIndex_ = u64AbsoluteSlotIndex;
-
-      pendingInfo_ = std::make_tuple(std::move(baseModelMessage),
-                                     pktInfo,
-                                     length,
-                                     startOfReception,
-                                     frequencySegments,
-                                     span,
-                                     beginTime,
-                                     u64PacketSequence);
-      bReturn = true;
-    }
-  else if(u64PendingAbsoluteSlotIndex_ > u64AbsoluteSlotIndex)
-    {
-      LOGGER_VERBOSE_LOGGING(*pLogService_,
-                             ERROR_LEVEL,
-                             "MACI %03hu TDMA::ReceiveManager enqueue: pending slot: %zu greater than enqueue: %zu",
-                             id_,
-                             u64PendingAbsoluteSlotIndex_,
-                             u64AbsoluteSlotIndex);
-
-      u64PendingAbsoluteSlotIndex_ = u64AbsoluteSlotIndex;
-
-      pendingInfo_ = std::make_tuple(std::move(baseModelMessage),
-                                     pktInfo,
-                                     length,
-                                     startOfReception,
-                                     frequencySegments,
-                                     span,
-                                     beginTime,
-                                     u64PacketSequence);
-      bReturn = true;
-
-    }
-  else
-    {
-      if(startOfReception < std::get<3>(pendingInfo_))
-        {
-          pendingInfo_ = std::make_tuple(std::move(baseModelMessage),
-                                         pktInfo,
-                                         length,
-                                         startOfReception,
-                                         frequencySegments,
-                                         span,
-                                         beginTime,
-                                         u64PacketSequence);
-        }
+bool EMANE::Models::TDMA::ReceiveManager::enqueue(
+    BaseModelMessage && baseModelMessage, const PacketInfo & pktInfo, size_t length,
+    const TimePoint & startOfReception, const FrequencySegments & frequencySegments,
+    const Microseconds & span, const TimePoint & beginTime, std::uint64_t u64PacketSequence
+) {
+    auto ser = baseModelMessage.serialize();
+    std::vector<FFIFrequencySegment> f_segs;
+    for (const auto& fs : frequencySegments) {
+        f_segs.push_back({
+            fs.getFrequencyHz(),
+            fs.getRxPowerdBm(),
+            static_cast<uint64_t>(fs.getDuration().count())
+        });
     }
 
-  return bReturn;
+    return tdma_receivemanager_enqueue(
+        rm_, reinterpret_cast<const uint8_t*>(ser.c_str()), ser.size(),
+        pktInfo.getSource(), pktInfo.getDestination(),
+        std::chrono::duration_cast<std::chrono::microseconds>(pktInfo.getCreationTime().time_since_epoch()).count(),
+        reinterpret_cast<const uint8_t*>(&pktInfo.getUUID()), length,
+        std::chrono::duration_cast<std::chrono::microseconds>(startOfReception.time_since_epoch()).count(),
+        f_segs.data(), f_segs.size(), span.count(),
+        std::chrono::duration_cast<std::chrono::microseconds>(beginTime.time_since_epoch()).count(),
+        u64PacketSequence
+    );
 }
 
-void
-EMANE::Models::TDMA::ReceiveManager::process(std::uint64_t u64AbsoluteSlotIndex)
+void EMANE::Models::TDMA::ReceiveManager::process(std::uint64_t u64AbsoluteSlotIndex)
 {
-  auto now = Clock::now();
-
-  if(u64PendingAbsoluteSlotIndex_ + 1 == u64AbsoluteSlotIndex)
-    {
-      u64PendingAbsoluteSlotIndex_ = 0;
-
-      double dSINR{};
-      double dNoiseFloordB{};
-
-      BaseModelMessage & baseModelMessage = std::get<0>(pendingInfo_);
-      PacketInfo pktInfo{std::get<1>(pendingInfo_)};
-      size_t length{std::get<2>(pendingInfo_)};
-      TimePoint & startOfReception = std::get<3>(pendingInfo_);
-      FrequencySegments & frequencySegments = std::get<4>(pendingInfo_);
-      Microseconds & span = std::get<5>(pendingInfo_);
-      std::uint64_t u64SequenceNumber{std::get<7>(pendingInfo_)};
-
-      auto & frequencySegment = *frequencySegments.begin();
-
-      try
-        {
-          auto window = pRadioService_->spectrumService().request(frequencySegment.getFrequencyHz(),
-                                                                  span,
-                                                                  startOfReception);
-
-
-          bool bSignalInNoise{};
-
-          std::tie(dNoiseFloordB,bSignalInNoise) =
-            Utils::maxBinNoiseFloor(window,frequencySegment.getRxPowerdBm());
-
-          dSINR = frequencySegment.getRxPowerdBm() - dNoiseFloordB;
-
-          LOGGER_VERBOSE_LOGGING(*pLogService_,
-                                 DEBUG_LEVEL,
-                                 "MACI %03hu TDMA::ReceiveManager upstream EOR processing:"
-                                 " src %hu, dst %hu, max noise %lf, signal in noise %s, SINR %lf",
-                                 id_,
-                                 pktInfo.getSource(),
-                                 pktInfo.getDestination(),
-                                 dNoiseFloordB,
-                                 bSignalInNoise ? "yes" : "no",
-                                 dSINR);
-        }
-      catch(SpectrumServiceException & exp)
-        {
-          pPacketStatusPublisher_->inbound(pktInfo.getSource(),
-                                           baseModelMessage.getMessages(),
-                                           PacketStatusPublisher::InboundAction::DROP_SPECTRUM_SERVICE);
-
-
-          LOGGER_VERBOSE_LOGGING(*pLogService_,
-                                 ERROR_LEVEL,
-                                 "MACI %03hu TDMA::ReceiveManager upstream EOR processing: src %hu,"
-                                 " dst %hu, sor %ju, span %ju spectrum service request error: %s",
-                                 id_,
-                                 pktInfo.getSource(),
-                                 pktInfo.getDestination(),
-                                 std::chrono::duration_cast<Microseconds>(startOfReception.time_since_epoch()).count(),
-                                 span.count(),
-                                 exp.what());
-
-          return;
-        }
-
-
-      // check sinr
-      float fPOR = porManager_.getPOR(baseModelMessage.getDataRate(),dSINR,length);
-
-      LOGGER_VERBOSE_LOGGING(*pLogService_,
-                             DEBUG_LEVEL,
-                             "MACI %03hu TDMA::ReceiveManager upstream EOR processing: src %hu,"
-                             " dst %hu, datarate: %ju sinr: %lf length: %lu, por: %f",
-                             id_,
-                             pktInfo.getSource(),
-                             pktInfo.getDestination(),
-                             baseModelMessage.getDataRate(),
-                             dSINR,
-                             length,
-                             fPOR);
-
-      // get random value [0.0, 1.0]
-      float fRandom{distribution_()};
-
-      if(fPOR < fRandom)
-        {
-          pPacketStatusPublisher_->inbound(pktInfo.getSource(),
-                                           baseModelMessage.getMessages(),
-                                           PacketStatusPublisher::InboundAction::DROP_SINR);
-
-          LOGGER_VERBOSE_LOGGING(*pLogService_,
-                                 DEBUG_LEVEL,
-                                 "MACI %03hu TDMA::ReceiveManager upstream EOR processing: src %hu, dst %hu, "
-                                 "rxpwr %3.2f dBm, drop",
-                                 id_,
-                                 pktInfo.getSource(),
-                                 pktInfo.getDestination(),
-                                 frequencySegment.getRxPowerdBm());
-
-          return;
-        }
-
-
-      // update neighbor metrics
-      pNeighborMetricManager_->updateNeighborRxMetric(pktInfo.getSource(),    // nbr (src)
-                                                      u64SequenceNumber,      // sequence number
-                                                      pktInfo.getUUID(),
-                                                      dSINR,                  // sinr in dBm
-                                                      dNoiseFloordB,          // noise floor in dB
-                                                      startOfReception,       // rx time
-                                                      frequencySegment.getDuration(), // duration
-                                                      baseModelMessage.getDataRate()); // data rate bps
-
-      for(const auto & message : baseModelMessage.getMessages())
-        {
-          NEMId dst{message.getDestination()};
-          Priority priority{message.getPriority()};
-
-          if(bPromiscuousMode_ ||
-             (dst == id_) ||
-             (dst == NEM_BROADCAST_MAC_ADDRESS))
-            {
-              const auto & data = message.getData();
-
-              if(message.isFragment())
-                {
-                  LOGGER_VERBOSE_LOGGING(*pLogService_,
-                                         DEBUG_LEVEL,
-                                         "MACI %03hu TDMA::ReceiveManager upstream EOR processing:"
-                                         " src %hu, dst %hu, findex: %zu foffset: %zu fbytes: %zu"
-                                         " fmore: %s",
-                                         id_,
-                                         pktInfo.getSource(),
-                                         pktInfo.getDestination(),
-                                         message.getFragmentIndex(),
-                                         message.getFragmentOffset(),
-                                         data.size(),
-                                         message.isMoreFragments() ? "yes" : "no");
-
-
-                  auto key = std::make_tuple(pktInfo.getSource(),
-                                             priority,
-                                             message.getFragmentSequence());
-
-                  auto iter = fragmentStore_.find(key);
-
-                  if(iter != fragmentStore_.end())
-                    {
-                      auto & indexSet = std::get<0>(iter->second);
-                      auto & parts = std::get<1>(iter->second);
-                      auto & lastFragmentTime = std::get<2>(iter->second);
-                      auto & totalNumFragments = std::get<5>(iter->second);
-
-                      if(indexSet.insert(message.getFragmentIndex()).second)
-                        {
-                          parts.insert(std::make_pair(message.getFragmentOffset(),message.getData()));
-
-                          lastFragmentTime = now;
-
-                          // this is a new fragment. If the more
-                          // fragments bit is not set then this is the
-                          // last fragment piece so set the
-                          // totalNumFragments appropriately.
-                          if(!message.isMoreFragments())
-                            {
-                              totalNumFragments = message.getFragmentIndex() + 1;
-                            }
-
-                          // check to see if all fragments have been received
-                          if(totalNumFragments && indexSet.size() == totalNumFragments)
-                            {
-                              Utils::VectorIO vectorIO{};
-
-                              for(const auto & part : parts)
-                                {
-                                  vectorIO.push_back(Utils::make_iovec(const_cast<std::uint8_t *>(part.second.data()),
-                                                                       part.second.size()));
-                                }
-
-                              UpstreamPacket pkt{{pktInfo.getSource(),
-                                    dst,
-                                    priority,
-                                    pktInfo.getCreationTime(),
-                                    pktInfo.getUUID()},vectorIO};
-
-
-                              pPacketStatusPublisher_->inbound(pktInfo.getSource(),
-                                                               dst,
-                                                               priority,
-                                                               pkt.length(),
-                                                               PacketStatusPublisher::InboundAction::ACCEPT_GOOD);
-
-
-                              PacketMetaInfo packetMetaInfo{pktInfo.getSource(),
-                                  u64AbsoluteSlotIndex-1,
-                                  frequencySegment.getRxPowerdBm(),
-                                  dSINR,
-                                  baseModelMessage.getDataRate()};
-
-                              if(message.getType() == MessageComponent::Type::DATA)
-                                {
-                                  pDownstreamTransport_->sendUpstreamPacket(pkt);
-
-                                  pScheduler_->processPacketMetaInfo(packetMetaInfo);
-                                }
-                              else
-                                {
-                                  pScheduler_->processSchedulerPacket(pkt,packetMetaInfo);
-                                }
-
-
-                              fragmentStore_.erase(iter);
-                            }
-                        }
-                    }
-                  else
-                    {
-                      // this is the first fragment for this
-                      // message. Just need to set the total number of
-                      // fragments if this happens to also be the last
-                      // fragment in the set.
-                      fragmentStore_.insert(std::make_pair(key,
-                                                           std::make_tuple(std::set<size_t>{message.getFragmentIndex()},
-                                                                           FragmentParts{{message.getFragmentOffset(),
-                                                                                 message.getData()}},
-                                                                           now,
-                                                                           dst,
-                                                                           priority,
-                                                                           message.isMoreFragments() ? 0 : message.getFragmentIndex() + 1)));
-                    }
-                }
-              else
-                {
-                  LOGGER_VERBOSE_LOGGING(*pLogService_,
-                                         DEBUG_LEVEL,
-                                         "MACI %03hu TDMA::ReceiveManager upstream EOR processing:"
-                                         " src %hu, dst %hu, forward upstream",
-                                         id_,
-                                         pktInfo.getSource(),
-                                         pktInfo.getDestination());
-
-
-                  auto data = message.getData();
-
-                  UpstreamPacket pkt{{pktInfo.getSource(),
-                        dst,
-                        priority,
-                        pktInfo.getCreationTime(),
-                        pktInfo.getUUID()},&data[0],data.size()};
-
-
-                  pPacketStatusPublisher_->inbound(pktInfo.getSource(),
-                                                   message,
-                                                   PacketStatusPublisher::InboundAction::ACCEPT_GOOD);
-
-                  PacketMetaInfo packetMetaInfo{pktInfo.getSource(),
-                      u64AbsoluteSlotIndex-1,
-                      frequencySegment.getRxPowerdBm(),
-                      dSINR,
-                      baseModelMessage.getDataRate()};
-
-                  if(message.getType() == MessageComponent::Type::DATA)
-                    {
-                      pDownstreamTransport_->sendUpstreamPacket(pkt);
-
-                      pScheduler_->processPacketMetaInfo(packetMetaInfo);
-                    }
-                  else
-                    {
-                      pScheduler_->processSchedulerPacket(pkt,packetMetaInfo);
-                    }
-                }
-            }
-          else
-            {
-              pPacketStatusPublisher_->inbound(pktInfo.getSource(),
-                                               message,
-                                               PacketStatusPublisher::InboundAction::DROP_DESTINATION_MAC);
-            }
-        }
-    }
-
-  // check to see if there are fragment assemblies to abandon
-  if(lastFragmentCheckTime_ + fragmentCheckThreshold_ <= now)
-    {
-      for(auto iter = fragmentStore_.begin(); iter != fragmentStore_.end();)
-        {
-          auto & parts = std::get<1>(iter->second);
-          auto & lastFragmentTime  = std::get<2>(iter->second);
-          auto & dst  = std::get<3>(iter->second);
-          auto & priority = std::get<4>(iter->second);
-
-          if(lastFragmentTime + fragmentTimeoutThreshold_ <= now)
-            {
-              size_t totalBytes{};
-
-              for(const auto & part : parts)
-                {
-                  totalBytes += part.second.size();
-                }
-
-              pPacketStatusPublisher_->inbound(std::get<0>(iter->first),
-                                               dst,
-                                               priority,
-                                               totalBytes,
-                                               PacketStatusPublisher::InboundAction::DROP_MISS_FRAGMENT);
-
-              fragmentStore_.erase(iter++);
-            }
-          else
-            {
-              ++iter;
-            }
-        }
-
-      lastFragmentCheckTime_ = now;
-    }
+    tdma_receivemanager_process(rm_, u64AbsoluteSlotIndex);
 }

@@ -1,46 +1,43 @@
-/*
- * Copyright (c) 2015 - Adjacent Link LLC, Bridgewater, New Jersey
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
-
 #include "queuestatuspublisher.h"
 
+extern "C" void* emane_rs_tdma_queue_publisher_create();
+extern "C" void emane_rs_tdma_queue_publisher_destroy(void*);
+extern "C" void emane_rs_tdma_queue_publisher_register(void* impl, EMANE::StatisticRegistrar * pRegistrar, 
+    void* pQueueStatusTable, void* pQueueFragmentHistogram,
+    void* hw0, void* hw1, void* hw2, void* hw3, void* hw4);
+
+extern "C" void emane_rs_tdma_queue_publisher_drop(void* impl, uint8_t u8Queue, int reason, size_t count);
+extern "C" void emane_rs_tdma_queue_publisher_enqueue(void* impl, uint8_t u8Queue);
+
+extern "C" void emane_tdma_queue_table_add_row_status(void* pTable, uint8_t key, uint64_t v1, uint64_t v2, uint64_t v3, uint64_t v4, uint64_t v5, uint64_t v6, uint64_t v7, uint64_t v8, uint64_t v9) {
+  auto table = static_cast<EMANE::StatisticTable<std::uint8_t>*>(pTable);
+  table->addRow(key, {EMANE::Any{key}, EMANE::Any{static_cast<long>(v1)}, EMANE::Any{static_cast<long>(v2)}, EMANE::Any{static_cast<long>(v3)}, EMANE::Any{static_cast<long>(v4)}, EMANE::Any{static_cast<long>(v5)}, EMANE::Any{static_cast<long>(v6)}, EMANE::Any{static_cast<long>(v7)}, EMANE::Any{static_cast<long>(v8)}, EMANE::Any{static_cast<long>(v9)}});
+}
+
+extern "C" void emane_tdma_queue_table_set_cell(void* pTable, uint8_t key, size_t column, uint64_t value) {
+  auto table = static_cast<EMANE::StatisticTable<std::uint8_t>*>(pTable);
+  table->setCell(key, column, EMANE::Any{static_cast<long>(value)});
+}
+
+extern "C" uint64_t emane_tdma_numeric_u64_get(void* pNumeric) {
+  return static_cast<EMANE::StatisticNumeric<std::uint64_t>*>(pNumeric)->get();
+}
+extern "C" void emane_tdma_numeric_u64_set(void* pNumeric, uint64_t val) {
+  *static_cast<EMANE::StatisticNumeric<std::uint64_t>*>(pNumeric) = val;
+}
+
 EMANE::Models::TDMA::QueueStatusPublisher::QueueStatusPublisher():
-  pQueueStatusTable_{},
-  statusTableInfo_{{0,{}},{1,{}},{2,{}},{3,{}},{4,{}}},
-  fragmentHistogram_{{0,{0}},{1,{0}},{2,{0}},{3,{0}},{4,{0}}}
+  pImpl_{emane_rs_tdma_queue_publisher_create()}
 {}
+
+EMANE::Models::TDMA::QueueStatusPublisher::~QueueStatusPublisher()
+{
+  emane_rs_tdma_queue_publisher_destroy(pImpl_);
+}
 
 void EMANE::Models::TDMA::QueueStatusPublisher::registerStatistics(StatisticRegistrar & statisticRegistrar)
 {
-  pQueueStatusTable_ =
+  auto pQueueStatusTable =
     statisticRegistrar.registerTable<std::uint8_t>("QueueStatusTable",
       {"Queue","Enqueued","Dequeued","Overflow","Too Big","0","1","2","3","4"},
       StatisticProperties::NONE,
@@ -48,180 +45,46 @@ void EMANE::Models::TDMA::QueueStatusPublisher::registerStatistics(StatisticRegi
       " dropped due to queue overflow (enqueue), dropped due to too big"
       " (dequeue) and which slot classes fragments are being transmitted.");
 
-  for(const auto & entry : statusTableInfo_)
-    {
-      pQueueStatusTable_->addRow(entry.first,
-                                 {Any{entry.first},
-                                     Any{std::get<0>(entry.second)},
-                                       Any{std::get<1>(entry.second)},
-                                         Any{std::get<2>(entry.second)},
-                                           Any{std::get<3>(entry.second)},
-                                             Any{std::get<4>(entry.second)},
-                                               Any{std::get<5>(entry.second)},
-                                                 Any{std::get<6>(entry.second)},
-                                                   Any{std::get<7>(entry.second)},
-                                                     Any{std::get<8>(entry.second)}});
-
-
-
-    }
-
-
-  pQueueFragmentHistogram_ =
+  auto pQueueFragmentHistogram =
     statisticRegistrar.registerTable<std::uint8_t>("QueueFragmentHistogram",
       {"Queue","1","2","3","4","5","6","7","8","9",">9"},
       StatisticProperties::NONE,
       "Shows a per queue histogram of the number of message components required to transmit packets.");
 
-  for(const auto & entry : fragmentHistogram_)
-    {
-      pQueueFragmentHistogram_->addRow(entry.first,
-                                       {Any{entry.first},
-                                           Any{std::get<0>(entry.second)},
-                                             Any{std::get<1>(entry.second)},
-                                               Any{std::get<2>(entry.second)},
-                                                 Any{std::get<3>(entry.second)},
-                                                   Any{std::get<4>(entry.second)},
-                                                     Any{std::get<5>(entry.second)},
-                                                       Any{std::get<6>(entry.second)},
-                                                         Any{std::get<7>(entry.second)},
-                                                           Any{std::get<8>(entry.second)},
-                                                             Any{std::get<9>(entry.second)}});
-    }
+  auto hw0 = statisticRegistrar.registerNumeric<std::uint64_t>("highWaterMarkQueue0", StatisticProperties::CLEARABLE, "High water mark queue 0");
+  auto hw1 = statisticRegistrar.registerNumeric<std::uint64_t>("highWaterMarkQueue1", StatisticProperties::CLEARABLE, "High water mark queue 1");
+  auto hw2 = statisticRegistrar.registerNumeric<std::uint64_t>("highWaterMarkQueue2", StatisticProperties::CLEARABLE, "High water mark queue 2");
+  auto hw3 = statisticRegistrar.registerNumeric<std::uint64_t>("highWaterMarkQueue3", StatisticProperties::CLEARABLE, "High water mark queue 3");
+  auto hw4 = statisticRegistrar.registerNumeric<std::uint64_t>("highWaterMarkQueue4", StatisticProperties::CLEARABLE, "High water mark queue 4");
 
-
-  pHighWaterMarkQueue_[0] =
-    statisticRegistrar.registerNumeric<std::uint64_t>("highWaterMarkQueue0",
-                                                      StatisticProperties::CLEARABLE,
-                                                      "High water mark queue 0");
-
-  pHighWaterMarkQueue_[1] =
-    statisticRegistrar.registerNumeric<std::uint64_t>("highWaterMarkQueue1",
-                                                      StatisticProperties::CLEARABLE,
-                                                      "High water mark queue 1");
-
-  pHighWaterMarkQueue_[2] =
-    statisticRegistrar.registerNumeric<std::uint64_t>("highWaterMarkQueue2",
-                                                      StatisticProperties::CLEARABLE,
-                                                      "High water mark queue 2");
-
-  pHighWaterMarkQueue_[3] =
-    statisticRegistrar.registerNumeric<std::uint64_t>("highWaterMarkQueue3",
-                                                      StatisticProperties::CLEARABLE,
-                                                      "High water mark queue 3");
-
-  pHighWaterMarkQueue_[4] =
-    statisticRegistrar.registerNumeric<std::uint64_t>("highWaterMarkQueue4",
-                                                      StatisticProperties::CLEARABLE,
-                                                      "High water mark queue 4");
+  emane_rs_tdma_queue_publisher_register(pImpl_, &statisticRegistrar, pQueueStatusTable, pQueueFragmentHistogram, hw0, hw1, hw2, hw3, hw4);
 }
 
-void EMANE::Models::TDMA::QueueStatusPublisher::drop(std::uint8_t u8Queue,
-                                                     DropReason reason,
-                                                     size_t count)
+void EMANE::Models::TDMA::QueueStatusPublisher::drop(std::uint8_t u8Queue, DropReason reason, size_t count)
 {
-
-  auto & overflow = std::get<2>(statusTableInfo_[u8Queue]);
-  auto & toobig = std::get<3>(statusTableInfo_[u8Queue]);
-
-  switch(reason)
-    {
-    case DropReason::DROP_OVERFLOW:
-      overflow += count;
-      pQueueStatusTable_->setCell(u8Queue,3,Any{overflow});
-      break;
-
-    case DropReason::DROP_TOOBIG:
-      toobig += count;
-      pQueueStatusTable_->setCell(u8Queue,4,Any{toobig});
-      break;
-    }
-
-  depthQueueInfo_[u8Queue] -= count;
-}
-
-void EMANE::Models::TDMA::QueueStatusPublisher::dequeue(std::uint8_t u8RequestQueue,
-                                                        std::uint8_t u8ActualQueue,
-                                                        const MessageComponents & components)
-{
-  auto & dequeued =  std::get<1>(statusTableInfo_[u8ActualQueue]);
-  auto & queue0 = std::get<4>(statusTableInfo_[u8ActualQueue]);
-  auto & queue1 = std::get<5>(statusTableInfo_[u8ActualQueue]);
-  auto & queue2 = std::get<6>(statusTableInfo_[u8ActualQueue]);
-  auto & queue3 = std::get<7>(statusTableInfo_[u8ActualQueue]);
-  auto & queue4 = std::get<8>(statusTableInfo_[u8ActualQueue]);
-
-  size_t packetsCompletedSend{};
-
-  for(const auto & component : components)
-    {
-      if(!component.isMoreFragments())
-        {
-          ++packetsCompletedSend;
-
-          size_t index{};
-          size_t parts{component.getFragmentIndex() + 1};
-
-          if(parts <= 9)
-            {
-              index = parts;
-            }
-          else
-            {
-              index = 10;
-            }
-
-          ++fragmentHistogram_[u8ActualQueue][index-1];
-
-          pQueueFragmentHistogram_->setCell(u8ActualQueue,
-                                            index,
-                                            Any{fragmentHistogram_[u8ActualQueue][index-1]});
-
-        }
-    }
-
-  dequeued += packetsCompletedSend;
-
-  pQueueStatusTable_->setCell(u8ActualQueue,2,Any{dequeued});
-
-  switch(u8RequestQueue)
-    {
-  case 0:
-    queue0 += components.size();
-    pQueueStatusTable_->setCell(u8ActualQueue,5,Any{queue0});
-    break;
-  case 1:
-    queue1 += components.size();
-    pQueueStatusTable_->setCell(u8ActualQueue,6,Any{queue1});
-    break;
-  case 2:
-    queue2 += components.size();
-    pQueueStatusTable_->setCell(u8ActualQueue,7,Any{queue2});
-    break;
-  case 3:
-    queue3 += components.size();
-    pQueueStatusTable_->setCell(u8ActualQueue,8,Any{queue3});
-    break;
-  case 4:
-    queue4 += components.size();
-    pQueueStatusTable_->setCell(u8ActualQueue,9,Any{queue4});
-    break;
-    }
-
-  depthQueueInfo_[u8ActualQueue] -= packetsCompletedSend;
+  emane_rs_tdma_queue_publisher_drop(pImpl_, u8Queue, reason == DropReason::DROP_OVERFLOW ? 0 : 1, count);
 }
 
 void EMANE::Models::TDMA::QueueStatusPublisher::enqueue(std::uint8_t u8Queue)
 {
-  auto & enqueued = std::get<0>(statusTableInfo_[u8Queue]);
-  pQueueStatusTable_->setCell(u8Queue,1,Any{++enqueued});
+  emane_rs_tdma_queue_publisher_enqueue(pImpl_, u8Queue);
+}
 
-  ++depthQueueInfo_[u8Queue];
+extern "C" void emane_rs_tdma_queue_publisher_dequeue(void* impl, uint8_t u8RequestQueue, uint8_t u8ActualQueue, size_t num_components, const uint8_t* more_fragments, const size_t* fragment_indices);
 
-  if(depthQueueInfo_[u8Queue] > highWaterMarkQueueInfo_[u8Queue])
-    {
-      highWaterMarkQueueInfo_[u8Queue] = depthQueueInfo_[u8Queue];
-
-      *pHighWaterMarkQueue_[u8Queue] = highWaterMarkQueueInfo_[u8Queue];
-    }
+void EMANE::Models::TDMA::QueueStatusPublisher::dequeue(std::uint8_t u8RequestQueue, std::uint8_t u8ActualQueue, const MessageComponents & components)
+{
+  std::vector<uint8_t> more_fragments;
+  std::vector<size_t> fragment_indices;
+  more_fragments.reserve(components.size());
+  fragment_indices.reserve(components.size());
+  for(const auto & component : components) {
+    more_fragments.push_back(component.isMoreFragments() ? 1 : 0);
+    fragment_indices.push_back(component.getFragmentIndex());
+  }
+  emane_rs_tdma_queue_publisher_dequeue(pImpl_, u8RequestQueue, u8ActualQueue, components.size(), more_fragments.data(), fragment_indices.data());
+}
+extern "C" void emane_tdma_queue_table_add_row_fragment(void* pTable, uint8_t key, uint64_t v1, uint64_t v2, uint64_t v3, uint64_t v4, uint64_t v5, uint64_t v6, uint64_t v7, uint64_t v8, uint64_t v9, uint64_t v10) {
+  auto table = static_cast<EMANE::StatisticTable<std::uint8_t>*>(pTable);
+  table->addRow(key, {EMANE::Any{key}, EMANE::Any{static_cast<long>(v1)}, EMANE::Any{static_cast<long>(v2)}, EMANE::Any{static_cast<long>(v3)}, EMANE::Any{static_cast<long>(v4)}, EMANE::Any{static_cast<long>(v5)}, EMANE::Any{static_cast<long>(v6)}, EMANE::Any{static_cast<long>(v7)}, EMANE::Any{static_cast<long>(v8)}, EMANE::Any{static_cast<long>(v9)}, EMANE::Any{static_cast<long>(v10)}});
 }

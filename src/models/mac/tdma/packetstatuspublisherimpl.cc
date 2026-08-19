@@ -1,37 +1,31 @@
-/*
- * Copyright (c) 2015-2016 - Adjacent Link LLC, Bridgewater, New Jersey
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
-
+extern "C" void emane_rs_tdma_packet_publisher_clear(void* impl, int table_type, int queue_index);
 #include "packetstatuspublisherimpl.h"
-#include "priority.h"
+
+extern "C" void* emane_rs_tdma_packet_publisher_create();
+extern "C" void emane_rs_tdma_packet_publisher_destroy(void*);
+extern "C" void emane_rs_tdma_packet_publisher_inbound(void* impl, EMANE::NEMId src, EMANE::NEMId dst, EMANE::Priority priority, size_t size, EMANE::Models::TDMA::PacketStatusPublisher::InboundAction action);
+extern "C" void emane_rs_tdma_packet_publisher_outbound(void* impl, EMANE::NEMId src, EMANE::NEMId dst, EMANE::Priority priority, size_t size, EMANE::Models::TDMA::PacketStatusPublisher::OutboundAction action);
+extern "C" void emane_rs_tdma_packet_publisher_register(void* impl, EMANE::StatisticRegistrar * pRegistrar, 
+    EMANE::StatisticTable<EMANE::NEMId>** broadcastAcceptTables,
+    EMANE::StatisticTable<EMANE::NEMId>** broadcastDropTables,
+    EMANE::StatisticTable<EMANE::NEMId>** unicastAcceptTables,
+    EMANE::StatisticTable<EMANE::NEMId>** unicastDropTables);
+
+extern "C" void emane_tdma_packet_table_add_row(void* pTable, EMANE::NEMId key, uint64_t num_cols, uint64_t* values) {
+  auto table = static_cast<EMANE::StatisticTable<EMANE::NEMId>*>(pTable);
+  std::vector<EMANE::Any> any_values;
+  any_values.reserve(num_cols);
+  any_values.push_back(EMANE::Any{key});
+  for(size_t i = 1; i < num_cols; ++i) {
+      any_values.push_back(EMANE::Any{static_cast<long>(values[i])});
+  }
+  table->addRow(key, any_values);
+}
+
+extern "C" void emane_tdma_packet_table_set_cell(void* pTable, EMANE::NEMId key, size_t column, uint64_t value) {
+  auto table = static_cast<EMANE::StatisticTable<EMANE::NEMId>*>(pTable);
+  table->setCell(key, column, EMANE::Any{static_cast<long>(value)});
+}
 
 namespace
 {
@@ -40,13 +34,6 @@ namespace
       "NEM",
       "Num Bytes Tx",
       "Num Bytes Rx"
-    };
-
-  enum PacketAcceptColumn
-    {
-      ACCEPT_COLUMN_NEM = 0,
-      ACCEPT_COLUMN_NUM_BYTES_TX = 1,
-      ACCEPT_COLUMN_NUM_BYTES_RX = 2,
     };
 
   const EMANE::StatisticTableLabels PacketDropLabels =
@@ -65,28 +52,16 @@ namespace
       "Slot Error",
       "Miss Fragment"
     };
-
-  enum PacketDropColumn
-    {
-      DROP_COLUMN_NEM = 0,
-      DROP_COLUMN_SINR = 1,
-      DROP_COLUMN_REG_ID = 2,
-      DROP_COLUMN_DST_MAC = 3,
-      DROP_COLUMN_QUEUE_OVERFLOW = 4,
-      DROP_COLUMN_BAD_CONTROL = 5,
-      DROP_COLUMN_BAD_SPECTRUM_QUERY = 6,
-      DROP_COLUMN_FLOW_CONTROL = 7,
-      DROP_COLUMN_TOO_BIG = 8,
-      DROP_COLUMN_TOO_LONG = 9,
-      DROP_COLUMN_FREQUENCY = 10,
-      DROP_COLUMN_SLOT_ERROR = 11,
-      DROP_COLUMN_MISS_FRAGMENT = 12
-    };
-
 }
-EMANE::Models::TDMA::PacketStatusPublisherImpl::PacketStatusPublisherImpl(){}
 
-EMANE::Models::TDMA::PacketStatusPublisherImpl::~PacketStatusPublisherImpl(){}
+EMANE::Models::TDMA::PacketStatusPublisherImpl::PacketStatusPublisherImpl():
+  pImpl_{emane_rs_tdma_packet_publisher_create()}
+{}
+
+EMANE::Models::TDMA::PacketStatusPublisherImpl::~PacketStatusPublisherImpl()
+{
+  emane_rs_tdma_packet_publisher_destroy(pImpl_);
+}
 
 void EMANE::Models::TDMA::PacketStatusPublisherImpl::registerStatistics(StatisticRegistrar & statisticRegistrar)
 {
@@ -95,429 +70,55 @@ void EMANE::Models::TDMA::PacketStatusPublisherImpl::registerStatistics(Statisti
       broadcastAcceptTables_[queueIndex] =
         statisticRegistrar.registerTable<NEMId>("BroadcastByteAcceptTable" + std::to_string(queueIndex),
                                                 PacketAcceptLabels,
-                                                [this,queueIndex](StatisticTablePublisher * pTable)
-                                                {
-                                                  std::lock_guard<std::mutex> m(mutexBroadcastPacketAcceptTable_);
-                                                  broadcastAcceptInfos_[queueIndex].clear();
-                                                  pTable->clear();
-                                                },
+                                                [this, queueIndex](StatisticTablePublisher * pTable) { emane_rs_tdma_packet_publisher_clear(pImpl_, 0, queueIndex); pTable->clear(); },
                                                 "Broadcast bytes accepted");
 
       unicastAcceptTables_[queueIndex] =
         statisticRegistrar.registerTable<NEMId>("UnicastByteAcceptTable" + std::to_string(queueIndex),
                                                 PacketAcceptLabels,
-                                                [this,queueIndex](StatisticTablePublisher * pTable)
-                                                {
-                                                  std::lock_guard<std::mutex> m(mutexUnicastPacketAcceptTable_);
-                                                  unicastAcceptInfos_[queueIndex].clear();
-                                                  pTable->clear();
-                                                },
+                                                [this, queueIndex](StatisticTablePublisher * pTable) { emane_rs_tdma_packet_publisher_clear(pImpl_, 2, queueIndex); pTable->clear(); },
                                                 "Unicast bytes accepted");
 
       broadcastDropTables_[queueIndex] =
         statisticRegistrar.registerTable<NEMId>("BroadcastByteDropTable" + std::to_string(queueIndex),
                                                 PacketDropLabels,
-                                                [this,queueIndex](StatisticTablePublisher * pTable)
-                                                {
-                                                  std::lock_guard<std::mutex> m(mutexBroadcastPacketDropTable_);
-                                                  broadcastDropInfos_[queueIndex].clear();
-                                                  pTable->clear();
-                                                },
+                                                [this, queueIndex](StatisticTablePublisher * pTable) { emane_rs_tdma_packet_publisher_clear(pImpl_, 1, queueIndex); pTable->clear(); },
                                                 "Broadcast bytes dropped");
 
       unicastDropTables_[queueIndex] =
         statisticRegistrar.registerTable<NEMId>("UnicastByteDropTable" + std::to_string(queueIndex),
                                                 PacketDropLabels,
-                                                [this,queueIndex](StatisticTablePublisher * pTable)
-                                                {
-                                                  std::lock_guard<std::mutex> m(mutexUnicastPacketDropTable_);
-                                                  unicastDropInfos_[queueIndex].clear();
-                                                  pTable->clear();
-                                                },
+                                                [this, queueIndex](StatisticTablePublisher * pTable) { emane_rs_tdma_packet_publisher_clear(pImpl_, 3, queueIndex); pTable->clear(); },
                                                 "Unicast bytes dropped");
     }
+    emane_rs_tdma_packet_publisher_register(pImpl_, &statisticRegistrar, broadcastAcceptTables_.data(), broadcastDropTables_.data(), unicastAcceptTables_.data(), unicastDropTables_.data());
 }
 
-void EMANE::Models::TDMA::PacketStatusPublisherImpl::inbound(NEMId src,
-                                                             const MessageComponent & component,
-                                                             InboundAction action)
+void EMANE::Models::TDMA::PacketStatusPublisherImpl::inbound(NEMId src, const MessageComponent & component, InboundAction action)
 {
-  inbound(src,
-          component.getDestination(),
-          component.getPriority(),
-          component.getData().size(),
-          action);
+  inbound(src, component.getDestination(), component.getPriority(), component.getData().size(), action);
 }
 
-void  EMANE::Models::TDMA::PacketStatusPublisherImpl::inbound(NEMId src,
-                                                              const MessageComponents & components,
-                                                              InboundAction action)
+void EMANE::Models::TDMA::PacketStatusPublisherImpl::inbound(NEMId src, const MessageComponents & components, InboundAction action)
 {
-  for(const auto & component : components)
-    {
-      inbound(src,
-              component.getDestination(),
-              component.getPriority(),
-              component.getData().size(),
-              action);
-    }
+  for(const auto & component : components) {
+    inbound(src, component.getDestination(), component.getPriority(), component.getData().size(), action);
+  }
 }
 
-
-
-void EMANE::Models::TDMA::PacketStatusPublisherImpl::inbound(NEMId src,
-                                                             NEMId dst,
-                                                             Priority priority,
-                                                             size_t size,
-                                                             InboundAction action)
+void EMANE::Models::TDMA::PacketStatusPublisherImpl::inbound(NEMId src, NEMId dst, Priority priority, size_t size, InboundAction action)
 {
-  TableArray * pAcceptTables{};
-  TableArray * pDropTables{};
-
-  AcceptInfoArrary * pAcceptInfos{};
-  DropInfoArrary  * pDropInfos{};
-
-  std::mutex * pMutexAcceptTable = {};
-  std::mutex * pMutexDropTable = {};
-
-  if(dst == NEM_BROADCAST_MAC_ADDRESS)
-    {
-      pAcceptTables = &broadcastAcceptTables_;
-      pDropTables = &broadcastDropTables_;
-
-      pAcceptInfos = &broadcastAcceptInfos_;
-      pDropInfos = &broadcastDropInfos_;
-
-      pMutexAcceptTable = &mutexBroadcastPacketAcceptTable_;
-      pMutexDropTable = &mutexBroadcastPacketDropTable_;
-    }
-  else
-    {
-      pAcceptTables = &unicastAcceptTables_;
-      pDropTables = &unicastDropTables_;
-
-      pAcceptInfos = &unicastAcceptInfos_;
-      pDropInfos = &unicastDropInfos_;
-
-      pMutexAcceptTable = &mutexUnicastPacketAcceptTable_;
-      pMutexDropTable = &mutexUnicastPacketDropTable_;
-    }
-
-  // detetmine the relevant queue based on priority
-  std::uint8_t u8QueueIndex{priorityToQueue(priority)};
-
-  if(action == InboundAction::ACCEPT_GOOD)
-    {
-      std::lock_guard<std::mutex> m(*pMutexAcceptTable);
-
-      auto iter = (*pAcceptInfos)[u8QueueIndex].find(src);
-
-      if(iter == (*pAcceptInfos)[u8QueueIndex].end())
-        {
-          iter = (*pAcceptInfos)[u8QueueIndex].insert({src,{}}).first;
-
-
-          (*pAcceptTables)[u8QueueIndex]->addRow(src,
-                                                 {Any{src},
-                                                     Any{0L},
-                                                       Any{0L}});
-        }
-
-      auto & bytes = std::get<ACCEPT_COLUMN_NUM_BYTES_RX-1>(iter->second);
-
-      bytes += size;
-
-      (*pAcceptTables)[u8QueueIndex]->setCell(src,
-                                              ACCEPT_COLUMN_NUM_BYTES_RX,
-                                              Any{bytes});
-    }
-  else
-    {
-      std::lock_guard<std::mutex> m(*pMutexDropTable);
-
-      auto iter = (*pDropInfos)[u8QueueIndex].find(src);
-
-      if(iter == (*pDropInfos)[u8QueueIndex].end())
-        {
-          iter = (*pDropInfos)[u8QueueIndex].insert({src,{}}).first;
-
-          (*pDropTables)[u8QueueIndex]->addRow(src,
-                                               {Any{src},
-                                                   Any{0L},
-                                                     Any{0L},
-                                                       Any{0L},
-                                                         Any{0L},
-                                                           Any{0L},
-                                                             Any{0L},
-                                                               Any{0L},
-                                                                 Any{0L},
-                                                                   Any{0L},
-                                                                     Any{0L},
-                                                                       Any{0L},
-                                                                         Any{0L}});
-        }
-
-      switch(action)
-        {
-        case InboundAction::DROP_BAD_CONTROL:
-          {
-            auto & bytes = std::get<DROP_COLUMN_BAD_CONTROL-1>(iter->second);
-
-            bytes += size;
-
-            (*pDropTables)[u8QueueIndex]->setCell(src,
-                                                  DROP_COLUMN_BAD_CONTROL,
-                                                  Any{bytes});
-          }
-          break;
-
-        case InboundAction::DROP_SLOT_NOT_RX:
-        case InboundAction::DROP_SLOT_MISSED_RX:
-          {
-            auto & bytes = std::get<DROP_COLUMN_SLOT_ERROR-1>(iter->second);
-
-            bytes += size;
-
-            (*pDropTables)[u8QueueIndex]->setCell(src,
-                                                  DROP_COLUMN_SLOT_ERROR,
-                                                  Any{bytes});
-          }
-          break;
-
-        case InboundAction::DROP_MISS_FRAGMENT:
-          {
-            auto & bytes = std::get<DROP_COLUMN_MISS_FRAGMENT-1>(iter->second);
-
-            bytes += size;
-
-            (*pDropTables)[u8QueueIndex]->setCell(src,
-                                                  DROP_COLUMN_MISS_FRAGMENT,
-                                                  Any{bytes});
-          }
-          break;
-
-        case InboundAction::DROP_SPECTRUM_SERVICE:
-          {
-            auto & bytes = std::get<DROP_COLUMN_BAD_SPECTRUM_QUERY-1>(iter->second);
-
-            bytes += size;
-
-            (*pDropTables)[u8QueueIndex]->setCell(src,
-                                                  DROP_COLUMN_BAD_SPECTRUM_QUERY,
-                                                  Any{bytes});
-          }
-          break;
-
-        case InboundAction::DROP_SINR:
-          {
-            auto & bytes = std::get<DROP_COLUMN_SINR-1>(iter->second);
-
-            bytes += size;
-
-            (*pDropTables)[u8QueueIndex]->setCell(src,
-                                                  DROP_COLUMN_SINR,
-                                                  Any{bytes});
-          }
-          break;
-
-        case InboundAction::DROP_REGISTRATION_ID:
-          {
-            auto & bytes = std::get<DROP_COLUMN_REG_ID-1>(iter->second);
-
-            bytes += size;
-
-            (*pDropTables)[u8QueueIndex]->setCell(src,
-                                                  DROP_COLUMN_REG_ID,
-                                                  Any{bytes});
-          }
-          break;
-
-        case InboundAction::DROP_DESTINATION_MAC:
-          {
-            auto & bytes = std::get<DROP_COLUMN_DST_MAC-1>(iter->second);
-
-            bytes += size;
-
-            (*pDropTables)[u8QueueIndex]->setCell(src,
-                                                  DROP_COLUMN_DST_MAC,
-                                                  Any{bytes});
-          }
-          break;
-        case InboundAction::DROP_TOO_LONG:
-          {
-            auto & bytes = std::get<DROP_COLUMN_TOO_LONG-1>(iter->second);
-
-            bytes += size;
-
-            (*pDropTables)[u8QueueIndex]->setCell(src,
-                                                  DROP_COLUMN_TOO_LONG,
-                                                  Any{bytes});
-          }
-          break;
-        case InboundAction::DROP_FREQUENCY:
-          {
-            auto & bytes = std::get<DROP_COLUMN_FREQUENCY-1>(iter->second);
-
-            bytes += size;
-
-            (*pDropTables)[u8QueueIndex]->setCell(src,
-                                                  DROP_COLUMN_FREQUENCY,
-                                                  Any{bytes});
-          }
-          break;
-
-        default:
-          break;
-        }
-    }
+  emane_rs_tdma_packet_publisher_inbound(pImpl_, src, dst, priority, size, action);
 }
 
-
-void EMANE::Models::TDMA::PacketStatusPublisherImpl::outbound(NEMId src,
-                                                              NEMId dst,
-                                                              Priority priority,
-                                                              size_t size,
-                                                              OutboundAction action)
+void EMANE::Models::TDMA::PacketStatusPublisherImpl::outbound(NEMId src, NEMId dst, Priority priority, size_t size, OutboundAction action)
 {
-  TableArray * pAcceptTables{};
-  TableArray * pDropTables{};
-
-  AcceptInfoArrary * pAcceptInfos{};
-  DropInfoArrary  * pDropInfos{};
-
-  std::mutex * pMutexAcceptTable = {};
-  std::mutex * pMutexDropTable = {};
-
-  if(dst == NEM_BROADCAST_MAC_ADDRESS)
-    {
-      pAcceptTables = &broadcastAcceptTables_;
-      pDropTables = &broadcastDropTables_;
-
-      pAcceptInfos = &broadcastAcceptInfos_;
-      pDropInfos = &broadcastDropInfos_;
-
-      pMutexAcceptTable = &mutexBroadcastPacketAcceptTable_;
-      pMutexDropTable = &mutexBroadcastPacketDropTable_;
-    }
-  else
-    {
-      pAcceptTables = &unicastAcceptTables_;
-      pDropTables = &unicastDropTables_;
-
-      pAcceptInfos = &unicastAcceptInfos_;
-      pDropInfos = &unicastDropInfos_;
-
-      pMutexAcceptTable = &mutexUnicastPacketAcceptTable_;
-      pMutexDropTable = &mutexUnicastPacketDropTable_;
-    }
-
-  // detetmine the relevant queue based on priority
-  std::uint8_t u8QueueIndex{priorityToQueue(priority)};
-
-
-  if(action == OutboundAction::ACCEPT_GOOD)
-    {
-      std::lock_guard<std::mutex> m(*pMutexAcceptTable);
-
-      auto iter = (*pAcceptInfos)[u8QueueIndex].find(src);
-
-      if(iter == (*pAcceptInfos)[u8QueueIndex].end())
-        {
-          iter = (*pAcceptInfos)[u8QueueIndex].insert({src,{}}).first;
-
-
-          (*pAcceptTables)[u8QueueIndex]->addRow(src,
-                                                 {Any{src},
-                                                     Any{0L},
-                                                       Any{0L}});
-        }
-
-      auto & bytes = std::get<ACCEPT_COLUMN_NUM_BYTES_TX-1>(iter->second);
-
-      bytes += size;
-
-      (*pAcceptTables)[u8QueueIndex]->setCell(src,
-                                              ACCEPT_COLUMN_NUM_BYTES_TX,
-                                              Any{bytes});
-    }
-  else
-    {
-      std::lock_guard<std::mutex> m(*pMutexDropTable);
-
-      auto iter = (*pDropInfos)[u8QueueIndex].find(src);
-
-      if(iter == (*pDropInfos)[u8QueueIndex].end())
-        {
-          iter = (*pDropInfos)[u8QueueIndex].insert({src,{}}).first;
-
-          (*pDropTables)[u8QueueIndex]->addRow(src,
-                                               {Any{src},
-                                                   Any{0L},
-                                                     Any{0L},
-                                                       Any{0L},
-                                                         Any{0L},
-                                                           Any{0L},
-                                                             Any{0L},
-                                                               Any{0L},
-                                                                 Any{0L},
-                                                                   Any{0L},
-                                                                     Any{0L},
-                                                                       Any{0L},
-                                                                         Any{0L}});
-        }
-
-      switch(action)
-        {
-        case OutboundAction::DROP_TOO_BIG:
-          {
-            auto & bytes = std::get<DROP_COLUMN_TOO_BIG-1>(iter->second);
-
-            bytes += size;
-
-            (*pDropTables)[u8QueueIndex]->setCell(src,
-                                                  DROP_COLUMN_TOO_BIG,
-                                                  Any{bytes});
-          }
-          break;
-        case OutboundAction::DROP_OVERFLOW:
-          {
-            auto & bytes = std::get<DROP_COLUMN_QUEUE_OVERFLOW-1>(iter->second);
-
-            bytes += size;
-
-            (*pDropTables)[u8QueueIndex]->setCell(src,
-                                                  DROP_COLUMN_QUEUE_OVERFLOW,
-                                                  Any{bytes});
-          }
-          break;
-        case OutboundAction::DROP_FLOW_CONTROL:
-          {
-            auto & bytes = std::get<DROP_COLUMN_FLOW_CONTROL-1>(iter->second);
-
-            bytes += size;
-
-            (*pDropTables)[u8QueueIndex]->setCell(src,
-                                                  DROP_COLUMN_FLOW_CONTROL,
-                                                  Any{bytes});
-          }
-          break;
-
-        default:
-          break;
-        }
-    }
+  emane_rs_tdma_packet_publisher_outbound(pImpl_, src, dst, priority, size, action);
 }
 
-void EMANE::Models::TDMA::PacketStatusPublisherImpl::outbound(NEMId src,
-                                                              const MessageComponents & components,
-                                                              OutboundAction action)
+void EMANE::Models::TDMA::PacketStatusPublisherImpl::outbound(NEMId src, const MessageComponents & components, OutboundAction action)
 {
-  for(const auto & component : components)
-    {
-      outbound(src,
-               component.getDestination(),
-               component.getPriority(),
-               component.getData().size(),
-               action);
-    }
+  for(const auto & component : components) {
+    outbound(src, component.getDestination(), component.getPriority(), component.getData().size(), action);
+  }
 }
