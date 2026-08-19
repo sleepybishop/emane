@@ -5,22 +5,26 @@ use std::os::raw::c_char;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::thread;
 
+unsafe impl Send for VirtualTransport {}
+unsafe impl Sync for VirtualTransport {}
 pub struct VirtualTransport {
     id: u16,
     tun_tap: Option<Arc<TunTap>>,
     thread: Option<thread::JoinHandle<()>>,
     canceled: Arc<AtomicBool>,
     cpp_obj: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const u8, usize),
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_virtual_transport_new(id: u16, cpp_obj: *mut c_void) -> *mut VirtualTransport {
+pub extern "C" fn emane_rs_virtual_transport_new(id: u16, cpp_obj: *mut c_void, cb: extern "C" fn(*mut c_void, *const u8, usize)) -> *mut VirtualTransport {
     let vt = Box::new(VirtualTransport {
         id,
         tun_tap: None,
         thread: None,
         canceled: Arc::new(AtomicBool::new(false)),
         cpp_obj,
+        cb,
     });
     Box::into_raw(vt)
 }
@@ -33,14 +37,6 @@ pub extern "C" fn emane_rs_virtual_transport_free(ptr: *mut VirtualTransport) {
             vt.stop();
         }
     }
-}
-
-extern "C" {
-    fn VirtualTransport_sendDownstreamPacket_cb(
-        obj: *mut c_void,
-        buf: *const u8,
-        len: usize,
-    );
 }
 
 #[no_mangle]
@@ -68,6 +64,7 @@ pub extern "C" fn emane_rs_virtual_transport_start(
             
             let canceled = vt.canceled.clone();
             let cpp_obj_usize = vt.cpp_obj as usize;
+            let cb = vt.cb;
             
             vt.thread = Some(thread::spawn(move || {
                 let mut buf = [0u8; 65535];
@@ -80,7 +77,7 @@ pub extern "C" fn emane_rs_virtual_transport_start(
                     if len > 0 {
                         unsafe {
                             let cpp_obj = cpp_obj_usize as *mut c_void;
-                            VirtualTransport_sendDownstreamPacket_cb(
+                            cb(
                                 cpp_obj,
                                 buf.as_ptr(),
                                 len as usize,

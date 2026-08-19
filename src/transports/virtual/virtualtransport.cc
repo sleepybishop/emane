@@ -14,7 +14,7 @@
 #include <sstream>
 
 extern "C" {
-    void* emane_rs_virtual_transport_new(uint16_t id, void* cpp_obj);
+    void* emane_rs_virtual_transport_new(uint16_t id, void* cpp_obj, void (*cb)(void*, const uint8_t*, size_t));
     void emane_rs_virtual_transport_free(void* ptr);
     int32_t emane_rs_virtual_transport_start(void* ptr, const char* device_path, const char* device_name, bool arp_mode);
     void emane_rs_virtual_transport_stop(void* ptr);
@@ -40,7 +40,7 @@ EMANE::Transports::Virtual::VirtualTransport::VirtualTransport(NEMId id, Platfor
   commonLayerStatistics_{STATISTIC_TABLE_LABELS},
   rust_obj_{nullptr}
 {
-    rust_obj_ = emane_rs_virtual_transport_new(id, this);
+    rust_obj_ = emane_rs_virtual_transport_new(id, this, VirtualTransport_sendDownstreamPacket_cb);
 }
 
 EMANE::Transports::Virtual::VirtualTransport::~VirtualTransport()

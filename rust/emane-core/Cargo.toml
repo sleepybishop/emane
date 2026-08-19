@@ -12,6 +12,7 @@ prost = "0.12"
 bytes = "1.5"
 socket2 = "0.5"
 libc = "0.2"
+pcap = "2.5.0"
 
 [lib]
 crate-type = ["staticlib", "lib"]

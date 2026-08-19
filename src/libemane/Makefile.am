@@ -17,7 +17,7 @@ libemane_la_LIBADD=      \
  -lrt                    \
  $(libxml2_LIBS)         \
  $(protobuf_LIBS)        \
- $(libuuid_LIBS)
+ $(libuuid_LIBS) -lpcap
 
 libemane_la_LDFLAGS= \
  $(AM_LDFLAGS) \

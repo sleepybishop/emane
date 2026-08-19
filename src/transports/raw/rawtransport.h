@@ -34,16 +34,9 @@
 #ifndef EMANETRANSPORTSRAWRAWTRANSPORT_HEADER_
 #define EMANETRANSPORTSRAWRAWTRANSPORT_HEADER_
 
-#include <pcap.h>
-#include <memory.h>
-
 #include "ethernettransport.h"
 #include "emane/utils/netutils.h"
 #include "emane/utils/bitpool.h"
-
-#include <thread>
-
-#include <set>
 
 namespace EMANE
 {
@@ -79,29 +72,13 @@ namespace EMANE
 
         void processUpstreamControl(const ControlMessages & msgs) override;
 
+        void sendDownstreamPacket_cb(const uint8_t* buf, size_t len);
 
       private:
         std::string sTargetDevice_;
-
-        Utils::EtherAddr macAddr_;
-
-        std::thread thread_;
-
-        pcap_t *pPcapHandle_;
-
         Utils::BitPool *pBitPool_;
-
         std::uint64_t u64BitRate_;
-
-        /**
-         *
-         * @brief read device method reads from raw device and sends packets downstream.
-         *
-         * @retval NULL
-         *
-         */
-        void readDevice();
-
+        void *rust_obj_;
 
         void handleUpstreamControl(const ControlMessages & msgs);
       };
