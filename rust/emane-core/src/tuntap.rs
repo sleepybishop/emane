@@ -1,0 +1,156 @@
+use libc::{c_int, c_char, ifreq, ioctl, IFF_TAP, IFF_NO_PI, IFF_UP, IFF_NOARP, sockaddr_in};
+use std::ffi::CStr;
+use std::os::unix::io::RawFd;
+use std::ptr;
+
+// TUNSETIFF is 0x400454ca on Linux
+const TUNSETIFF: u64 = 0x400454ca;
+const SIOCGIFINDEX: u64 = 0x8933;
+const SIOCSIFADDR: u64 = 0x8916;
+const SIOCSIFNETMASK: u64 = 0x891c;
+const SIOCSIFHWADDR: u64 = 0x8924;
+const SIOCGIFFLAGS: u64 = 0x8913;
+const SIOCSIFFLAGS: u64 = 0x8914;
+
+pub struct TunTap {
+    pub fd: RawFd,
+    pub name: String,
+    pub index: i32,
+}
+
+impl TunTap {
+    pub fn new(path: &str, name: &str) -> std::io::Result<Self> {
+        let path_c = std::ffi::CString::new(path).unwrap();
+        let fd = unsafe { libc::open(path_c.as_ptr(), libc::O_RDWR) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        let mut ifr: ifreq = unsafe { std::mem::zeroed() };
+        let name_bytes = name.as_bytes();
+        let len = std::cmp::min(name_bytes.len(), 15);
+        for i in 0..len {
+            ifr.ifr_name[i] = name_bytes[i] as libc::c_char;
+        }
+        unsafe {
+            ifr.ifr_ifru.ifru_flags = (IFF_NO_PI | IFF_TAP) as libc::c_short;
+        }
+
+        if unsafe { libc::ioctl(fd, TUNSETIFF, &ifr) } < 0 {
+            let err = std::io::Error::last_os_error();
+            unsafe { libc::close(fd); }
+            return Err(err);
+        }
+
+        let ctrl_sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+        if unsafe { libc::ioctl(ctrl_sock, SIOCGIFINDEX, &ifr) } < 0 {
+            let err = std::io::Error::last_os_error();
+            unsafe { libc::close(ctrl_sock); libc::close(fd); }
+            return Err(err);
+        }
+        let index = unsafe { ifr.ifr_ifru.ifru_ifindex };
+        unsafe { libc::close(ctrl_sock); }
+
+        Ok(Self {
+            fd,
+            name: name.to_string(),
+            index,
+        })
+    }
+
+    pub fn activate(&self, arp_enabled: bool) -> std::io::Result<()> {
+        let mut flags = IFF_UP;
+        if !arp_enabled {
+            flags |= IFF_NOARP;
+        }
+        self.set_flags(flags, 1)
+    }
+
+    pub fn deactivate(&self) -> std::io::Result<()> {
+        self.set_flags(IFF_UP, -1)
+    }
+
+    fn get_flags(&self) -> std::io::Result<i32> {
+        let ctrl_sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+        let mut ifr: ifreq = unsafe { std::mem::zeroed() };
+        let name_bytes = self.name.as_bytes();
+        let len = std::cmp::min(name_bytes.len(), 15);
+        for i in 0..len {
+            ifr.ifr_name[i] = name_bytes[i] as libc::c_char;
+        }
+        if unsafe { libc::ioctl(ctrl_sock, SIOCGIFFLAGS, &ifr) } < 0 {
+            let err = std::io::Error::last_os_error();
+            unsafe { libc::close(ctrl_sock); }
+            return Err(err);
+        }
+        unsafe { libc::close(ctrl_sock); }
+        Ok(unsafe { ifr.ifr_ifru.ifru_flags } as i32)
+    }
+
+    fn set_flags(&self, newflags: i32, cmd: i32) -> std::io::Result<()> {
+        let ctrl_sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+        let mut ifr: ifreq = unsafe { std::mem::zeroed() };
+        let name_bytes = self.name.as_bytes();
+        let len = std::cmp::min(name_bytes.len(), 15);
+        for i in 0..len {
+            ifr.ifr_name[i] = name_bytes[i] as libc::c_char;
+        }
+        let current_flags = self.get_flags()?;
+        unsafe {
+            ifr.ifr_ifru.ifru_flags = if cmd > 0 {
+                (current_flags | newflags) as libc::c_short
+            } else if cmd < 0 {
+                (current_flags & !newflags) as libc::c_short
+            } else {
+                newflags as libc::c_short
+            };
+        }
+
+        if unsafe { libc::ioctl(ctrl_sock, SIOCSIFFLAGS, &ifr) } < 0 {
+            let err = std::io::Error::last_os_error();
+            unsafe { libc::close(ctrl_sock); }
+            return Err(err);
+        }
+        unsafe { libc::close(ctrl_sock); }
+        Ok(())
+    }
+
+    pub fn set_ethaddr(&self, id: u16) -> std::io::Result<()> {
+        let mut ifr: ifreq = unsafe { std::mem::zeroed() };
+        let name_bytes = self.name.as_bytes();
+        let len = std::cmp::min(name_bytes.len(), 15);
+        for i in 0..len {
+            ifr.ifr_name[i] = name_bytes[i] as libc::c_char;
+        }
+
+        let mut hwaddr = [0u8; 14];
+        hwaddr[0] = 0x02;
+        hwaddr[1] = 0x02;
+        hwaddr[2] = 0x00;
+        hwaddr[3] = 0x00;
+        hwaddr[4] = (id >> 8) as u8;
+        hwaddr[5] = (id & 0xFF) as u8;
+
+        unsafe {
+            ifr.ifr_ifru.ifru_hwaddr.sa_family = 1; // ARPHRD_ETHER
+            for i in 0..14 {
+                ifr.ifr_ifru.ifru_hwaddr.sa_data[i] = hwaddr[i] as libc::c_char;
+            }
+        }
+
+        let ctrl_sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+        if unsafe { libc::ioctl(ctrl_sock, SIOCSIFHWADDR, &ifr) } < 0 {
+            let err = std::io::Error::last_os_error();
+            unsafe { libc::close(ctrl_sock); }
+            return Err(err);
+        }
+        unsafe { libc::close(ctrl_sock); }
+        Ok(())
+    }
+}
+
+impl Drop for TunTap {
+    fn drop(&mut self) {
+        unsafe { libc::close(self.fd); }
+    }
+}
