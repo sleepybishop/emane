@@ -213,3 +213,6 @@ pub mod transport_layer;
 
 pub mod factory_manager;
 pub mod xml_parser;
+pub mod gpsd_location_agent;
+pub mod tuntap;
+pub mod virtual_transport;
