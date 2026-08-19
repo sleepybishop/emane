@@ -1648,3 +1648,85 @@ EMANE::Models::IEEE80211ABG::MACConfig::configureDynamicItems(const Configuratio
 
    return true;
 }
+
+extern "C" bool emane_ieee80211abg_macconfig_getPromiscuosEnable(void* pConfig) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getPromiscuosEnable();
+}
+extern "C" bool emane_ieee80211abg_macconfig_getWmmEnable(void* pConfig) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getWmmEnable();
+}
+extern "C" int emane_ieee80211abg_macconfig_getModulationType(void* pConfig) {
+  return static_cast<int>(static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getModulationType());
+}
+extern "C" uint8_t emane_ieee80211abg_macconfig_getUnicastDataRateIndex(void* pConfig) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getUnicastDataRateIndex();
+}
+extern "C" uint8_t emane_ieee80211abg_macconfig_getBroadcastDataRateIndex(void* pConfig) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getBroadcastDataRateIndex();
+}
+extern "C" uint32_t emane_ieee80211abg_macconfig_getUnicastDataRateKbps(void* pConfig) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getUnicastDataRateKbps();
+}
+extern "C" uint32_t emane_ieee80211abg_macconfig_getBroadcastDataRateKbps(void* pConfig) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getBroadcastDataRateKbps();
+}
+extern "C" uint32_t emane_ieee80211abg_macconfig_getMaxDataRateKbps(void* pConfig) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getMaxDataRateKbps();
+}
+extern "C" uint32_t emane_ieee80211abg_macconfig_getUnicastDataRateKbps_by_category(void* pConfig, uint8_t arg0) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getUnicastDataRateKbps(arg0);
+}
+extern "C" uint32_t emane_ieee80211abg_macconfig_getBroadcastDataRateKbps_by_category(void* pConfig, uint8_t arg0) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getBroadcastDataRateKbps(arg0);
+}
+extern "C" uint32_t emane_ieee80211abg_macconfig_getMaxP2pDistance(void* pConfig) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getMaxP2pDistance();
+}
+extern "C" uint8_t emane_ieee80211abg_macconfig_getNumAccessCategories(void* pConfig) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getNumAccessCategories();
+}
+extern "C" uint16_t emane_ieee80211abg_macconfig_getRtsThreshold(void* pConfig) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getRtsThreshold();
+}
+extern "C" uint8_t emane_ieee80211abg_macconfig_getQueueSize(void* pConfig, uint8_t arg0) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getQueueSize(arg0);
+}
+extern "C" uint16_t emane_ieee80211abg_macconfig_getQueueEntrySize(void* pConfig, uint8_t arg0) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getQueueEntrySize(arg0);
+}
+extern "C" uint16_t emane_ieee80211abg_macconfig_getCWMin(void* pConfig, uint8_t arg0) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getCWMin(arg0);
+}
+extern "C" uint16_t emane_ieee80211abg_macconfig_getCWMax(void* pConfig, uint8_t arg0) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getCWMax(arg0);
+}
+extern "C" uint64_t emane_ieee80211abg_macconfig_getAifsMicroseconds(void* pConfig, uint8_t arg0) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getAifsMicroseconds(arg0).count();
+}
+extern "C" uint64_t emane_ieee80211abg_macconfig_getTxOpMicroseconds(void* pConfig, uint8_t arg0) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getTxOpMicroseconds(arg0).count();
+}
+extern "C" uint8_t emane_ieee80211abg_macconfig_getRetryLimit(void* pConfig, uint8_t arg0) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getRetryLimit(arg0);
+}
+extern "C" uint16_t emane_ieee80211abg_macconfig_getFlowControlTokens(void* pConfig) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getFlowControlTokens();
+}
+extern "C" bool emane_ieee80211abg_macconfig_getFlowControlEnable(void* pConfig) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getFlowControlEnable();
+}
+extern "C" uint64_t emane_ieee80211abg_macconfig_getNeighborTimeoutMicroseconds(void* pConfig) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getNeighborTimeoutMicroseconds().count();
+}
+extern "C" uint64_t emane_ieee80211abg_macconfig_getChannelActivityIntervalMicroseconds(void* pConfig) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getChannelActivityIntervalMicroseconds().count();
+}
+extern "C" uint64_t emane_ieee80211abg_macconfig_getNeighborMetricDeleteTimeMicroseconds(void* pConfig) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getNeighborMetricDeleteTimeMicroseconds().count();
+}
+extern "C" uint64_t emane_ieee80211abg_macconfig_getRadioMetricReportIntervalMicroseconds(void* pConfig) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getRadioMetricReportIntervalMicroseconds().count();
+}
+extern "C" bool emane_ieee80211abg_macconfig_getRadioMetricEnable(void* pConfig) {
+  return static_cast<const EMANE::Models::IEEE80211ABG::MACConfig*>(pConfig)->getRadioMetricEnable();
+}

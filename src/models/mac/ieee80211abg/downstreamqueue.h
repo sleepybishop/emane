@@ -92,16 +92,7 @@ namespace EMANE
         void registerStatistics(StatisticRegistrar & statisticRegistrar);
 
       private:
-        EMANE::NEMId id_;
-
-        AccessCategory categories_[MAX_ACCESS_CATEGORIES];
-
-        std::uint8_t numActiveCategories_;
-
-        StatisticNumeric<std::uint32_t> * pNumUnicastPacketsUnsupported_;
-        StatisticNumeric<std::uint32_t> * pNumUnicastBytesUnsupported_;
-        StatisticNumeric<std::uint32_t> * pNumBroadcastPacketsUnsupported_;
-        StatisticNumeric<std::uint32_t> * pNumBroadcastBytesUnsupported_;
+        void* rs_state_;
       };
     }
   }

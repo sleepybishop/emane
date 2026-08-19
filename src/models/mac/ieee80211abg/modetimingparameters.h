@@ -83,7 +83,7 @@ namespace EMANE
               { }
             };
 
-            TimingParams timingParams_[MODULATION_TYPE_INDEX_MAX + 1];
+            void* rs_state_;
 
             std::uint16_t getRtsBitLength(MODULATION_TYPE) const;
 

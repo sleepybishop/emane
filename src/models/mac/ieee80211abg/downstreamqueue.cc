@@ -31,447 +31,244 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #include "downstreamqueue.h"
 #include "macconfig.h"
 #include "macstatistics.h"
 
-
-/**
- *
- * @brief queue constructor
- * 
- */
-EMANE::Models::IEEE80211ABG::DownstreamQueue::DownstreamQueue(EMANE::NEMId id):
-  id_{id},
-  numActiveCategories_{MAX_ACCESS_CATEGORIES},
-  pNumUnicastPacketsUnsupported_{},
-  pNumUnicastBytesUnsupported_{},
-  pNumBroadcastPacketsUnsupported_{},
-  pNumBroadcastBytesUnsupported_{}
-{
-  for(std::uint8_t u8Category = 0; u8Category < MAX_ACCESS_CATEGORIES; ++u8Category)
-    {
-      categories_[u8Category].category_ = u8Category;
+extern "C" {
+    void ieee80211abg_downstream_queue_stat_add(void* stat, uint32_t val) {
+        if(stat) *static_cast<EMANE::StatisticNumeric<std::uint32_t>*>(stat) += val;
     }
+
+    void ieee80211abg_downstream_queue_stat_set(void* stat, uint32_t val) {
+        if(stat) *static_cast<EMANE::StatisticNumeric<std::uint32_t>*>(stat) = val;
+    }
+
+    uint32_t ieee80211abg_downstream_queue_stat_get(void* stat) {
+        if(stat) return static_cast<EMANE::StatisticNumeric<std::uint32_t>*>(stat)->get();
+        return 0;
+    }
+
+    void ieee80211abg_downstream_queue_free_entry(void* entry) {
+        delete static_cast<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry*>(entry);
+    }
+
+    void* ieee80211abg_downstream_queue_create(uint16_t id);
+    void ieee80211abg_downstream_queue_destroy(void* queue);
+    
+    void ieee80211abg_downstream_queue_set_stats(
+        void* queue,
+        void* pNumUnicastPacketsUnsupported,
+        void* pNumUnicastBytesUnsupported,
+        void* pNumBroadcastPacketsUnsupported,
+        void* pNumBroadcastBytesUnsupported
+    );
+
+    void ieee80211abg_downstream_queue_set_category_stats(
+        void* queue,
+        uint8_t category,
+        void* pNumUnicastPacketsTooLarge,
+        void* pNumUnicastBytesTooLarge,
+        void* pNumBroadcastPacketsTooLarge,
+        void* pNumBroadcastBytesTooLarge,
+        void* pNumHighWaterMark,
+        void* pNumHighWaterMax
+    );
+
+    void ieee80211abg_downstream_queue_enqueue(
+        void* queue,
+        void* entry_ptr,
+        uint8_t category,
+        size_t length,
+        uint16_t destination,
+        void** dropped_entries,
+        size_t* num_dropped,
+        size_t max_dropped
+    );
+
+    void* ieee80211abg_downstream_queue_dequeue(void* queue);
+
+    void ieee80211abg_downstream_queue_set_max_capacity(void* queue, size_t max_entries);
+    void ieee80211abg_downstream_queue_set_max_capacity_for_category(void* queue, size_t max_entries, uint8_t category);
+    void ieee80211abg_downstream_queue_set_max_entry_size(void* queue, size_t max_entry_size);
+    void ieee80211abg_downstream_queue_set_max_entry_size_for_category(void* queue, size_t max_entry_size, uint8_t category);
+    size_t ieee80211abg_downstream_queue_get_max_capacity(const void* queue);
+    size_t ieee80211abg_downstream_queue_get_max_capacity_for_category(const void* queue, uint8_t category);
+    size_t ieee80211abg_downstream_queue_get_depth(const void* queue);
+    size_t ieee80211abg_downstream_queue_get_depth_for_category(const void* queue, uint8_t category);
+    size_t ieee80211abg_downstream_queue_get_available_space(const void* queue);
+    size_t ieee80211abg_downstream_queue_get_available_space_for_category(const void* queue, uint8_t category);
+    size_t ieee80211abg_downstream_queue_get_num_overflow(void* queue, bool clear);
+    size_t ieee80211abg_downstream_queue_get_num_overflow_for_category(void* queue, uint8_t category, bool clear);
+    void ieee80211abg_downstream_queue_set_categories(void* queue, uint8_t num_categories);
 }
 
+EMANE::Models::IEEE80211ABG::DownstreamQueue::DownstreamQueue(EMANE::NEMId id)
+{
+    rs_state_ = ieee80211abg_downstream_queue_create(id);
+}
 
-/**
- *
- * @brief queue destructor
- * 
- */
 EMANE::Models::IEEE80211ABG::DownstreamQueue::~DownstreamQueue()
-{ }
-
-
+{
+    ieee80211abg_downstream_queue_destroy(rs_state_);
+}
 
 void EMANE::Models::IEEE80211ABG::DownstreamQueue::registerStatistics(StatisticRegistrar & statisticRegistrar)
 {
-  pNumUnicastPacketsUnsupported_ =
-    statisticRegistrar.registerNumeric<std::uint32_t>("numUnicastPacketsUnsupported",
-                                                      StatisticProperties::CLEARABLE);
-  pNumUnicastBytesUnsupported_ =
-    statisticRegistrar.registerNumeric<std::uint32_t>("numUnicastBytesUnsupported",
-                                                      StatisticProperties::CLEARABLE);
-  pNumBroadcastPacketsUnsupported_ =
-    statisticRegistrar.registerNumeric<std::uint32_t>("numBroadcastPacketsUnsupported",
-                                                      StatisticProperties::CLEARABLE);
-  pNumBroadcastBytesUnsupported_ =
-    statisticRegistrar.registerNumeric<std::uint32_t>("numBroadcastBytesUnsupported",
-                                                      StatisticProperties::CLEARABLE);
+    auto pNumUnicastPacketsUnsupported =
+        statisticRegistrar.registerNumeric<std::uint32_t>("numUnicastPacketsUnsupported", StatisticProperties::CLEARABLE);
+    auto pNumUnicastBytesUnsupported =
+        statisticRegistrar.registerNumeric<std::uint32_t>("numUnicastBytesUnsupported", StatisticProperties::CLEARABLE);
+    auto pNumBroadcastPacketsUnsupported =
+        statisticRegistrar.registerNumeric<std::uint32_t>("numBroadcastPacketsUnsupported", StatisticProperties::CLEARABLE);
+    auto pNumBroadcastBytesUnsupported =
+        statisticRegistrar.registerNumeric<std::uint32_t>("numBroadcastBytesUnsupported", StatisticProperties::CLEARABLE);
 
-  for(std::uint8_t u8Category = 0; u8Category < MAX_ACCESS_CATEGORIES; ++u8Category)
+    ieee80211abg_downstream_queue_set_stats(
+        rs_state_,
+        pNumUnicastPacketsUnsupported,
+        pNumUnicastBytesUnsupported,
+        pNumBroadcastPacketsUnsupported,
+        pNumBroadcastBytesUnsupported
+    );
+
+    for(std::uint8_t u8Category = 0; u8Category < MAX_ACCESS_CATEGORIES; ++u8Category)
     {
-      categories_[u8Category].registerStatistics(statisticRegistrar);
+        std::string sCategory{std::to_string(u8Category)};
+
+        auto pNumUnicastPacketsTooLarge =
+            statisticRegistrar.registerNumeric<std::uint32_t>("numUnicastPacketsTooLarge" + sCategory, StatisticProperties::CLEARABLE);
+        auto pNumUnicastBytesTooLarge =
+            statisticRegistrar.registerNumeric<std::uint32_t>("numUnicastBytesTooLarge" + sCategory, StatisticProperties::CLEARABLE);
+        auto pNumBroadcastPacketsTooLarge =
+            statisticRegistrar.registerNumeric<std::uint32_t>("numBroadcastPacketsTooLarge" + sCategory, StatisticProperties::CLEARABLE);
+        auto pNumBroadcastBytesTooLarge =
+            statisticRegistrar.registerNumeric<std::uint32_t>("numBroadcastBytesTooLarge" + sCategory, StatisticProperties::CLEARABLE);
+        auto pNumHighWaterMark =
+            statisticRegistrar.registerNumeric<std::uint32_t>("numHighWaterMark" + sCategory, StatisticProperties::CLEARABLE);
+        auto pNumHighWaterMax =
+            statisticRegistrar.registerNumeric<std::uint32_t>("numHighWaterMax" + sCategory, StatisticProperties::CLEARABLE);
+
+        ieee80211abg_downstream_queue_set_category_stats(
+            rs_state_,
+            u8Category,
+            pNumUnicastPacketsTooLarge,
+            pNumUnicastBytesTooLarge,
+            pNumBroadcastPacketsTooLarge,
+            pNumBroadcastBytesTooLarge,
+            pNumHighWaterMark,
+            pNumHighWaterMax
+        );
     }
 }
 
-
-
-/**
- *
- * @brief set the max number of entries for a given queue index
- *
- * @param maxEntries max number of entrie size
- * @param u8Category queue index
- * 
- */
-void
-EMANE::Models::IEEE80211ABG::DownstreamQueue::setMaxCapacity(size_t maxEntries, std::uint8_t u8Category)
+void EMANE::Models::IEEE80211ABG::DownstreamQueue::setMaxCapacity(size_t maxEntries, std::uint8_t u8Category)
 {
-  if(u8Category < numActiveCategories_)
-    {
-      // clear entries that extend past the max limit
-      while(maxEntries < categories_[u8Category].queue_.size())
-        {
-          categories_[u8Category].queue_.pop();
-        }
-
-      // set new size
-      categories_[u8Category].u8MaxQueueCapacity_ = maxEntries;
-    }
+    ieee80211abg_downstream_queue_set_max_capacity_for_category(rs_state_, maxEntries, u8Category);
 }
 
-
-
-/**
- *
- * @brief set the max number of entries for all queues
- *
- * @param maxEntries max number of entrie size
- * 
- */
-void
-EMANE::Models::IEEE80211ABG::DownstreamQueue::setMaxCapacity(size_t maxEntries)
+void EMANE::Models::IEEE80211ABG::DownstreamQueue::setMaxCapacity(size_t maxEntries)
 {
-  for(std::uint8_t u8Category = 0; u8Category < numActiveCategories_; ++u8Category)
-    {
-      // clear entries that extend past the max limit
-      while(maxEntries < categories_[u8Category].queue_.size())
-        {
-          categories_[u8Category].queue_.pop();
-        }
-
-      // set new size
-      categories_[u8Category].u8MaxQueueCapacity_ = maxEntries;
-    }
+    ieee80211abg_downstream_queue_set_max_capacity(rs_state_, maxEntries);
 }
 
-
-
-/**
- *
- * @brief set the max entry size for a given queue index
- *
- * @param maxEntrySize max entry size
- * @param u8Category queue index
- * 
- */
-void
-EMANE::Models::IEEE80211ABG::DownstreamQueue::setMaxEntrySize(size_t maxEntrySize, std::uint8_t u8Category)
+void EMANE::Models::IEEE80211ABG::DownstreamQueue::setMaxEntrySize(size_t maxEntrySize, std::uint8_t u8Category)
 {
-  // set new size
-  categories_[u8Category].u16MaxPacketSize_ = maxEntrySize;
+    ieee80211abg_downstream_queue_set_max_entry_size_for_category(rs_state_, maxEntrySize, u8Category);
 }
 
-
-
-/**
- *
- * @brief set the max entry size for all queues
- *
- * @param maxEntrySize max entry size
- * 
- */
-void
-EMANE::Models::IEEE80211ABG::DownstreamQueue::setMaxEntrySize(size_t maxEntrySize)
+void EMANE::Models::IEEE80211ABG::DownstreamQueue::setMaxEntrySize(size_t maxEntrySize)
 {
-  for(std::uint8_t u8Category = 0; u8Category < numActiveCategories_; ++u8Category)
-    {
-      // set new size
-      categories_[u8Category].u16MaxPacketSize_ = maxEntrySize;
-    }
+    ieee80211abg_downstream_queue_set_max_entry_size(rs_state_, maxEntrySize);
 }
 
-
-/**
- *
- * @brief get the max number of entries for a given queue index
- *
- * @param u8Category queue index
- *
- * @retval max number of entries
- * 
- */
-size_t 
-EMANE::Models::IEEE80211ABG::DownstreamQueue::getMaxCapacity(std::uint8_t u8Category)
+size_t EMANE::Models::IEEE80211ABG::DownstreamQueue::getMaxCapacity(std::uint8_t u8Category)
 {
-  size_t result{};
-
-  if(u8Category < numActiveCategories_)
-    {
-      result = categories_[u8Category].u8MaxQueueCapacity_;
-    }
-
-  return result;
+    return ieee80211abg_downstream_queue_get_max_capacity_for_category(rs_state_, u8Category);
 }
 
-/**
- *
- * @brief get the max number of entries for all queues
- *
- * @retval max number of entries
- * 
- */
-size_t 
-EMANE::Models::IEEE80211ABG::DownstreamQueue::getMaxCapacity()
+size_t EMANE::Models::IEEE80211ABG::DownstreamQueue::getMaxCapacity()
 {
-  size_t result{};
-
-  for(std::uint8_t u8Category = 0; u8Category < numActiveCategories_; ++u8Category)
-    {
-      result += categories_[u8Category].u8MaxQueueCapacity_;
-    }
-
-  return result;
+    return ieee80211abg_downstream_queue_get_max_capacity(rs_state_);
 }
 
-
-
-/**
- *
- * @brief get the number of entries for a given queue index
- *
- * @param u8Category queue index
- *
- * @retval number of entries
- * 
- */
-size_t 
-EMANE::Models::IEEE80211ABG::DownstreamQueue::getDepth(std::uint8_t u8Category)
+size_t EMANE::Models::IEEE80211ABG::DownstreamQueue::getDepth(std::uint8_t u8Category)
 {
-  size_t result{};
-  
-  if(u8Category < numActiveCategories_)
-    {
-      result = categories_[u8Category].queue_.size();
-    }
-
-  return result;
+    return ieee80211abg_downstream_queue_get_depth_for_category(rs_state_, u8Category);
 }
 
-/**
- *
- * @brief get the number of entries for all active queues
- *
- * @retval number of entries
- * 
- */
-size_t 
-EMANE::Models::IEEE80211ABG::DownstreamQueue::getDepth()
+size_t EMANE::Models::IEEE80211ABG::DownstreamQueue::getDepth()
 {
-  size_t result{};
-
-  for(std::uint8_t u8Category = 0; u8Category < numActiveCategories_; ++u8Category)
-    {
-      result += categories_[u8Category].queue_.size();
-    }
-
-  return result;
+    return ieee80211abg_downstream_queue_get_depth(rs_state_);
 }
 
-
-
-size_t 
-EMANE::Models::IEEE80211ABG::DownstreamQueue::getAvailableSpace(std::uint8_t u8Category)
+size_t EMANE::Models::IEEE80211ABG::DownstreamQueue::getAvailableSpace(std::uint8_t u8Category)
 {
-  size_t result{};
-
-  if(u8Category < numActiveCategories_)
-    {
-      result = categories_[u8Category].u8MaxQueueCapacity_ - categories_[u8Category].queue_.size();
-    }
-
-  return result;
+    return ieee80211abg_downstream_queue_get_available_space_for_category(rs_state_, u8Category);
 }
 
-
-size_t 
-EMANE::Models::IEEE80211ABG::DownstreamQueue::getAvailableSpace()
+size_t EMANE::Models::IEEE80211ABG::DownstreamQueue::getAvailableSpace()
 {
-  size_t result{};
-
-  // total queue size
-  for(std::uint8_t u8Category = 0; u8Category < numActiveCategories_; ++u8Category)
-    {
-      // space remaining
-      result += categories_[u8Category].u8MaxQueueCapacity_ - categories_[u8Category].queue_.size();
-    }
-
-  return result;
+    return ieee80211abg_downstream_queue_get_available_space(rs_state_);
 }
 
-
-
-/**
- *
- * @brief set the number of categories (queues)
- *
- * @param u8NumCategories
- *
- */
-void
-EMANE::Models::IEEE80211ABG::DownstreamQueue::setCategories(std::uint8_t u8NumCategories)
+void EMANE::Models::IEEE80211ABG::DownstreamQueue::setCategories(std::uint8_t u8NumCategories)
 {
-  // check min/max range 1 or more
-  if((u8NumCategories > 0) && (u8NumCategories <= MAX_ACCESS_CATEGORIES))
-    {
-      for(std::uint8_t u8Category = u8NumCategories; u8Category < numActiveCategories_; ++u8Category)
-        {
-          // clear queues that will no longer be used
-          while(categories_[numActiveCategories_ - u8Category].queue_.empty() == false)
-            {
-              categories_[numActiveCategories_ - u8Category].queue_.pop();
-            }
-        }
-
-      // set new size
-      numActiveCategories_ = u8NumCategories;
-    }
+    ieee80211abg_downstream_queue_set_categories(rs_state_, u8NumCategories);
 }
 
-
-/**
- *
- * @brief blocking dequeue, returns highest priority item first
- *
- * @retval queue entry
- *
- */
 std::pair<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry, bool>
 EMANE::Models::IEEE80211ABG::DownstreamQueue::dequeue()
 {
-  // try higher priority first, work down to lower priority
-  for(int iIndex = numActiveCategories_ - 1; iIndex >= 0; --iIndex)
-    {
-      // queue not empty
-      if(categories_[iIndex].queue_.empty() == false)
-        {
-          DownstreamQueueEntry entry{std::move(categories_[iIndex].queue_.front())};
-
-          // pop entry 
-          categories_[iIndex].queue_.pop();
-          
-          return {std::move(entry),true};
-        }
+    void* ptr = ieee80211abg_downstream_queue_dequeue(rs_state_);
+    if(ptr) {
+        auto entry_ptr = static_cast<DownstreamQueueEntry*>(ptr);
+        std::pair<DownstreamQueueEntry, bool> res(std::move(*entry_ptr), true);
+        delete entry_ptr;
+        return res;
     }
-
-  return {DownstreamQueueEntry(),false};
+    return {DownstreamQueueEntry(), false};
 }
 
-/**
- *
- * @brief enqueue, inserts items by priority, signals on success.
- *
- */
 std::vector<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry> 
 EMANE::Models::IEEE80211ABG::DownstreamQueue::enqueue(DownstreamQueueEntry & entry)
 {
-  std::vector<DownstreamQueueEntry> result;
+    uint8_t category = entry.u8Category_;
+    size_t length = entry.pkt_.length();
+    uint16_t destination = entry.pkt_.getPacketInfo().getDestination();
 
-  if(entry.u8Category_ < numActiveCategories_)
-    {
-      AccessCategory * p{&categories_[entry.u8Category_]};
+    auto ptr = new DownstreamQueueEntry(std::move(entry));
 
-      // queue disabled if max size for this category is 0
-      if(p->u8MaxQueueCapacity_ == 0)
-        {
-          // add to drop list 
-          result.push_back(std::move(entry));
-        }
-      // if max msdu is enabled and entry too large
-      else if((p->u16MaxPacketSize_ != 0) && (entry.pkt_.length() > p->u16MaxPacketSize_))
-        {
-          // bump entry exceeded msdu
-          if(entry.pkt_.getPacketInfo().getDestination() == EMANE::NEM_BROADCAST_MAC_ADDRESS)
-            {
-              ++*p->pNumBroadcastPacketsTooLarge_;
-              p->pNumBroadcastBytesTooLarge_ += entry.pkt_.length();
-            }
-          else
-            {
-              ++*p->pNumUnicastPacketsTooLarge_;
-              *p->pNumUnicastBytesTooLarge_ += entry.pkt_.length();
-            }
+    void* dropped[256];
+    size_t num_dropped = 0;
 
-          // add to drop list
-          result.push_back(std::move(entry));
-        }
-      else
-        {
-          // check for queue overflow
-          while(p->queue_.size() >= p->u8MaxQueueCapacity_)
-            {
-              // add to drop list
-              result.push_back(std::move(p->queue_.front()));
+    ieee80211abg_downstream_queue_enqueue(
+        rs_state_,
+        ptr,
+        category,
+        length,
+        destination,
+        dropped,
+        &num_dropped,
+        256
+    );
 
-              // pop entry
-              p->queue_.pop();
-            }
-
-          p->queue_.push(std::move(entry));
-
-          // bump high water mark
-          if(p->queue_.size() > p->pNumHighWaterMark_->get())
-            {
-              *p->pNumHighWaterMark_ = p->queue_.size();
-              *p->pNumHighWaterMax_ = p->u8MaxQueueCapacity_;
-            }
-        }
-    }
-  else
-    {
-      if(entry.pkt_.getPacketInfo().getDestination() == EMANE::NEM_BROADCAST_MAC_ADDRESS)
-        {
-          ++*pNumBroadcastPacketsUnsupported_;
-          *pNumBroadcastBytesUnsupported_ += entry.pkt_.length();
-        }
-      else
-        {
-          ++*pNumUnicastPacketsUnsupported_;
-          *pNumUnicastBytesUnsupported_ += entry.pkt_.length();
-        }
-
-      // add to drop list 
-      result.push_back(std::move(entry));
+    std::vector<DownstreamQueueEntry> result;
+    for(size_t i = 0; i < num_dropped; ++i) {
+        auto dropped_entry = static_cast<DownstreamQueueEntry*>(dropped[i]);
+        result.push_back(std::move(*dropped_entry));
+        delete dropped_entry;
     }
 
-  return result;
+    return result;
 }
 
-
-
-/* @param u8Category queue index
- * @param bClear clear num discard history
- *
- * @retval max number of entries
- * 
- */
-size_t 
-EMANE::Models::IEEE80211ABG::DownstreamQueue::getNumOverFlow(std::uint8_t u8Category, bool bClear)
+size_t EMANE::Models::IEEE80211ABG::DownstreamQueue::getNumOverFlow(std::uint8_t u8Category, bool bClear)
 {
-  size_t result{};
-
-  if(u8Category < numActiveCategories_)
-    {
-      result = categories_[u8Category].numPacketOverFlow_;
-
-      if(bClear == true)
-        {
-          categories_[u8Category].numPacketOverFlow_ = 0;
-        }
-    }
-
-  return result;
+    return ieee80211abg_downstream_queue_get_num_overflow_for_category(rs_state_, u8Category, bClear);
 }
 
-
-size_t 
-EMANE::Models::IEEE80211ABG::DownstreamQueue::getNumOverFlow(bool bClear)
+size_t EMANE::Models::IEEE80211ABG::DownstreamQueue::getNumOverFlow(bool bClear)
 {
-  size_t result{};
-
-  for(std::uint8_t u8Category = 0; u8Category < numActiveCategories_; ++u8Category)
-    {
-      result += categories_[u8Category].numPacketOverFlow_;
-
-      if(bClear == true)
-        {
-          categories_[u8Category].numPacketOverFlow_ = 0;
-        }
-    }
-
-  return result;
+    return ieee80211abg_downstream_queue_get_num_overflow(rs_state_, bClear);
 }
