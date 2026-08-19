@@ -17,32 +17,32 @@ pub struct FFIFrequencySegment {
 #[repr(C)]
 pub struct FFIReceiveManagerCallbacks {
     pub rm_cpp: *mut c_void,
-    pub log_error: extern "C" fn(*mut c_void, u16, *const c_char),
-    pub log_debug: extern "C" fn(*mut c_void, u16, *const c_char),
-    pub spectrum_request_and_noise: extern "C" fn(
+    pub log_error: unsafe extern "C" fn(*mut c_void, u16, *const c_char),
+    pub log_debug: unsafe extern "C" fn(*mut c_void, u16, *const c_char),
+    pub spectrum_request_and_noise: unsafe extern "C" fn(
         *mut c_void, u64, u64, u64, f64, *mut f64, *mut bool
     ) -> bool, // returns false on SpectrumServiceException
-    pub publish_inbound: extern "C" fn(
+    pub publish_inbound: unsafe extern "C" fn(
         *mut c_void, u16, u16, u8, usize, u32
     ),
-    pub publish_inbound_component: extern "C" fn(
+    pub publish_inbound_component: unsafe extern "C" fn(
         *mut c_void, u16, u32,
         u32, u16, u8, *const u8, usize,
         bool, u32, u32, u64, bool
     ),
-    pub publish_inbound_message: extern "C" fn(
+    pub publish_inbound_message: unsafe extern "C" fn(
         *mut c_void, u16, *const c_void, u32 // *const c_void is *const BaseModelMessage
     ),
-    pub update_neighbor_rx_metric: extern "C" fn(
+    pub update_neighbor_rx_metric: unsafe extern "C" fn(
         *mut c_void, u16, u64, *const u8, f64, f64, u64, u64, u64
     ),
-    pub send_upstream_packet: extern "C" fn(
+    pub send_upstream_packet: unsafe extern "C" fn(
         *mut c_void, u16, u16, u8, u64, *const u8, *const u8, usize
     ),
-    pub process_packet_meta_info: extern "C" fn(
+    pub process_packet_meta_info: unsafe extern "C" fn(
         *mut c_void, u16, u64, f64, f64, u64
     ),
-    pub process_scheduler_packet: extern "C" fn(
+    pub process_scheduler_packet: unsafe extern "C" fn(
         *mut c_void, u16, u16, u8, u64, *const u8, *const u8, usize, u64, f64, f64, u64
     ),
 }
@@ -237,7 +237,7 @@ impl ReceiveManager {
         if let Err(e) = self.por_manager.load(s_pcr_file_name) {
             let msg = format!("Failed to load curves: {}", e);
             let c_msg = std::ffi::CString::new(msg).unwrap();
-            (self.callbacks.log_error)(self.callbacks.rm_cpp, self.id, c_msg.as_ptr());
+            unsafe { (self.callbacks.log_error)(self.callbacks.rm_cpp, self.id, c_msg.as_ptr()) };
         }
     }
 
@@ -280,7 +280,7 @@ impl ReceiveManager {
             let msg = format!("MACI {:03} TDMA::ReceiveManager enqueue: pending slot: {} greater than enqueue: {}", 
                               self.id, self.pending_absolute_slot_index, u64_absolute_slot_index);
             let c_msg = std::ffi::CString::new(msg).unwrap();
-            (self.callbacks.log_error)(self.callbacks.rm_cpp, self.id, c_msg.as_ptr());
+            unsafe { (self.callbacks.log_error)(self.callbacks.rm_cpp, self.id, c_msg.as_ptr()) };
             
             self.pending_absolute_slot_index = u64_absolute_slot_index;
             self.update_pending(bmm, src, dst, ctime, uuid, length, sor, segments, span, begin_time, seq);
@@ -333,7 +333,7 @@ impl ReceiveManager {
 
             if let Some(bmm) = self.pending_base_model_message.take() {
                 if let Some(freq_seg) = self.pending_frequency_segments.first() {
-                    let success = (self.callbacks.spectrum_request_and_noise)(
+                    let success = unsafe { (self.callbacks.spectrum_request_and_noise)(
                         self.callbacks.rm_cpp,
                         freq_seg.frequency_hz,
                         self.pending_span_micro,
@@ -341,15 +341,15 @@ impl ReceiveManager {
                         freq_seg.rx_power_dbm,
                         &mut d_noise_floor_db,
                         &mut b_signal_in_noise
-                    );
+                    ) };
 
                     if !success {
-                        (self.callbacks.publish_inbound_message)(
+                        unsafe { (self.callbacks.publish_inbound_message)(
                             self.callbacks.rm_cpp,
                             self.pending_pkt_source,
                             &*bmm as *const _ as *const c_void,
                             5 // DROP_SPECTRUM_SERVICE
-                        );
+                        ) };
                         return;
                     }
 
@@ -360,16 +360,16 @@ impl ReceiveManager {
                     let random: f32 = rng.gen_range(0.0..1.0);
 
                     if por < random {
-                        (self.callbacks.publish_inbound_message)(
+                        unsafe { (self.callbacks.publish_inbound_message)(
                             self.callbacks.rm_cpp,
                             self.pending_pkt_source,
                             &*bmm as *const _ as *const c_void,
                             6 // DROP_SINR
-                        );
+                        ) };
                         return;
                     }
 
-                    (self.callbacks.update_neighbor_rx_metric)(
+                    unsafe { (self.callbacks.update_neighbor_rx_metric)(
                         self.callbacks.rm_cpp,
                         self.pending_pkt_source,
                         self.pending_packet_sequence,
@@ -379,7 +379,7 @@ impl ReceiveManager {
                         self.pending_start_of_reception_micro,
                         freq_seg.duration_micro,
                         bmm.data_rate_bps
-                    );
+                    ) };
 
                     let broadcast_mac: u16 = 0xFFFF;
 
@@ -408,17 +408,17 @@ impl ReceiveManager {
                                             combined_data.extend_from_slice(part);
                                         }
 
-                                        (self.callbacks.publish_inbound)(
+                                        unsafe { (self.callbacks.publish_inbound)(
                                             self.callbacks.rm_cpp,
                                             self.pending_pkt_source,
                                             dst,
                                             priority,
                                             combined_data.len(),
                                             0 // ACCEPT_GOOD
-                                        );
+                                        ) };
 
                                         if message.msg_type as i32 == FfiTdmaMessageType::Data as i32 {
-                                            (self.callbacks.send_upstream_packet)(
+                                            unsafe { (self.callbacks.send_upstream_packet)(
                                                 self.callbacks.rm_cpp,
                                                 self.pending_pkt_source,
                                                 dst,
@@ -427,17 +427,17 @@ impl ReceiveManager {
                                                 self.pending_pkt_uuid.as_ptr(),
                                                 combined_data.as_ptr(),
                                                 combined_data.len()
-                                            );
-                                            (self.callbacks.process_packet_meta_info)(
+                                            ) };
+                                            unsafe { (self.callbacks.process_packet_meta_info)(
                                                 self.callbacks.rm_cpp,
                                                 self.pending_pkt_source,
                                                 u64_absolute_slot_index - 1,
                                                 freq_seg.rx_power_dbm,
                                                 d_sinr,
                                                 bmm.data_rate_bps
-                                            );
+                                            ) };
                                         } else {
-                                            (self.callbacks.process_scheduler_packet)(
+                                            unsafe { (self.callbacks.process_scheduler_packet)(
                                                 self.callbacks.rm_cpp,
                                                 self.pending_pkt_source,
                                                 dst,
@@ -450,13 +450,13 @@ impl ReceiveManager {
                                                 freq_seg.rx_power_dbm,
                                                 d_sinr,
                                                 bmm.data_rate_bps
-                                            );
+                                            ) };
                                         }
                                         self.fragment_store.remove(&key);
                                     }
                                 }
                             } else {
-                                (self.callbacks.publish_inbound_component)(
+                                unsafe { (self.callbacks.publish_inbound_component)(
                                     self.callbacks.rm_cpp,
                                     self.pending_pkt_source,
                                     0, // ACCEPT_GOOD
@@ -470,10 +470,10 @@ impl ReceiveManager {
                                     message.fragment_offset,
                                     message.fragment_sequence,
                                     message.more_fragments
-                                );
+                                ) };
 
                                 if message.msg_type as i32 == FfiTdmaMessageType::Data as i32 {
-                                    (self.callbacks.send_upstream_packet)(
+                                    unsafe { (self.callbacks.send_upstream_packet)(
                                         self.callbacks.rm_cpp,
                                         self.pending_pkt_source,
                                         dst,
@@ -482,17 +482,17 @@ impl ReceiveManager {
                                         self.pending_pkt_uuid.as_ptr(),
                                         message.data.as_ptr(),
                                         message.data.len()
-                                    );
-                                    (self.callbacks.process_packet_meta_info)(
+                                    ) };
+                                    unsafe { (self.callbacks.process_packet_meta_info)(
                                         self.callbacks.rm_cpp,
                                         self.pending_pkt_source,
                                         u64_absolute_slot_index - 1,
                                         freq_seg.rx_power_dbm,
                                         d_sinr,
                                         bmm.data_rate_bps
-                                    );
+                                    ) };
                                 } else {
-                                    (self.callbacks.process_scheduler_packet)(
+                                    unsafe { (self.callbacks.process_scheduler_packet)(
                                         self.callbacks.rm_cpp,
                                         self.pending_pkt_source,
                                         dst,
@@ -505,11 +505,11 @@ impl ReceiveManager {
                                         freq_seg.rx_power_dbm,
                                         d_sinr,
                                         bmm.data_rate_bps
-                                    );
+                                    ) };
                                 }
                             }
                         } else {
-                            (self.callbacks.publish_inbound_component)(
+                            unsafe { (self.callbacks.publish_inbound_component)(
                                 self.callbacks.rm_cpp,
                                 self.pending_pkt_source,
                                 8, // DROP_DESTINATION_MAC
@@ -523,7 +523,7 @@ impl ReceiveManager {
                                 message.fragment_offset,
                                 message.fragment_sequence,
                                 message.more_fragments
-                            );
+                            ) };
                         }
                     }
                 }
@@ -536,14 +536,14 @@ impl ReceiveManager {
                 let last_fragment_time = val.2;
                 if last_fragment_time + self.fragment_timeout_threshold_sec * 1_000_000 <= now {
                     let total_bytes: usize = val.1.values().map(|v| v.len()).sum();
-                    (self.callbacks.publish_inbound)(
+                    unsafe { (self.callbacks.publish_inbound)(
                         self.callbacks.rm_cpp,
                         key.0, // src
                         val.3, // dst
                         key.1, // priority
                         total_bytes,
                         4 // DROP_MISS_FRAGMENT
-                    );
+                    ) };
                     keys_to_remove.push(key.clone());
                 }
             }
@@ -557,7 +557,7 @@ impl ReceiveManager {
 
 
 #[no_mangle]
-pub extern "C" fn tdma_receivemanager_new(
+pub unsafe extern "C" fn tdma_receivemanager_new(
     id: u16,
     callbacks: *const FFIReceiveManagerCallbacks
 ) -> *mut ReceiveManager {
@@ -582,20 +582,20 @@ pub extern "C" fn tdma_receivemanager_new(
 }
 
 #[no_mangle]
-pub extern "C" fn tdma_receivemanager_free(rm: *mut ReceiveManager) {
+pub unsafe extern "C" fn tdma_receivemanager_free(rm: *mut ReceiveManager) {
     if !rm.is_null() {
         unsafe { drop(Box::from_raw(rm)) }
     }
 }
 
 #[no_mangle]
-pub extern "C" fn tdma_receivemanager_set_promiscuous_mode(rm: *mut ReceiveManager, enable: bool) {
+pub unsafe extern "C" fn tdma_receivemanager_set_promiscuous_mode(rm: *mut ReceiveManager, enable: bool) {
     let rm = unsafe { &mut *rm };
     rm.set_promiscuous_mode(enable);
 }
 
 #[no_mangle]
-pub extern "C" fn tdma_receivemanager_load_curves(rm: *mut ReceiveManager, file: *const c_char) {
+pub unsafe extern "C" fn tdma_receivemanager_load_curves(rm: *mut ReceiveManager, file: *const c_char) {
     let rm = unsafe { &mut *rm };
     let c_str = unsafe { CStr::from_ptr(file) };
     if let Ok(s) = c_str.to_str() {
@@ -604,19 +604,19 @@ pub extern "C" fn tdma_receivemanager_load_curves(rm: *mut ReceiveManager, file:
 }
 
 #[no_mangle]
-pub extern "C" fn tdma_receivemanager_set_fragment_check_threshold(rm: *mut ReceiveManager, seconds: u64) {
+pub unsafe extern "C" fn tdma_receivemanager_set_fragment_check_threshold(rm: *mut ReceiveManager, seconds: u64) {
     let rm = unsafe { &mut *rm };
     rm.set_fragment_check_threshold(seconds);
 }
 
 #[no_mangle]
-pub extern "C" fn tdma_receivemanager_set_fragment_timeout_threshold(rm: *mut ReceiveManager, seconds: u64) {
+pub unsafe extern "C" fn tdma_receivemanager_set_fragment_timeout_threshold(rm: *mut ReceiveManager, seconds: u64) {
     let rm = unsafe { &mut *rm };
     rm.set_fragment_timeout_threshold(seconds);
 }
 
 #[no_mangle]
-pub extern "C" fn tdma_receivemanager_enqueue(
+pub unsafe extern "C" fn tdma_receivemanager_enqueue(
     rm: *mut ReceiveManager,
     bmm_bytes: *const u8,
     bmm_len: usize,
@@ -666,26 +666,26 @@ pub extern "C" fn tdma_receivemanager_enqueue(
 }
 
 #[no_mangle]
-pub extern "C" fn tdma_receivemanager_process(rm: *mut ReceiveManager, u64_absolute_slot_index: u64) {
+pub unsafe extern "C" fn tdma_receivemanager_process(rm: *mut ReceiveManager, u64_absolute_slot_index: u64) {
     let rm = unsafe { &mut *rm };
     rm.process(u64_absolute_slot_index);
 }
 
 
 #[no_mangle]
-pub extern "C" fn tdma_pormanager_new() -> *mut PorManager {
+pub unsafe extern "C" fn tdma_pormanager_new() -> *mut PorManager {
     Box::into_raw(Box::new(PorManager::new()))
 }
 
 #[no_mangle]
-pub extern "C" fn tdma_pormanager_free(pm: *mut PorManager) {
+pub unsafe extern "C" fn tdma_pormanager_free(pm: *mut PorManager) {
     if !pm.is_null() {
         unsafe { drop(Box::from_raw(pm)) }
     }
 }
 
 #[no_mangle]
-pub extern "C" fn tdma_pormanager_load(pm: *mut PorManager, s_pcr_file_name: *const c_char) {
+pub unsafe extern "C" fn tdma_pormanager_load(pm: *mut PorManager, s_pcr_file_name: *const c_char) {
     let pm = unsafe { &mut *pm };
     let c_str = unsafe { CStr::from_ptr(s_pcr_file_name) };
     if let Ok(s) = c_str.to_str() {
@@ -694,7 +694,7 @@ pub extern "C" fn tdma_pormanager_load(pm: *mut PorManager, s_pcr_file_name: *co
 }
 
 #[no_mangle]
-pub extern "C" fn tdma_pormanager_get_por(
+pub unsafe extern "C" fn tdma_pormanager_get_por(
     pm: *mut PorManager,
     u64_data_rate_bps: u64,
     f_sinr: f32,

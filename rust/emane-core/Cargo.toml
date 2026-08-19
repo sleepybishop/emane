@@ -18,5 +18,6 @@ pcap = "2.5.0"
 crate-type = ["staticlib", "lib"]
 
 [build-dependencies]
+cc = "1.0"
 bindgen = "0.69.5"
 prost-build = "0.12"

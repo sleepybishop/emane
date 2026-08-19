@@ -1,4 +1,0 @@
-Need to write:
-1. rust/emane-core/src/framework_phy.rs
-2. src/libemane/frameworkphy.cc
-3. src/libemane/frameworkphy.h

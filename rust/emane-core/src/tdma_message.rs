@@ -4,6 +4,7 @@ use crate::protobufs::emane_message::TdmaBaseModelMessage;
 use prost::Message as ProstMessage;
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub enum FfiTdmaMessageType {
     Data = 0,
     Control = 1,

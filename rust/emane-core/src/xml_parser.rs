@@ -14,6 +14,7 @@ pub type ParamMap = HashMap<String, ParamValues>;
 pub struct LayerConfig {
     pub layer_type: String,
     pub definition_file: Option<String>,
+    pub plugin: Option<String>,
     pub params: ParamMap,
 }
 
@@ -94,6 +95,7 @@ pub fn parse_layer(file_path: &Path, node: Node<'_, '_>, expected_type: &str) ->
     let mut config = LayerConfig {
         layer_type: expected_type.to_string(),
         definition_file: None,
+        plugin: None,
         params: ParamMap::new(),
     };
 
@@ -110,7 +112,20 @@ pub fn parse_layer(file_path: &Path, node: Node<'_, '_>, expected_type: &str) ->
         }
         
         config.definition_file = Some(def.to_string());
+        
+        if let Some(plugin) = root.attribute("plugin") {
+            config.plugin = Some(plugin.to_string());
+        } else if let Some(library) = root.attribute("library") {
+            config.plugin = Some(library.to_string());
+        }
+        
         config.params = parse_params(root)?;
+    }
+    
+    if let Some(plugin) = node.attribute("plugin") {
+        config.plugin = Some(plugin.to_string());
+    } else if let Some(library) = node.attribute("library") {
+        config.plugin = Some(library.to_string());
     }
     
     let inline_params = parse_params(node)?;

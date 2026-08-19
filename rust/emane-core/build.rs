@@ -50,4 +50,8 @@ fn main() {
         ],
         &["../../src/libemane/", "../../src/models/mac/tdma/", "../../src/models/mac/rfpipe/"],
     ).expect("Failed to compile protobuf files!");
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    println!("cargo:rustc-link-search=native={}/../../src/libemane/.libs", manifest_dir);
+    println!("cargo:rustc-link-lib=dylib=emane");
+    cc::Build::new().file("src/tdma_stubs.c").compile("tdma_stubs");
 }
