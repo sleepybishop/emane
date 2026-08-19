@@ -2,8 +2,8 @@ use crate::framework_phy::FrameworkPhy;
 use std::os::raw::c_void;
 
 extern "C" {
-    fn emane_c_framework_phy_downstream_stub_process_inbound(stats: *mut c_void, pkt: *mut c_void);
-    fn emane_c_framework_phy_downstream_stub_process_outbound(stats: *mut c_void, pkt: *mut c_void, duration: u64);
+    fn emane_c_framework_phy_downstream_stub_process_inbound(phy: *mut c_void, pkt: *mut c_void);
+    fn emane_c_framework_phy_downstream_stub_process_outbound(phy: *mut c_void, pkt: *mut c_void, duration: u64);
     fn emane_c_framework_phy_downstream_stub_send_downstream_packet(
         phy: *mut c_void,
         header: *mut c_void,
@@ -32,7 +32,7 @@ pub fn process_downstream_packet(phy: &mut FrameworkPhy, pkt: *mut c_void, msgs:
     }
 
     unsafe {
-        emane_c_framework_phy_downstream_stub_process_inbound(phy.common_layer_statistics, pkt);
+        emane_c_framework_phy_downstream_stub_process_inbound(phy.cpp_this, pkt);
     }
 
     let _u64_bandwidth_hz = phy.u64_bandwidth_hz;
@@ -114,7 +114,7 @@ pub fn process_downstream_packet(phy: &mut FrameworkPhy, pkt: *mut c_void, msgs:
     // if !ota_transmitters.is_empty() -> create OTATransmitterControlMessage
     
     unsafe {
-        emane_c_framework_phy_downstream_stub_process_outbound(phy.common_layer_statistics, pkt, 0);
+        emane_c_framework_phy_downstream_stub_process_outbound(phy.cpp_this, pkt, 0);
         emane_c_framework_phy_downstream_stub_send_downstream_packet(
             phy.cpp_this,
             phy_header,

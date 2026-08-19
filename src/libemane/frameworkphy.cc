@@ -1221,11 +1221,7 @@ void EMANE::FrameworkPHY::processDownstreamPacket(DownstreamPacket & pkt,
   emane_rs_framework_phy_process_downstream_packet(rs_state_, &pkt, &msgs);
 }
 
-void EMANE::FrameworkPHY::processDownstreamPacket_i(const TimePoint &,
-                                                    DownstreamPacket &,
-                                                    const ControlMessages &)
-{
-}
+
 
 
 void EMANE::FrameworkPHY::processUpstreamPacket(const CommonPHYHeader & commonPHYHeader,
@@ -1235,14 +1231,996 @@ void EMANE::FrameworkPHY::processUpstreamPacket(const CommonPHYHeader & commonPH
   emane_rs_framework_phy_process_upstream_packet(rs_state_, &commonPHYHeader, &pkt, &msgs);
 }
 
-void EMANE::FrameworkPHY::processUpstreamPacket_i(const TimePoint &,
-                                                  const CommonPHYHeader &,
-                                                  UpstreamPacket &,
-                                                  const ControlMessages &)
-{
-}
+
 
 /** [eventservice-processevent-snippet] */
+
+void EMANE::FrameworkPHY::processDownstreamPacket_i_ffi(const TimePoint & now,
+                                                    DownstreamPacket & pkt,
+                                                    const ControlMessages & msgs)
+{
+  const PacketInfo & pktInfo{pkt.getPacketInfo()};
+
+  LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
+                         DEBUG_LEVEL,
+                         "PHYI %03hu FrameworkPHY::%s src %hu, dst %hu",
+                         id_,
+                         __func__,
+                         pktInfo.getSource(),
+                         pktInfo.getDestination());
+
+  if (bRadioSilenceEnable_)
+    {
+      ++*pNumDownstreamPacketsRadioSilenceEnabledDrop_;
+
+      LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
+                             DEBUG_LEVEL,
+                             "PHYI %03hu FrameworkPHY::%s src %hu, dst %hu"
+                             " drop RadioSilenceEnable is on",
+                             id_,
+                             __func__,
+                             pktInfo.getSource(),
+                             pktInfo.getDestination());
+      return;
+    }
+
+  commonLayerStatistics_.processInbound(pkt);
+
+  // use the default unless provided below
+  std::uint64_t u64BandwidthHz{u64BandwidthHz_};
+
+  // use the default unless provided via control message
+  Transmitters transmitters{{id_, dTxPowerdBm_}};
+
+  // use the default unless provided below
+  FrequencyGroups frequencyGroups{{{u64TxFrequencyHz_,Microseconds::zero()}}};
+
+  //  use the default unless provided via control message
+  Antennas transmitAntennas{};
+
+  Controls::OTATransmitters otaTransmitters;
+
+  TimePoint txTimeStamp{now};
+
+  double dTxWhileRxInterferenceRxPowerMilliWatt{};
+
+  std::pair<FilterData,bool> optionalSpectrumFilterData{};
+
+  const Controls::MIMOTxWhileRxInterferenceControlMessage * pMIMOTxWhileRxInterferenceControlMessage{};
+
+  for(const auto & pMessage : msgs)
+    {
+      switch(pMessage->getId())
+        {
+        case Controls::TransmitterControlMessage::IDENTIFIER:
+          {
+            const auto pTransmitterControlMessage =
+              static_cast<const Controls::TransmitterControlMessage *>(pMessage);
+
+
+            LOGGER_VERBOSE_LOGGING_FN_VARGS(pPlatformService_->logService(),
+                                            DEBUG_LEVEL,
+                                            Controls::TransmitterControlMessageFormatter(pTransmitterControlMessage),
+                                            "PHYI %03hu FrameworkPHY::%s Transmitter Control Message",
+                                            id_,
+                                            __func__);
+
+            transmitters = pTransmitterControlMessage->getTransmitters();
+
+            // build the list of OTA transmitters
+            std::for_each(transmitters.begin(),
+                          transmitters.end(),
+                          [&otaTransmitters](const Transmitter & transmitter)
+                          {
+                            otaTransmitters.insert(transmitter.getNEMId());
+                          });
+          }
+
+          break;
+
+        case Controls::FrequencyControlMessage::IDENTIFIER:
+          if(compatibilityMode_ == CompatibilityMode::MODE_1)
+            {
+              const auto pFrequencyControlMessage =
+                static_cast<const Controls::FrequencyControlMessage *>(pMessage);
+
+              // the radio model will be supplying frequency segment
+              // info so lets clear the defaults
+              frequencyGroups.clear();
+
+              FrequencySegments frequencySegments{};
+
+              for(const auto & segment : pFrequencyControlMessage->getFrequencySegments())
+                {
+                  // for convenience a radio model can set duration
+                  // and offset without specifying frequency by using
+                  // 0 Hz.
+                  std::uint64_t u64TxFrequencyHz{u64TxFrequencyHz_};
+
+                  if(segment.getFrequencyHz())
+                    {
+                      u64TxFrequencyHz = segment.getFrequencyHz();
+                    }
+
+                  if(segment.getPowerdBm().second)
+                    {
+                      frequencySegments.emplace_back(u64TxFrequencyHz, // use our frequency
+                                                     segment.getPowerdBm().first,
+                                                     segment.getDuration(), // duration
+                                                     segment.getOffset()); // offset
+                    }
+                  else
+                    {
+                      frequencySegments.emplace_back(u64TxFrequencyHz, // use our frequency
+                                                     segment.getDuration(), // duration
+                                                     segment.getOffset()); // offset
+                    }
+                }
+
+              frequencyGroups.push_back(std::move(frequencySegments));
+
+              // if bandwidth provided is not 0, use the provided value,
+              // otherwise keep our default value from above
+              if(pFrequencyControlMessage->getBandwidthHz() != 0)
+                {
+                  u64BandwidthHz = pFrequencyControlMessage->getBandwidthHz();
+                }
+
+              LOGGER_VERBOSE_LOGGING_FN_VARGS(pPlatformService_->logService(),
+                                              DEBUG_LEVEL,
+                                              Controls::FrequencyControlMessageFormatter(pFrequencyControlMessage),
+                                              "PHYI %03hu FrameworkPHY::%s Frequency Control Message",
+                                              id_,
+                                              __func__);
+            }
+          else
+            {
+              LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
+                                     ERROR_LEVEL,
+                                     "PHYI %03hu FrameworkPHY::%s, ignoring compatibility"
+                                     " mode 1 FrequencyControlMessage. Use"
+                                     " MIMOTransmitPropertiesControlMessage for compatibility mode 2.",
+                                     id_,
+                                     __func__);
+
+            }
+          break;
+
+        case Controls::AntennaProfileControlMessage::IDENTIFIER:
+          if(compatibilityMode_ == CompatibilityMode::MODE_1)
+            {
+              const auto pAntennaProfileControlMessage =
+                static_cast<const Controls::AntennaProfileControlMessage *>(pMessage);
+
+              LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
+                                     DEBUG_LEVEL,
+                                     "PHYI %03hu FrameworkPHY::%s Antenna Profile Control Message "
+                                     "profile %hu azimuth %lf elevation %lf",
+                                     id_,
+                                     __func__,
+                                     pAntennaProfileControlMessage->getAntennaProfileId(),
+                                     pAntennaProfileControlMessage->getAntennaAzimuthDegrees(),
+                                     pAntennaProfileControlMessage->getAntennaElevationDegrees());
+
+              /** [physicallayer-attachevent-snippet] */
+              Events::AntennaProfiles profiles{{id_,
+                                                  pAntennaProfileControlMessage->getAntennaProfileId(),
+                                                  pAntennaProfileControlMessage->getAntennaAzimuthDegrees(),
+                                                  pAntennaProfileControlMessage->getAntennaElevationDegrees()}};
+
+              antennaManager_.update(profiles);
+
+              pkt.attachEvent(0,Events::AntennaProfileEvent{profiles});
+              /** [physicallayer-attachevent-snippet] */
+            }
+          else
+            {
+              LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
+                                     ERROR_LEVEL,
+                                     "PHYI %03hu FrameworkPHY::%s, ignoring compatibility"
+                                     " mode 1 AntennaProfileControlMessage. Use"
+                                     " RxAntennaUpdateControlMessage for compatibility mode 2.",
+                                     id_,
+                                     __func__);
+            }
+          break;
+
+        case Controls::TimeStampControlMessage::IDENTIFIER:
+          {
+            const auto pTimestampControlMessage =
+              static_cast<const Controls::TimeStampControlMessage *>(pMessage);
+
+
+            txTimeStamp = pTimestampControlMessage->getTimeStamp();
+
+            LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
+                                   DEBUG_LEVEL,
+                                   "PHYI %03hu FrameworkPHY::%s Time Stamp Control Message "
+                                   "timestamp %.6f",
+                                   id_,
+                                   __func__,
+                                   std::chrono::duration_cast<DoubleSeconds>(txTimeStamp.time_since_epoch()).count());
+          }
+
+          break;
+
+        case Controls::TxWhileRxInterferenceControlMessage::IDENTIFIER:
+          if(compatibilityMode_ == CompatibilityMode::MODE_1)
+            {
+              const auto pTxWhileRxInterferenceControlMessage =
+                static_cast<const Controls::TxWhileRxInterferenceControlMessage *>(pMessage);
+
+              dTxWhileRxInterferenceRxPowerMilliWatt =
+                Utils::DB_TO_MILLIWATT(pTxWhileRxInterferenceControlMessage->getRxPowerdBm());
+
+              LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
+                                     DEBUG_LEVEL,
+                                     "PHYI %03hu FrameworkPHY::%s Tx While Rx Interference Control Message "
+                                     "rx power %.6f dBm",
+                                     id_,
+                                     __func__,
+                                     pTxWhileRxInterferenceControlMessage->getRxPowerdBm());
+            }
+          else
+            {
+              LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
+                                     ERROR_LEVEL,
+                                     "PHYI %03hu FrameworkPHY::%s, ignoring compatibility"
+                                     " mode 1 TxWhileRxInterferenceControlMessage. Use"
+                                     " MIMOTxWhileRxInterferenceControlMessage for"
+                                     " compatibility mode 2.",
+                                     id_,
+                                     __func__);
+            }
+
+          break;
+
+        case Controls::MIMOTransmitPropertiesControlMessage::IDENTIFIER:
+          if(compatibilityMode_ == CompatibilityMode::MODE_2)
+            {
+              const auto pMIMOTransmitPropertiesControlMessage =
+                static_cast<const Controls::MIMOTransmitPropertiesControlMessage *>(pMessage);
+
+              LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
+                                     DEBUG_LEVEL,
+                                     "PHYI %03hu FrameworkPHY::%s MIMO Transmit Properties Control Message",
+                                     id_,
+                                     __func__);
+
+              frequencyGroups.clear();
+
+              for(const auto & group : pMIMOTransmitPropertiesControlMessage->getFrequencyGroups())
+                {
+                  FrequencySegments frequencySegments{};
+
+                  for(const auto & segment : group)
+                    {
+                      // for convenience a radio model can set duration
+                      // and offset without specifying frequency by using
+                      // 0 Hz.
+                      std::uint64_t u64TxFrequencyHz{u64TxFrequencyHz_};
+
+                      if(segment.getFrequencyHz())
+                        {
+                          u64TxFrequencyHz = segment.getFrequencyHz();
+                        }
+
+                      if(segment.getPowerdBm().second)
+                        {
+                          frequencySegments.emplace_back(u64TxFrequencyHz, // use our frequency
+                                                         segment.getPowerdBm().first,
+                                                         segment.getDuration(), // duration
+                                                         segment.getOffset()); // offset
+                        }
+                      else
+                        {
+                          frequencySegments.emplace_back(u64TxFrequencyHz, // use our frequency
+                                                         segment.getDuration(), // duration
+                                                         segment.getOffset()); // offset
+                        }
+                    }
+
+                  frequencyGroups.push_back(std::move(frequencySegments));
+                }
+
+              transmitAntennas = pMIMOTransmitPropertiesControlMessage->getTransmitAntennas();
+            }
+          else
+            {
+              LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
+                                     ERROR_LEVEL,
+                                     "PHYI %03hu FrameworkPHY::%s, ignoring compatibility"
+                                     " mode 2 MIMOTransmitPropertiesControlMessage."
+                                     " Use FrequencyControlMessage and/or AntennaProfileControlMessage"
+                                     " for compatibility mode 1",
+                                     id_,
+                                     __func__);
+            }
+
+          break;
+
+        case Controls::RxAntennaUpdateControlMessage::IDENTIFIER:
+          if(compatibilityMode_ == CompatibilityMode::MODE_2)
+            {
+              const auto pRxAntennaUpdateControlMessage =
+                reinterpret_cast<const Controls::RxAntennaUpdateControlMessage *>(pMessage);
+
+              LOGGER_VERBOSE_LOGGING_FN_VARGS(pPlatformService_->logService(),
+                                              DEBUG_LEVEL,
+                                              Controls::RxAntennaUpdateControlMessageFormatter(pRxAntennaUpdateControlMessage),
+                                              "PHYI %03hu FrameworkPHY::%s Rx Antenna Update Control Message",
+                                              id_,
+                                              __func__);
+
+              auto rxAntenna = pRxAntennaUpdateControlMessage->getAntenna();
+
+              // for convenience, if a radio model adds a default
+              // antenna, the appropriate antenna will be created
+              // based on whether fixed gain (ideal omni)
+              // configuration is present.
+              if(rxAntenna.isDefault())
+                {
+                  rxAntenna = optionalFixedAntennaGaindBi_.second ?
+                    Antenna::createIdealOmni(DEFAULT_ANTENNA_INDEX,
+                                             optionalFixedAntennaGaindBi_.first) :
+                    Antenna::createProfileDefined(DEFAULT_ANTENNA_INDEX);
+                }
+
+              antennaManager_.update(id_,rxAntenna);
+            }
+          else
+            {
+              LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
+                                     ERROR_LEVEL,
+                                     "PHYI %03hu FrameworkPHY::%s, ignoring compatibility"
+                                     " mode 2 RxAntennaUpdateControlMessage. Use"
+                                     " AntennaProfileControlMessagefor compatibility mode 1.",
+                                     id_,
+                                     __func__);
+            }
+          break;
+
+        case Controls::SpectrumFilterDataControlMessage::IDENTIFIER:
+          {
+            const auto pSpectrumFilterDataControlMessage =
+              static_cast<const Controls::SpectrumFilterDataControlMessage *>(pMessage);
+
+            optionalSpectrumFilterData = {pSpectrumFilterDataControlMessage->getFilterData(),true};
+
+            LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
+                                   DEBUG_LEVEL,
+                                   "PHYI %03hu FrameworkPHY::%s Spectrum Filter Data Control Message"
+                                   " filter data length: %zu",
+                                   id_,
+                                   __func__,
+                                   optionalSpectrumFilterData.first.size());
+          }
+
+          break;
+
+        case Controls::MIMOTxWhileRxInterferenceControlMessage::IDENTIFIER:
+          if(compatibilityMode_ == CompatibilityMode::MODE_2)
+            {
+              pMIMOTxWhileRxInterferenceControlMessage =
+                static_cast<const Controls::MIMOTxWhileRxInterferenceControlMessage *>(pMessage);
+
+              LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
+                                     DEBUG_LEVEL,
+                                     "PHYI %03hu FrameworkPHY::%s MIMO Tx While Rx Interference Control Message",
+                                     id_,
+                                     __func__);
+            }
+          else
+            {
+              LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
+                                     ERROR_LEVEL,
+                                     "PHYI %03hu FrameworkPHY::%s, ignoring compatibility"
+                                     " mode 2 MIMOTxWhileRxInterferenceControlMessage."
+                                     " Use TxWhileRxInterferenceControlMessage for"
+                                     " compatibility mode 1.",
+                                     id_,
+                                     __func__);
+            }
+
+          break;
+
+        default:
+          LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
+                                 DEBUG_LEVEL,
+                                 "PHYI %03hu FrameworkPHY::%s, unexpected control message %hu, ignore",
+                                 id_,
+                                 __func__,
+                                 pMessage->getId());
+        }
+    }
+
+  // for compat mode 1 and for compat mode 2 convenience, specifying no
+  // transmit antennas results in a transmission using the default
+  // antenna which is created based on whether fixed gain (ideal omni)
+  // configuration is present
+  if(transmitAntennas.empty())
+    {
+      auto txAntenna = optionalFixedAntennaGaindBi_.second ?
+        Antenna::createIdealOmni(DEFAULT_ANTENNA_INDEX,
+                                 optionalFixedAntennaGaindBi_.first) :
+        Antenna::createProfileDefined(DEFAULT_ANTENNA_INDEX);
+
+      txAntenna.setFrequencyGroupIndex(0);
+
+      txAntenna.setBandwidthHz(u64BandwidthHz);
+
+      if(spectralMaskIndex_)
+        {
+          txAntenna.setSpectralMaskIndex(spectralMaskIndex_);
+        }
+
+      transmitAntennas.push_back(std::move(txAntenna));
+    }
+  else
+    {
+      // for convenience, if you specify a non-zero spectral mask in the
+      // phy config vi spectralmaskindex, that value will be used for
+      // all transmit antenna without a non-zero spectral mask.
+      if(spectralMaskIndex_)
+        {
+          for(auto & transmitAntenna : transmitAntennas)
+            {
+              if(!transmitAntenna.getSpectralMaskIndex())
+                {
+                  transmitAntenna.setSpectralMaskIndex(spectralMaskIndex_);
+                }
+            }
+        }
+    }
+
+  // verify the transmitters list include this nem
+  if(std::find_if(transmitters.begin(),
+                  transmitters.end(),
+                  [this](const Transmitter & transmitter)
+                  {
+                    return transmitter.getNEMId() == this->id_;
+                  }) == transmitters.end())
+    {
+      transmitters.emplace_back(id_,dTxPowerdBm_);
+    }
+
+  CommonPHYHeader phyHeader{REGISTERED_EMANE_PHY_FRAMEWORK, // phy registration id
+                            u16SubId_,
+                            u16TxSequenceNumber_++,
+                            txTimeStamp,
+                            frequencyGroups,
+                            transmitAntennas,
+                            transmitters,
+                            optionalSpectrumFilterData};
+
+  LOGGER_VERBOSE_LOGGING_FN_VARGS(pPlatformService_->logService(),
+                                  DEBUG_LEVEL,
+                                  std::bind(&CommonPHYHeader::format, std::ref(phyHeader)),
+                                  "PHYI %03hu FrameworkPHY::%s Common PHY Header",
+                                  id_,
+                                  __func__);
+
+  ControlMessages downstreamControlMessages{};
+
+  if(!otaTransmitters.empty())
+    {
+      downstreamControlMessages.
+        push_back(Controls::OTATransmitterControlMessage::create(otaTransmitters));
+    }
+
+  commonLayerStatistics_.processOutbound(pkt,
+                                         std::chrono::duration_cast<Microseconds>(Clock::now() - now));
+
+  sendDownstreamPacket(std::move(phyHeader),pkt,std::move(downstreamControlMessages));
+
+  if(compatibilityMode_ == CompatibilityMode::MODE_1 &&
+     dTxWhileRxInterferenceRxPowerMilliWatt)
+    {
+      try
+        {
+          receiveProcessors_[DEFAULT_ANTENNA_INDEX]->processSelfInterference(now,
+                                                                             txTimeStamp,
+                                                                             frequencyGroups,
+                                                                             u64BandwidthHz,
+                                                                             {Controls::AntennaSelfInterference{0,dTxWhileRxInterferenceRxPowerMilliWatt}},
+                                                                             optionalSpectrumFilterData);
+
+        }
+      catch(SpectrumServiceException & exp)
+        {
+          LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
+                                 ERROR_LEVEL,
+                                 "PHYI %03hu FrameworkPHY::%s, spectrum service error: %s",
+                                 id_,
+                                 __func__,
+                                 exp.what());
+        }
+    }
+  else if(compatibilityMode_ == CompatibilityMode::MODE_2 &&
+          pMIMOTxWhileRxInterferenceControlMessage)
+    {
+      // See "Note: the processing pool..." below.
+      std::vector<std::future<ReceiveProcessor::ProcessSelfInterferenceResult>> futures{};
+
+      std::list<ReceiveProcessor::ProcessSelfInterferenceResult> results{};
+
+      for(const auto & entry :
+            pMIMOTxWhileRxInterferenceControlMessage->getRxAntennaInterferenceMap())
+        {
+          auto iter = receiveProcessors_.find(entry.first);
+
+          if(iter != receiveProcessors_.end())
+            {
+              if(processingPool_.isRunning())
+                {
+                  futures.push_back(processingPool_.submit(std::bind(&ReceiveProcessor::processSelfInterference,
+                                                                     iter->second.get(),
+                                                                     std::cref(now),
+                                                                     std::cref(txTimeStamp),
+                                                                     std::cref(frequencyGroups),
+                                                                     u64BandwidthHz,
+                                                                     std::cref(entry.second),
+                                                                     std::cref(optionalSpectrumFilterData))));
+                }
+              else
+                {
+                  results.push_back(iter->second->processSelfInterference(now,
+                                                                          txTimeStamp,
+                                                                          frequencyGroups,
+                                                                          u64BandwidthHz,
+                                                                          entry.second,
+                                                                          optionalSpectrumFilterData));
+                }
+            }
+        }
+
+      // wait for all results
+      if(processingPool_.isRunning())
+        {
+          for(auto & future : futures)
+            {
+              results.push_back(std::move(future.get()));
+            }
+        }
+
+      for(const auto & result : results)
+        {
+          switch(result.status_)
+            {
+            case ReceiveProcessor::ProcessSelfInterferenceResult::Status::ERROR_MISSING_POWER_VALUES:
+              LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
+                                     ERROR_LEVEL,
+                                     "PHYI %03hu FrameworkPHY::%s, MIMO TXWhileRxInterference"
+                                     " specified power values do not match the number of frequency"
+                                     " segments in use",
+                                     id_,
+                                     __func__);
+              break;
+
+            case ReceiveProcessor::ProcessSelfInterferenceResult::Status::ERROR_ANTENNA_FREQ_INDEX:
+              LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
+                                     ERROR_LEVEL,
+                                     "PHYI %03hu FrameworkPHY::%s, MIMO TXWhileRxInterference"
+                                     " specified antenna frequency index outside frequency group range",
+                                     id_,
+                                     __func__);
+              break;
+
+            default:
+              break;
+            }
+        }
+    }
+}
+
+void EMANE::FrameworkPHY::processUpstreamPacket_i_ffi(const TimePoint & now,
+                                                  const CommonPHYHeader & commonPHYHeader,
+                                                  UpstreamPacket & pkt,
+                                                  const ControlMessages &, bool bInBand)
+{
+  LOGGER_VERBOSE_LOGGING_FN_VARGS(pPlatformService_->logService(),
+                                  DEBUG_LEVEL,
+                                  std::bind(&CommonPHYHeader::format, std::ref(commonPHYHeader)),
+                                  "PHYI %03hu FrameworkPHY::%s Common PHY Header",
+                                  id_,
+                                  __func__);
+
+  commonLayerStatistics_.processInbound(pkt);
+
+  const  auto & pktInfo = pkt.getPacketInfo();
+
+
+  if(compatibilityMode_ == CompatibilityMode::MODE_1)
+    {
+      createDefaultAntennaIfNeeded();
+    }
+  else
+    {
+      if(receiveProcessors_.empty())
+        {
+          commonLayerStatistics_.processOutbound(pkt,
+                                                 std::chrono::duration_cast<Microseconds>(Clock::now() - now),
+                                                 DROP_CODE_MISSING_CONTROL);
+
+          LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
+                                  ERROR_LEVEL,
+                                  "PHYI %03hu FrameworkPHY::%s "
+                                  " src %hu, dst %hu, drop no rx antennas in use",
+                                  id_,
+                                  __func__,
+                                  pktInfo.getSource(),
+                                  pktInfo.getDestination());
+
+          //drop
+          return;
+        }
+    }
+
+  // unless this is an in-band packet, it will only be processed if
+  // noise processing is on
+  if(bInBand || noiseMode_ != NoiseMode::NONE)
+    {
+      Controls::AntennaReceiveInfos antennaReceiveInfos{};
+      Controls::DopplerShifts dopplerShifts{};
+      std::set<TimePoint> mimoSoT{};
+      std::set<Microseconds> mimoPropagationDelay{};
+      std::vector<std::pair<LocationInfo,bool>> locationInfos{};
+      std::vector<std::pair<FadingInfo,bool>> fadingSelections{};
+
+      for(const auto & transmitter : commonPHYHeader.getTransmitters())
+        {
+          locationInfos.push_back(locationManager_.getLocationInfo(transmitter.getNEMId()));
+
+          fadingSelections.push_back(fadingManager_.getFadingSelection(transmitter.getNEMId()));
+
+          for(const auto & txAntenna : commonPHYHeader.getTransmitAntennas())
+            {
+              antennaManager_.update(transmitter.getNEMId(),txAntenna);
+            }
+        }
+
+      // Note: the processing pool, if enabled, is used to process
+      // receive paths per receive antenna. The emane thread/messaging
+      // model uses a functor queue to guarantee the processing of
+      // framework messages (event, upstream packet and/or control,
+      // downstream packet and/or control, running-state
+      // configuration, and timers. No new message processing occurs
+      // until the current message processing is complete. This allows
+      // the processing pool to access internal state without
+      // additional locks. Care must me taken when extending
+      // functionality so no inter-thread communication occurs between
+      // pool threads, otherwise additional locks will be necessary.
+      //
+      // The processing pool can reduce the amount of processing time
+      // for an upstream message that contains a large number of
+      // frequency segments and/or a large number of transmit antenna
+      // (MIMO). Without a processing pool receive paths are
+      // calculated serially in a loop. There is a threshold where
+      // serial processing is faster than the context switching of the
+      // thread pool. Server and scenario benchmarking should be used
+      // to determine whether processing pool usage is appropriate.
+      // Additionally, if the number of cores available to a running
+      // emane process is less than the processing pool size worse
+      // performance may be encountered.
+
+      std::vector<std::future<ReceiveProcessor::ProcessResult>> futures{};
+
+      std::list<ReceiveProcessor::ProcessResult> results{};
+
+      for(auto & receiveProcessorEntry : receiveProcessors_)
+        {
+          auto & pReceiveProcessor = receiveProcessorEntry.second;
+
+          if(processingPool_.isRunning())
+            {
+              futures.push_back(processingPool_.submit(std::bind(&ReceiveProcessor::process,pReceiveProcessor.get(),
+                                                                 std::cref(now),
+                                                                 std::cref(commonPHYHeader),
+                                                                 std::cref(locationInfos),
+                                                                 std::cref(fadingSelections),
+                                                                 bInBand)));
+            }
+          else
+            {
+              results.push_back(pReceiveProcessor->process(now,
+                                                           commonPHYHeader,
+                                                           locationInfos,
+                                                           fadingSelections,
+                                                           bInBand));
+            }
+        }
+
+      // wait for all results
+      if(processingPool_.isRunning())
+        {
+          for(auto & future : futures)
+            {
+              results.push_back(std::move(future.get()));
+            }
+        }
+
+      bool bNotFOI{};
+
+      for(auto & result : results)
+        {
+          if(result.status_ == ReceiveProcessor::ProcessResult::Status::SUCCESS)
+            {
+              if(result.mimoSoT_.time_since_epoch().count() != 0)
+                {
+                  mimoSoT.insert(result.mimoSoT_);
+                  mimoPropagationDelay.insert(result.mimoPropagationDelay_);
+                }
+
+              antennaReceiveInfos.insert(antennaReceiveInfos.end(),
+                                         std::make_move_iterator(result.antennaReceiveInfos_.begin()),
+                                         std::make_move_iterator(result.antennaReceiveInfos_.end()));
+
+              dopplerShifts.insert(std::make_move_iterator(result.dopplerShifts_.begin()),
+                                   std::make_move_iterator(result.dopplerShifts_.end()));
+
+              if(result.bGainCacheHit_)
+                {
+                  ++*pGainCacheHit_;
+                }
+              else
+                {
+                  ++*pGainCacheMiss_;
+                }
+
+              for(const auto & entry : result.receivePowerMap_)
+                {
+                  receivePowerTablePublisher_.update(std::get<0>(entry.first),
+                                                     std::get<1>(entry.first),
+                                                     std::get<2>(entry.first),
+                                                     std::get<3>(entry.first),
+                                                     std::get<0>(entry.second),
+                                                     std::get<1>(entry.second),
+                                                     std::get<2>(entry.second),
+                                                     std::get<3>(entry.second),
+                                                     std::get<4>(entry.second),
+                                                     std::get<5>(entry.second),
+                                                     commonPHYHeader.getTxTime());
+                }
+
+              for(const auto & entry : result.observedPowerMap_)
+                {
+                  observedPowerTablePublisher_.update(std::get<0>(entry.first),
+                                                      std::get<1>(entry.first),
+                                                      std::get<2>(entry.first),
+                                                      std::get<3>(entry.first),
+                                                      std::get<0>(entry.second),
+                                                      std::get<1>(entry.second),
+                                                      commonPHYHeader.getTxTime());
+                }
+            }
+          else
+            {
+              std::string sReason{"unknown"};
+              LogLevel logLevel{DEBUG_LEVEL};
+
+              Microseconds processingDuration{std::chrono::duration_cast<Microseconds>(Clock::now() - now)};
+
+              switch(result.status_)
+                {
+                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_ANTENNA_FREQ_INDEX:
+                  commonLayerStatistics_.processOutbound(pkt,
+                                                         processingDuration,
+                                                         DROP_CODE_ANTENNA_FREQ_INDEX);
+                  sReason = "transmit antenna frequency index invalid";
+                  logLevel = ERROR_LEVEL;
+                  break;
+
+                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_FADINGMANAGER_LOCATION:
+                  commonLayerStatistics_.processOutbound(pkt,
+                                                         processingDuration,
+                                                         DROP_CODE_FADINGMANAGER_LOCATION);
+                  sReason = "FadingManager missing location information";
+                  break;
+
+                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_FADINGMANAGER_ALGORITHM:
+                  commonLayerStatistics_.processOutbound(pkt,
+                                                         processingDuration,
+                                                         DROP_CODE_FADINGMANAGER_ALGORITHM);
+
+                  sReason = "FadingManager unknown algorithm";
+                  logLevel = ERROR_LEVEL;
+                  break;
+
+                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_FADINGMANAGER_SELECTION:
+                  commonLayerStatistics_.processOutbound(pkt,
+                                                         processingDuration,
+                                                         DROP_CODE_FADINGMANAGER_SELECTION);
+
+                  sReason = "FadingManager unknown fading selection for transmitter";
+
+                  break;
+
+                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_GAINMANAGER_LOCATION:
+                  commonLayerStatistics_.processOutbound(pkt,
+                                                         processingDuration,
+                                                         DROP_CODE_GAINMANAGER_LOCATION);
+
+                  sReason = "GainManager missing location information";
+                  break;
+
+                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_GAINMANAGER_ANTENNAPROFILE:
+                  commonLayerStatistics_.processOutbound(pkt,
+                                                         processingDuration,
+                                                         DROP_CODE_GAINMANAGER_ANTENNAPROFILE);
+                  sReason = "GainManager unknown antenna profile";
+                  logLevel = ERROR_LEVEL;
+                  break;
+
+                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_GAINMANAGER_HORIZON:
+                  commonLayerStatistics_.processOutbound(pkt,
+                                                         processingDuration,
+                                                         DROP_CODE_GAINMANAGER_HORIZON);
+                  sReason = "GainManager below horizon";
+                  break;
+
+                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_GAINMANAGER_ANTENNA_INDEX:
+                  commonLayerStatistics_.processOutbound(pkt,
+                                                         processingDuration,
+                                                         DROP_CODE_GAINMANAGER_ANTENNA_INDEX);
+                  sReason = "GainManager unknown antenna index";
+                  logLevel = ERROR_LEVEL;
+                  break;
+
+                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_PROPAGATIONMODEL:
+                  commonLayerStatistics_.processOutbound(pkt,
+                                                         processingDuration,
+                                                         DROP_CODE_PROPAGATIONMODEL);
+                  sReason = "propagation model missing information";
+                  break;
+
+                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_SPECTRUM_CLAMP:
+                  commonLayerStatistics_.processOutbound(pkt,
+                                                         processingDuration,
+                                                         DROP_CODE_SPECTRUM_CLAMP);
+                  sReason = "SpectrumManager detected request range error";
+                  break;
+
+                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_NOT_FOI:
+                  bNotFOI = true;
+                  break;
+
+                case ReceiveProcessor::ProcessResult::Status::DROP_CODE_OUT_OF_BAND:
+                  commonLayerStatistics_.processOutbound(pkt,
+                                                         processingDuration,
+                                                         DROP_CODE_OUT_OF_BAND);
+                  sReason = "out-of-band message, not for this waveform";
+                  break;
+
+                default:
+                  break;
+                }
+
+              if(!bNotFOI)
+                {
+                  LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
+                                          logLevel,
+                                          "PHYI %03hu FrameworkPHY::%s "
+                                          " src %hu, dst %hu, drop %s",
+                                          id_,
+                                          __func__,
+                                          pktInfo.getSource(),
+                                          pktInfo.getDestination(),
+                                          sReason.c_str());
+
+                  // drop
+                  return;
+                }
+            }
+        }
+
+      if(!antennaReceiveInfos.empty())
+        {
+          commonLayerStatistics_.processOutbound(pkt,
+                                                 std::chrono::duration_cast<Microseconds>(Clock::now() - now));
+
+          if(compatibilityMode_ == CompatibilityMode::MODE_1)
+            {
+              const auto & defaultAntennaReceiveInfo = antennaReceiveInfos[0];
+              const auto & firstTxAntenna = commonPHYHeader.getTransmitAntennas()[0];
+
+              /** [physicallayer-sendupstreampacket-snippet] */
+              sendUpstreamPacket(pkt,
+                                 {Controls::FrequencyControlMessage::create(firstTxAntenna.getBandwidthHz(),
+                                                                            defaultAntennaReceiveInfo.getFrequencySegments()),
+                                  Controls::ReceivePropertiesControlMessage::create(*mimoSoT.begin(),
+                                                                                    *mimoPropagationDelay.begin(),
+                                                                                    defaultAntennaReceiveInfo.getSpan(),
+                                                                                    defaultAntennaReceiveInfo.getReceiverSensitivitydBm())});
+              /** [physicallayer-sendupstreampacket-snippet] */
+            }
+          else
+            {
+              sendUpstreamPacket(pkt,
+                                 {Controls::MIMOReceivePropertiesControlMessage::create(*mimoSoT.begin(),
+                                                                                        *mimoPropagationDelay.begin(),
+                                                                                        std::move(antennaReceiveInfos),
+                                                                                        std::move(dopplerShifts))});
+            }
+
+          if(*mimoSoT.begin() != commonPHYHeader.getTxTime())
+            {
+              ++*pTimeSyncThresholdRewrite_;
+            }
+        }
+      else
+        {
+          if(bNotFOI)
+            {
+              commonLayerStatistics_.processOutbound(pkt,
+                                                     std::chrono::duration_cast<Microseconds>(Clock::now() - now),
+                                                     DROP_CODE_NOT_FOI);
+
+              LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
+                                      DEBUG_LEVEL,
+                                      "PHYI %03hu FrameworkPHY::%s"
+                                      " src %hu, dst %hu, drop message"
+                                      " frequency not in frequency of interest list.",
+                                      id_,
+                                      __func__,
+                                      pktInfo.getSource(),
+                                      pktInfo.getDestination());
+            }
+          else
+            {
+              if(bRxSensitivityPromiscuousModeEnable_ && compatibilityMode_ == CompatibilityMode::MODE_2)
+                {
+                  sendUpstreamPacket(pkt);
+                }
+
+              if(*mimoSoT.begin() != commonPHYHeader.getTxTime())
+                {
+                  ++*pTimeSyncThresholdRewrite_;
+                }
+
+              // below rx sensitivy on all antenna
+              commonLayerStatistics_.processOutbound(pkt,
+                                                     std::chrono::duration_cast<Microseconds>(Clock::now() - now),
+                                                     DROP_CODE_RX_SENSITIVITY);
+
+              LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
+                                      DEBUG_LEVEL,
+                                      "PHYI %03hu FrameworkPHY::%s src %hu, dst %hu,"
+                                      " drop below receiver sensitivity",
+                                      id_,
+                                      __func__,
+                                      pktInfo.getSource(),
+                                      pktInfo.getDestination());
+
+            }
+
+          // drop
+          return;
+        }
+
+    }
+  else
+    {
+      commonLayerStatistics_.processOutbound(pkt,
+                                             std::chrono::duration_cast<Microseconds>(Clock::now() - now),
+                                             DROP_CODE_OUT_OF_BAND);
+
+      LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
+                              DEBUG_LEVEL,
+                              "PHYI %03hu FrameworkPHY::%s src %hu, dst %hu,"
+                              " drop out of band",
+                              id_,
+                              __func__,
+                              pktInfo.getSource(),
+                              pktInfo.getDestination());
+
+      // drop
+      return;
+    }
+}
+
+
+/** [eventservice-processevent-snippet] */
+
 void EMANE::FrameworkPHY::processEvent(const EventId & eventId,
                                        const Serialization & serialization)
 {
@@ -1370,15 +2348,57 @@ void EMANE::FrameworkPHY::createDefaultAntennaIfNeeded()
 extern "C" {
     void emane_c_framework_phy_initialize_stub(void* registrar) {}
     void emane_c_framework_phy_configure_stub(void* update) {}
-    void emane_c_framework_phy_common_layer_statistics_process_inbound(void* stats, void* pkt) {}
-    void emane_c_framework_phy_common_layer_statistics_process_outbound_drop(void* stats, void* pkt, uint32_t drop_code) {}
-    bool emane_c_framework_phy_check_in_band(void* phy, void* header) { return false; }
-    void emane_c_framework_phy_create_default_antenna_if_needed(void* phy) {}
-    bool emane_c_framework_phy_receive_processors_is_empty(void* rx_procs) { return false; }
-    bool emane_c_framework_phy_process_receive_processors(void* phy, void* header, void* pkt, bool in_band) { return false; }
-    void emane_c_framework_phy_downstream_stub_process_inbound(void* stats, void* pkt) {}
-    void emane_c_framework_phy_downstream_stub_process_outbound(void* stats, void* pkt, uint64_t duration) {}
-    void emane_c_framework_phy_downstream_stub_send_downstream_packet(void* phy, void* pkt) {}
+    
+    void emane_c_framework_phy_common_layer_statistics_process_inbound(void* phy_ptr, void* pkt_ptr) {
+        auto phy = static_cast<EMANE::FrameworkPHY*>(phy_ptr);
+        auto pkt = static_cast<EMANE::UpstreamPacket*>(pkt_ptr);
+        phy->commonLayerStatistics_.processInbound(*pkt);
+    }
+    
+    void emane_c_framework_phy_common_layer_statistics_process_outbound_drop(void* phy_ptr, void* pkt_ptr, uint32_t drop_code) {
+        auto phy = static_cast<EMANE::FrameworkPHY*>(phy_ptr);
+        auto pkt = static_cast<EMANE::UpstreamPacket*>(pkt_ptr);
+        phy->commonLayerStatistics_.processOutbound(*pkt, std::chrono::microseconds(0), drop_code);
+    }
+    
+    bool emane_c_framework_phy_check_in_band(void* phy_ptr, void* header_ptr) {
+        auto phy = static_cast<EMANE::FrameworkPHY*>(phy_ptr);
+        auto hdr = static_cast<const EMANE::CommonPHYHeader*>(header_ptr);
+        return hdr->getRegistrationId() == EMANE::REGISTERED_EMANE_PHY_FRAMEWORK &&
+               phy->u16SubId_ == hdr->getSubId();
+    }
+    
+    void emane_c_framework_phy_create_default_antenna_if_needed(void* phy_ptr) {
+        auto phy = static_cast<EMANE::FrameworkPHY*>(phy_ptr);
+        phy->createDefaultAntennaIfNeeded();
+    }
+    
+    bool emane_c_framework_phy_receive_processors_is_empty(void* phy_ptr) {
+        auto phy = static_cast<EMANE::FrameworkPHY*>(phy_ptr);
+        return phy->receiveProcessors_.empty();
+    }
+    
+    bool emane_c_framework_phy_process_receive_processors(void* phy_ptr, void* header_ptr, void* pkt_ptr, bool bInBand) {
+        auto phy = static_cast<EMANE::FrameworkPHY*>(phy_ptr);
+        auto commonPHYHeader_ptr = static_cast<const EMANE::CommonPHYHeader*>(header_ptr);
+        auto pkt_p = static_cast<EMANE::UpstreamPacket*>(pkt_ptr);
+        
+        EMANE::ControlMessages empty_msgs;
+        phy->processUpstreamPacket_i_ffi(EMANE::Clock::now(), *commonPHYHeader_ptr, *pkt_p, empty_msgs, bInBand);
+        return false;
+    }
+    
+    void emane_c_framework_phy_downstream_stub_process_inbound(void* phy_ptr, void* pkt_ptr) {}
+    void emane_c_framework_phy_downstream_stub_process_outbound(void* phy_ptr, void* pkt_ptr, uint64_t duration) {}
+    
+    void emane_c_framework_phy_downstream_stub_send_downstream_packet(void* phy_ptr, void* header_ptr, void* pkt_ptr, void* controls_ptr) {
+        auto phy = static_cast<EMANE::FrameworkPHY*>(phy_ptr);
+        auto pkt_p = static_cast<EMANE::DownstreamPacket*>(pkt_ptr);
+        auto msgs_p = static_cast<const EMANE::ControlMessages*>(controls_ptr);
+        
+        phy->processDownstreamPacket_i_ffi(EMANE::Clock::now(), *pkt_p, *msgs_p);
+    }
+    
     void emane_c_framework_phy_downstream_stub_process_self_interference(void* phy, uint16_t ant_index, uint64_t now, uint64_t tx_time, void* freq_groups, uint64_t bw, double pwr, void* filter) {}
     size_t emane_c_framework_phy_downstream_stub_get_control_messages_len(void* msgs) { return 0; }
     void* emane_c_framework_phy_downstream_stub_get_control_message(void* msgs, size_t index) { return nullptr; }

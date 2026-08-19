@@ -103,7 +103,7 @@ namespace EMANE
 
     SpectrumMonitor & getSpectrumMonitor();
 
-  private:
+  public:
     void* rs_state_;
     SpectrumService * pSpectrumService_;
     AntennaManager antennaManager_;
@@ -154,6 +154,17 @@ namespace EMANE
     bool bRadioSilenceEnable_;
 
     void createDefaultAntennaIfNeeded();
+
+    void processUpstreamPacket_i_ffi(const TimePoint & now,
+                                     const CommonPHYHeader & commonPHYHeader,
+                                     UpstreamPacket & pkt,
+                                     const ControlMessages & msgs,
+                                     bool bInBand);
+
+    void processDownstreamPacket_i_ffi(const TimePoint & now,
+                                       DownstreamPacket & pkt,
+                                       const ControlMessages & msgs);
+
   };
 }
 
