@@ -47,7 +47,6 @@
 
 #include "macheaderparams.h"
 #include "downstreamqueue.h"
-#include "transmissiontxstate.h"
 #include "macstatistics.h"
 
 #include "macconfig.h"
@@ -293,7 +292,7 @@ namespace EMANE
 
         DownstreamQueue downstreamQueue_;
 
-        TransmissionTxState *pTxState_;
+        void* rs_tx_state_;
 
         PCRManager pcrManager_;
 
@@ -357,8 +356,7 @@ namespace EMANE
                                                              int tryNum,
                                                              std::uint8_t u8Category);
 
-        void changeDownstreamState(TransmissionTxState *);
-
+        
         bool checkPOR(float fSINR, size_t packetSize, std::uint16_t u16DataRateIndex);
 
         std::uint8_t dscpToCategory(std::uint8_t dscp) const;

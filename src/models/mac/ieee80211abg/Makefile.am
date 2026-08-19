@@ -25,17 +25,6 @@ libieee80211abgmaclayer_la_SOURCES = \
  pcrmanager.cc                       \
  macstatistics.cc                    \
  downstreamqueue.cc                  \
- transmissiontxstate.cc              \
- idletxstate.cc                      \
- broadcasttxstate.cc                 \
- broadcastpretxstate.cc              \
- broadcastposttxstate.cc             \
- unicasttxstate.cc                   \
- unicastpretxstate.cc                \
- unicastposttxstate.cc               \
- unicastrtsctstxstate.cc             \
- unicastrtsctspretxstate.cc          \
- unicastrtsctsposttxstate.cc         \
  onehopneighborsevent.cc             \
  collisiontable.cc                   \
  macheaderparams.cc                  \
@@ -53,19 +42,8 @@ libieee80211abgmaclayer_la_SOURCES = \
  pcrmanager.h                        \
  macheaderparams.h                   \
  maclayer.h                          \
- macstatistics.h                     \
- idletxstate.h                       \
- modetimingparameters.h              \
- broadcasttxstate.h                  \
- broadcastpretxstate.h               \
- broadcastposttxstate.h              \
- transmissiontxstate.h               \
- unicasttxstate.h                    \
- unicastpretxstate.h                 \
- unicastposttxstate.h                \
- unicastrtsctstxstate.h              \
- unicastrtsctspretxstate.h           \
- unicastrtsctsposttxstate.h          \
+ macstatistics.h                     \                       \
+ modetimingparameters.h              \                  \               \              \               \                    \                 \                \              \           \          \
  utils.h                             \
  neighbortype.h                      \
  neighbortype.inl                    \

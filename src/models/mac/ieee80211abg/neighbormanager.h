@@ -50,6 +50,7 @@
 #include <map>
 #include <list>
 
+extern "C" { struct FfiNeighborManager; }
 namespace EMANE
  {
   namespace Models
@@ -137,134 +138,10 @@ namespace EMANE
           void registerStatistics(StatisticRegistrar & statisticRegistrar);
 
         private:
-          using NeighborEntryMap = std::map<NEMId, NeighborEntry>;
-
-          using NeighborEntryInsertResult = std::pair<NeighborEntryMap::iterator, bool>;
-
-          using Neighbor2HopEntryMap = std::map<NEMId, Neighbor2HopEntry>;
-
-          using  Neighbor2HopEntryInsertResult = std::pair<Neighbor2HopEntryMap::iterator, bool>;
-
-          using  NbrSetMap = std::map<NEMId, NbrSet>;
-
-          using  NbrUtilizationMap = std::map<NEMId, Microseconds>;
-
-          using ProbabilityPair = std::pair<float, float>;
-
-          using  ProbabilityPairMap = std::map<NEMId, ProbabilityPair>;
-
-          using  ProbabilityPairMapMap = std::map<NEMId, ProbabilityPairMap>;
-
-          using  RxPowerMap = std::map<NEMId, float>;
-
+          FfiNeighborManager* rs_state_;
           NEMId id_;
-
           PlatformServiceProvider * pPlatformService_;
-
           MACLayer *pMACLayer_;
-
-          WMMManager wmmManager_;
-
-          NeighborEntryMap oneHopNbrMap_;
-
-          Neighbor2HopEntryMap twoHopNbrMap_;
-
-          NbrSetMap cachedOneHopNbrSetMap_;
-
-          Microseconds totalOneHopUtilizationMicroseconds_;
-
-          Microseconds totalTwoHopUtilizationMicroseconds_;
-
-          size_t totalOneHopNumPackets_;
-
-          size_t totalTwoHopNumPackets_;
-
-          size_t numTotalActiveOneHopNeighbors_;
-
-          Microseconds averageMessageDurationMicroseconds_;
-
-          float fAverageRxPowerPerMessageMilliWatts_;
-
-          float fTotalRxPowerMilliWatts_;
-
-          Microseconds averageUtilizationPerOneHopNbrMicroseconds_;
-
-          Microseconds averageUtilizationPerTwoHopNbrMicroseconds_;
-
-          float fEstimatedNumOneHopNeighbors_;
-
-          float fEstimatedNumTwoHopNeighbors_;
- 
-          float fLocalNodeTx_;
-
-          size_t sumCommonPackets_;
-
-          size_t sumHiddenPackets_;
-
-          float fCommonRxPowerMilliWatts_;
-
-          float fHiddenRxPowerMilliWatts_;
-
-          Microseconds utilizationThisNEMMicroseconds_;
-
-          Microseconds nbrTimeOutMicroseconds_;
-
-          TimePoint lastOneHopNbrListTxTime_;
-
-          NbrUtilizationMap oneHopUtilizationMap_;
-
-          NbrUtilizationMap twoHopUtilizationMap_;
-
-          ProbabilityPairMapMap commonProbabilityMapMap_;
-
-          ProbabilityPairMapMap hiddenProbabilityMapMap_;
-
-          RxPowerMap commonNbrAvgRxPowerMwMap_;
-
-          RxPowerMap hiddenNbrAvgRxPowerMwMap_;
-
-          WMMManager::UtilizationRatioVector utilizationRatioVector_;
-
-          Utils::RandomNumberDistribution<std::mt19937, 
-                                          std::uniform_real_distribution<float>> RNDZeroToOne_;
-
-          StatisticTable<NEMId> * pStatisticOneHopNbrTable_;
-
-          StatisticTable<NEMId> * pStatisticTwoHopNbrTable_;
-
-          TimePoint lastResetTime_;
-
-          void sendOneHopNbrListEvent_i();
-
-          bool flushOneHopNeighbors_i(const TimePoint & tvCurrentTime, const Microseconds & timeOutMicroseconds);
-
-          bool flushTwoHopNeighbors_i(const TimePoint & tvCurrentTime, const Microseconds & timeOutMicroseconds);
-
-          void resetCounters_i();
-
-          void calculateBwUtilization_i(const Microseconds & deltaTMicroseconds);
-
-          NeighborEntryInsertResult addOneHopNeighbor_i(NEMId src);
-
-          Neighbor2HopEntryInsertResult addTwoHopNeighbor_i(NEMId src);
-
-          float getA_i(const Microseconds & utilizationMicroseconds, const Microseconds & avgUtilizationMicroseconds) const;
-
-          float getC_i(const Microseconds & utilizationMicroseconds, const Microseconds & deltaTMicroseconds) const;
-
-          float getH_i(const Microseconds & utilizationMicroseconds, const Microseconds & deltaTMicroseconds) const;
-
-          float getChannelActivity_i(const Microseconds & utilizationMicroseconds, const Microseconds & deltaTMicroseconds) const;
-
-          void setCommonAndHiddenProbability_i();
-
-          ProbabilityPairMap setProbability_i(NEMId id, const NbrUtilizationMap & map, 
-                                               const Microseconds & utilizationMicroseconds, 
-                                               const NbrSet & nbrSet, const char * str) const;
-
-          float getRandomRxPowerMilliWatts_i(NEMId src, float R1, 
-                                                const ProbabilityPairMapMap & pmap, 
-                                                const RxPowerMap & rmap) const;
         };
      }
   }

@@ -127,3 +127,12 @@ uint64_t emane_ieee80211abg_modetimingparameters_getCtsMessageDurationMicrosecon
 uint64_t emane_ieee80211abg_modetimingparameters_getRtsMessageDurationMicroseconds(void* ptr) __attribute__((weak));
 uint64_t emane_ieee80211abg_modetimingparameters_getRtsMessageDurationMicroseconds(void* ptr) { return 0; }
 
+
+
+void emane_ieee80211abg_maclayer_sendDownstreamBroadcastData(void* maclayer, void* entry) __attribute__((weak));
+void emane_ieee80211abg_maclayer_sendDownstreamBroadcastData(void* maclayer, void* entry) {}
+void emane_ieee80211abg_maclayer_sendDownstreamUnicastData(void* maclayer, void* entry) __attribute__((weak));
+void emane_ieee80211abg_maclayer_sendDownstreamUnicastData(void* maclayer, void* entry) {}
+void emane_ieee80211abg_maclayer_setDelayTime(void* maclayer, void* entry) __attribute__((weak));
+void emane_ieee80211abg_maclayer_setDelayTime(void* maclayer, void* entry) {}
+

@@ -32,8 +32,17 @@
  */
 
 #include "maclayer.h"
+
+extern "C" {
+    void* emane_ieee80211abg_tx_state_machine_new();
+    void emane_ieee80211abg_tx_state_machine_free(void* ptr);
+    bool emane_ieee80211abg_tx_state_machine_process(void* ptr, void* maclayer, void* entry);
+    bool emane_ieee80211abg_tx_state_machine_getWaitTime(void* ptr, void* entry, uint64_t* out_time);
+    const char* emane_ieee80211abg_tx_state_machine_statename(void* ptr);
+    void emane_ieee80211abg_tx_state_machine_update(void* ptr, void* maclayer, void* entry);
+}
+
 #include "macstatistics.h"
-#include "idletxstate.h"
 #include "utils.h"
 #include "ieee80211abgmacheadermessage.h"
 #include "macheaderparamsformatter.h"
@@ -109,7 +118,7 @@ EMANE::Models::IEEE80211ABG::MACLayer::MACLayer(NEMId id,
   macConfig_{pPlatformServiceProvider->logService(), id},
   macStatistics_{id},
   downstreamQueue_{id},
-  pTxState_{IdleTxStateSingleton::instance()},
+  rs_tx_state_{emane_ieee80211abg_tx_state_machine_new()},
   pcrManager_{id_, pPlatformService_},
   neighborManager_{id_, pPlatformService_, this},
   neighborMetricManager_{id},
@@ -931,7 +940,7 @@ EMANE::Models::IEEE80211ABG::MACLayer::handleUpstreamPacket(UpstreamPacket & pkt
                                       id_,
                                       pzLayerName,
                                       __func__,
-                                      pTxState_->statename());
+                                      emane_ieee80211abg_tx_state_machine_statename(rs_tx_state_));
 
     }
   else
@@ -1185,7 +1194,9 @@ EMANE::Models::IEEE80211ABG::MACLayer::processDownstreamPacket(DownstreamPacket 
 
       pendingDownstreamQueueEntry_ = std::move(entry);
 
-      auto optionalWait = pTxState_->getWaitTime(pendingDownstreamQueueEntry_);
+      uint64_t waitTimeMicro = 0;
+      bool hasWait = emane_ieee80211abg_tx_state_machine_getWaitTime(rs_tx_state_, &pendingDownstreamQueueEntry_, &waitTimeMicro);
+      std::pair<EMANE::TimePoint, bool> optionalWait{EMANE::TimePoint{EMANE::Microseconds{waitTimeMicro}}, hasWait};
 
       if(optionalWait.second)
         {
@@ -1406,7 +1417,7 @@ EMANE::Models::IEEE80211ABG::MACLayer::changeDownstreamState(TransmissionTxState
                          id_,
                          pzLayerName,
                          __func__,
-                         pTxState_->statename(),
+                         emane_ieee80211abg_tx_state_machine_statename(rs_tx_state_),
                          pState->statename());
 
   // change state
@@ -1820,9 +1831,9 @@ bool EMANE::Models::IEEE80211ABG::MACLayer::handleDownstreamQueueEntry(std::uint
           // if there is no further processing for the pending packet
           //  update the state and see if there is another packet
           //  pending
-          if(!pTxState_->process(this,pendingDownstreamQueueEntry_))
+          if(!emane_ieee80211abg_tx_state_machine_process(rs_tx_state_, this, &pendingDownstreamQueueEntry_))
             {
-              pTxState_->update(this,pendingDownstreamQueueEntry_);
+              emane_ieee80211abg_tx_state_machine_update(rs_tx_state_, this, &pendingDownstreamQueueEntry_);
 
               std::tie(pendingDownstreamQueueEntry_,bHasPendingDownstreamQueueEntry_) =
                 downstreamQueue_.dequeue();
@@ -1834,7 +1845,9 @@ bool EMANE::Models::IEEE80211ABG::MACLayer::handleDownstreamQueueEntry(std::uint
           // same packet entry that we began with
           if(bHasPendingDownstreamQueueEntry_)
             {
-              auto optionalWait = pTxState_->getWaitTime(pendingDownstreamQueueEntry_);
+              uint64_t waitTimeMicro = 0;
+      bool hasWait = emane_ieee80211abg_tx_state_machine_getWaitTime(rs_tx_state_, &pendingDownstreamQueueEntry_, &waitTimeMicro);
+      std::pair<EMANE::TimePoint, bool> optionalWait{EMANE::TimePoint{EMANE::Microseconds{waitTimeMicro}}, hasWait};
 
               if(optionalWait.second && optionalWait.first > Clock::now())
                 {
@@ -2091,3 +2104,70 @@ EMANE::Models::IEEE80211ABG::MACLayer::setEntrySequenceNumber(DownstreamQueueEnt
 }
 
 DECLARE_MAC_LAYER(EMANE::Models::IEEE80211ABG::MACLayer);
+
+
+extern "C" {
+    void emane_ieee80211abg_maclayer_sendDownstreamBroadcastData(void* maclayer, void* entry) {
+        static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer)->sendDownstreamBroadcastData(*static_cast<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry*>(entry));
+    }
+    void emane_ieee80211abg_maclayer_sendDownstreamUnicastData(void* maclayer, void* entry) {
+        static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer)->sendDownstreamUnicastData(*static_cast<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry*>(entry));
+    }
+    void emane_ieee80211abg_maclayer_setDelayTime(void* maclayer, void* entry) {
+        static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer)->setDelayTime(*static_cast<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry*>(entry));
+    }
+    
+    void* emane_ieee80211abg_maclayer_getStatistics(void* maclayer) {
+        return &static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer)->getStatistics();
+    }
+    void* emane_ieee80211abg_maclayer_getModeTiming(void* maclayer) {
+        return &static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer)->getModeTiming();
+    }
+    uint16_t emane_ieee80211abg_entry_get_destination(void* entry) {
+        auto pEntry = static_cast<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry*>(entry);
+        return pEntry->pkt_.getPacketInfo().getDestination();
+    }
+    bool emane_ieee80211abg_entry_is_txop_timeout(void* entry, uint64_t beginTimeMicro) {
+        auto pEntry = static_cast<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry*>(entry);
+        EMANE::TimePoint beginTime{EMANE::Microseconds{beginTimeMicro}};
+        return (pEntry->txOpMicroseconds_.count() != 0) && (pEntry->txOpMicroseconds_ + pEntry->acquireTime_) < beginTime;
+    }
+    bool emane_ieee80211abg_entry_get_bRtsCtsEnable(void* entry) {
+        auto pEntry = static_cast<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry*>(entry);
+        return pEntry->bRtsCtsEnable_;
+    }
+    bool emane_ieee80211abg_entry_get_bCollisionOccured(void* entry) {
+        auto pEntry = static_cast<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry*>(entry);
+        return pEntry->bCollisionOccured_;
+    }
+    uint8_t emane_ieee80211abg_entry_get_numRetries(void* entry) {
+        auto pEntry = static_cast<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry*>(entry);
+        return pEntry->numRetries_;
+    }
+    void emane_ieee80211abg_entry_set_numRetries(void* entry, uint8_t numRetries) {
+        auto pEntry = static_cast<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry*>(entry);
+        pEntry->numRetries_ = numRetries;
+    }
+    uint8_t emane_ieee80211abg_entry_get_maxRetries(void* entry) {
+        auto pEntry = static_cast<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry*>(entry);
+        return pEntry->maxRetries_;
+    }
+    size_t emane_ieee80211abg_entry_get_length(void* entry) {
+        auto pEntry = static_cast<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry*>(entry);
+        return pEntry->pkt_.length();
+    }
+    void emane_ieee80211abg_entry_set_duration_and_tx_time_now(void* entry, uint64_t durationMicroseconds) {
+        auto pEntry = static_cast<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry*>(entry);
+        pEntry->durationMicroseconds_ = EMANE::Microseconds{durationMicroseconds};
+        pEntry->txTime_ = EMANE::Clock::now();
+    }
+    uint64_t emane_ieee80211abg_entry_get_preTxDelayTime_micro(void* entry) {
+        auto pEntry = static_cast<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry*>(entry);
+        return std::chrono::duration_cast<EMANE::Microseconds>(pEntry->preTxDelayTime_.time_since_epoch()).count();
+    }
+    uint64_t emane_ieee80211abg_entry_get_postTxWaitTime_micro(void* entry) {
+        auto pEntry = static_cast<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry*>(entry);
+        return std::chrono::duration_cast<EMANE::Microseconds>((pEntry->durationMicroseconds_ + pEntry->postTxDelayMicroseconds_ + pEntry->txTime_).time_since_epoch()).count();
+    }
+}
+
