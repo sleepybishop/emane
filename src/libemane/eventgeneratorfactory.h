@@ -56,10 +56,10 @@ namespace EMANE
      *
      * @throw Utils::FactoryException
      */
-    EventGeneratorFactory(const std::string & sLibraryName);
+    EventGeneratorFactory(const std::string & sLibraryName) : sLibraryName_(sLibraryName) {}
 
 
-    ~EventGeneratorFactory();
+    ~EventGeneratorFactory() {}
     
     /**
      * Create an EventGenerator
@@ -79,9 +79,9 @@ namespace EMANE
     using CreateEventGeneratorFunc = EventGenerator * (*)(PlatformServiceProvider * pPlatformService); 
     using DestroyEventGeneratorFunc =  void (*)(EventGenerator*); 
 
-    void * pLibHandle_;
-    CreateEventGeneratorFunc createEventGeneratorFunc_;
-    DestroyEventGeneratorFunc destroyEventGeneratorFunc_;
+    std::string sLibraryName_;
+    
+    
   };
 }
 

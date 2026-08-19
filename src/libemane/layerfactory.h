@@ -60,9 +60,9 @@ namespace EMANE
      *
      * @throw Utils::FactoryException
      */
-    LayerFactory(const std::string & sLibraryName);
+    LayerFactory(const std::string & sLibraryName) : sLibraryName_(sLibraryName) {}
 
-    ~LayerFactory();
+    ~LayerFactory() {}
     
     /**
      * Create a @a T layer
@@ -92,12 +92,12 @@ namespace EMANE
     
     using DestroyLayerFunc = void (*)(T*); 
 
-    void * pLibHandle_;
-    CreateLayerFunc  createLayerFunc_;
-    DestroyLayerFunc destroyLayerFunc_;
+    std::string sLibraryName_;
+    
+    
   };
 }
 
-#include "layerfactory.inl"
+
 
 #endif //EMANELAYERFACTORY_HEADER_

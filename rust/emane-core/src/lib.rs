@@ -210,3 +210,5 @@ pub mod shim_layer;
 pub mod phy_layer;
 
 pub mod transport_layer;
+
+pub mod factory_manager;

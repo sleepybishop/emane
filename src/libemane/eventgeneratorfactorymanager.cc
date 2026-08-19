@@ -1,66 +1,29 @@
-#include <cstdint>
-/*
- * Copyright (c) 2013 - Adjacent Link LLC, Bridgewater, New Jersey
- * Copyright (c) 2008 - DRS CenGen, LLC, Columbia, Maryland
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of DRS CenGen, LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
 #include "eventgeneratorfactorymanager.h"
+#include "rust_ffi.h"
 #include "emane/utils/factoryexception.h"
+
+extern "C" {
+    void* emane_rs_factory_manager_create_event_generator(const char* lib, void* platform, char* err_buf, size_t err_buf_len);
+}
+
+EMANE::EventGenerator * EMANE::EventGeneratorFactory::createEventGenerator(PlatformServiceProvider *pPlatformService) const {
+    char err_buf[256] = {0};
+    void* ptr = emane_rs_factory_manager_create_event_generator(sLibraryName_.c_str(), pPlatformService, err_buf, sizeof(err_buf));
+    if (err_buf[0] != '\0') throw Utils::FactoryException(err_buf);
+    return static_cast<EMANE::EventGenerator*>(ptr);
+}
+
+void EMANE::EventGeneratorFactory::destoryEventGenerator(EMANE::EventGenerator * pGenerator) const {}
 
 EMANE::EventGeneratorFactoryManager::EventGeneratorFactoryManager(){}
 
-EMANE::EventGeneratorFactoryManager::~EventGeneratorFactoryManager()
-{
-  EventGeneratorFactoryMap::iterator iter = eventGeneratorFactoryMap_.begin();
-
-  for(;iter != eventGeneratorFactoryMap_.end(); ++iter)
-    {
-      delete iter->second;
-    }
+EMANE::EventGeneratorFactoryManager::~EventGeneratorFactoryManager() {
+    for(auto& pair : eventGeneratorFactoryMap_) delete pair.second;
 }
 
-const EMANE::EventGeneratorFactory  & 
-EMANE::EventGeneratorFactoryManager::getEventGeneratorFactory(const std::string & sLibraryFile)
-{
-  EventGeneratorFactoryMap::iterator iter;
-
-  if((iter = eventGeneratorFactoryMap_.find(sLibraryFile)) != eventGeneratorFactoryMap_.end())
-    {
-      return *iter->second;
+const EMANE::EventGeneratorFactory & EMANE::EventGeneratorFactoryManager::getEventGeneratorFactory(const std::string & sLibraryFile) {
+    if(eventGeneratorFactoryMap_.find(sLibraryFile) == eventGeneratorFactoryMap_.end()) {
+        eventGeneratorFactoryMap_[sLibraryFile] = new EventGeneratorFactory(sLibraryFile);
     }
-  else
-    {
-      EventGeneratorFactory * pFactory =
-        new  EventGeneratorFactory(sLibraryFile);
-
-       eventGeneratorFactoryMap_.insert(std::make_pair(sLibraryFile,pFactory));
-      return *pFactory;
-    }
+    return *eventGeneratorFactoryMap_[sLibraryFile];
 }

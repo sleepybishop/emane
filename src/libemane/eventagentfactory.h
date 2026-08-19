@@ -58,10 +58,10 @@ namespace EMANE
      *
      * @throw Utils::FactoryException
      */
-    EventAgentFactory(const std::string & sLibraryName);
+    EventAgentFactory(const std::string & sLibraryName) : sLibraryName_(sLibraryName) {}
 
     
-    ~EventAgentFactory();
+    ~EventAgentFactory() {}
     
     /**
      * Create an EventAgent
@@ -86,9 +86,9 @@ namespace EMANE
                                                    PlatformServiceProvider * pPlatformService); 
     using DestroyEventAgentFunc = void (*)(EventAgent*); 
 
-    void * pLibHandle_;
-    CreateEventAgentFunc createEventAgentFunc_;
-    DestroyEventAgentFunc destroyEventAgentFunc_;
+    std::string sLibraryName_;
+    
+    
   };
 }
 

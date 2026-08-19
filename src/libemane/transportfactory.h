@@ -60,9 +60,9 @@ namespace EMANE
      *
      * @throw Utils::FactoryException
      */
-    TransportFactory(const std::string & sLibraryName);
+    TransportFactory(const std::string & sLibraryName) : sLibraryName_(sLibraryName) {}
     
-    ~TransportFactory();
+    ~TransportFactory() {}
     
     /**
      * Create an Transport
@@ -86,9 +86,9 @@ namespace EMANE
     using CreateTransportFunc = Transport * (*)(NEMId, PlatformServiceProvider *);
     using DestroyTransportFunc = void (*)(Transport*); 
 
-    void * pLibHandle_;
-    CreateTransportFunc createTransportFunc_;
-    DestroyTransportFunc destroyTransportFunc_;
+    std::string sLibraryName_;
+    
+    
   };
 }
 
