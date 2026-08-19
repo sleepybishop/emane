@@ -45,6 +45,8 @@
 #include <vector>
 #include <map>
 
+extern "C" { struct FfiPcrManager; }
+
 namespace EMANE
  {
   namespace Models
@@ -172,30 +174,9 @@ namespace EMANE
           float getPCR(float fSinr, size_t size, std::uint16_t DataRateIndex);
 
         private:
-          void openDoc(const std::string & uri, xmlParserCtxtPtr * ppContext,
-                     xmlDoc ** ppDocument, xmlNode ** ppRoot);
-
-          void closeDoc(xmlParserCtxtPtr * ppContext, xmlDoc ** ppDocument);
-
-          std::string getAttribute(xmlNodePtr cur, const xmlChar * id);
-
-          std::string getContent(xmlNodePtr cur);
-
-          void getTable(xmlNodePtr cur, PCRManager::PCRPORMap & map);
-
-          void getDataRate(xmlNodePtr cur, PCRManager::PCRPORMap & map);
-
-          void getRows(xmlNodePtr cur, PCRManager::PCREntryVector & vec);
-
-          void interpolate();
-
           const NEMId id_;
-
           PlatformServiceProvider * pPlatformService_;
-
-          PCRPORMap pcrPorMap_;
-
-          size_t tablePacketSize_;
+          FfiPcrManager* rs_state_;
         };
       }
    }

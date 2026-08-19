@@ -39,6 +39,8 @@
 
 #include <vector>
 
+extern "C" { struct FfiWmmManager; }
+
 namespace EMANE
 {
   namespace Models
@@ -73,23 +75,10 @@ namespace EMANE
            UtilizationRatioVector getUtilizationRatios(const Microseconds & deltaTMicroseconds);
 
          private:
-           typedef std::vector<Microseconds> UtilizationVector;
-
            NEMId id_;
-
            PlatformServiceProvider * pPlatformService_;
-
            MACLayer *pMACLayler_;
-
-           UtilizationVector localUtilizationVector_;
-
-           UtilizationVector totalUtilizationVector_;
-
-           Microseconds totalUtilizationMicroseconds_;
-
-           std::uint8_t u8NumCategories_;
-
-           void resetCounters();
+           FfiWmmManager* rs_state_;
          };
       }
    }

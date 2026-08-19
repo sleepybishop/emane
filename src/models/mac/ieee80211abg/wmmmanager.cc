@@ -1,233 +1,61 @@
-/*
- * Copyright (c) 2013,2016 - Adjacent Link, LLC, Bridgewater New Jersey
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
 
 #include "wmmmanager.h"
 #include "maclayer.h"
-#include "utils.h"
 
-EMANE::Models::IEEE80211ABG::WMMManager::WMMManager(NEMId id,
-                                                    PlatformServiceProvider * pPlatformService,
-                                                    MACLayer *pMACLayer):
+extern "C" {
+    FfiWmmManager* emane_rs_ieee80211abg_wmmmanager_new();
+    void emane_rs_ieee80211abg_wmmmanager_drop(FfiWmmManager* mgr);
+    void emane_rs_ieee80211abg_wmmmanager_update_total_activity(FfiWmmManager* mgr, std::uint8_t category, std::uint64_t duration_microseconds);
+    void emane_rs_ieee80211abg_wmmmanager_update_local_activity(FfiWmmManager* mgr, std::uint8_t category, std::uint64_t duration_microseconds);
+    void emane_rs_ieee80211abg_wmmmanager_set_num_categories(FfiWmmManager* mgr, std::uint8_t num_categories);
+    
+    struct UtilizationRatioPairC {
+        float first;
+        float second;
+    };
+    std::size_t emane_rs_ieee80211abg_wmmmanager_get_utilization_ratios(FfiWmmManager* mgr, std::uint64_t delta_t_microseconds, UtilizationRatioPairC* out_ratios);
+}
+
+EMANE::Models::IEEE80211ABG::WMMManager::WMMManager(NEMId id, PlatformServiceProvider * pPlatformService, MACLayer *pMACLayer):
   id_{id},
   pPlatformService_{pPlatformService},
   pMACLayler_{pMACLayer},
-  u8NumCategories_{1}
+  rs_state_{emane_rs_ieee80211abg_wmmmanager_new()}
 {
-   totalUtilizationVector_.resize(u8NumCategories_);
-   localUtilizationVector_.resize(u8NumCategories_);
-
-   // reset
-   resetCounters();
 }
-
-
 
 EMANE::Models::IEEE80211ABG::WMMManager::~WMMManager()
-{ }
-
-
-
-
-void
-EMANE::Models::IEEE80211ABG::WMMManager::updateTotalActivity(const std::uint8_t u8Category,
-                                                             const Microseconds & durationMicroseconds)
 {
-   if(u8Category > u8NumCategories_)
-    {
-      LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                             ERROR_LEVEL,
-                             "MACI %03hu %s::%s: invalid category %hhu, max is %hhu, ignore",
-                             id_,
-                             "WMMManager",
-                             __func__,
-                             u8Category,
-                             u8NumCategories_);
-    }
-   else
-    {
-      // total sum for this index
-      totalUtilizationVector_[u8Category] += durationMicroseconds;
-
-      // save the total
-      totalUtilizationMicroseconds_ += durationMicroseconds;
-
-      LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                             DEBUG_LEVEL,
-                             "MACI %03hu %s::%s: category %hhu, duration %lf",
-                             id_,
-                             "WMMManager",
-                             __func__,
-                             u8Category,
-                             std::chrono::duration_cast<DoubleSeconds>(durationMicroseconds).count());
+    if (rs_state_) {
+        emane_rs_ieee80211abg_wmmmanager_drop(rs_state_);
+        rs_state_ = nullptr;
     }
 }
 
-
-
-void
-EMANE::Models::IEEE80211ABG::WMMManager::updateLocalActivity(const std::uint8_t u8Category,
-                                                             const Microseconds & durationMicroseconds)
+void EMANE::Models::IEEE80211ABG::WMMManager::updateTotalActivity(const std::uint8_t u8Category, const Microseconds & durationMicroseconds)
 {
-   if(u8Category > u8NumCategories_)
-    {
-      LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                             ERROR_LEVEL,
-                             "MACI %03hu %s::%s: invalid category %hhu, max is %hhu, ignore",
-                             id_,
-                             "WMMManager",
-                             __func__,
-                             u8Category,
-                             u8NumCategories_);
-    }
-   else
-    {
-      // local sum for this index
-      localUtilizationVector_[u8Category] += durationMicroseconds;
-
-      // total sum for this index
-      totalUtilizationVector_[u8Category] += durationMicroseconds;
-
-      // save the total
-      totalUtilizationMicroseconds_ += durationMicroseconds;
-
-      LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                             DEBUG_LEVEL,
-                             "MACI %03hu %s::%s: category %hhu, duration %lf",
-                              id_,
-                              "WMMManager",
-                              __func__,
-                              u8Category,
-                              std::chrono::duration_cast<DoubleSeconds>(durationMicroseconds).count());
-    }
+    emane_rs_ieee80211abg_wmmmanager_update_total_activity(rs_state_, u8Category, durationMicroseconds.count());
 }
 
-
-
-void
-EMANE::Models::IEEE80211ABG::WMMManager::setNumCategories(const std::uint8_t u8NumCategories)
+void EMANE::Models::IEEE80211ABG::WMMManager::updateLocalActivity(const std::uint8_t u8Category, const Microseconds & durationMicroseconds)
 {
-   if(u8NumCategories_ != u8NumCategories)
-    {
-      LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                             DEBUG_LEVEL,
-                             "MACI %03hu %s::%s: change num categories from %hhu to %hhu",
-                             id_,
-                             "WMMManager",
-                             __func__,
-                             u8NumCategories_,
-                             u8NumCategories);
-
-      // resize
-      totalUtilizationVector_.resize(u8NumCategories);
-      localUtilizationVector_.resize(u8NumCategories);
-
-      u8NumCategories_ = u8NumCategories;
-
-      // reset ALL values
-      resetCounters();
-   }
+    emane_rs_ieee80211abg_wmmmanager_update_local_activity(rs_state_, u8Category, durationMicroseconds.count());
 }
 
-
-void
-EMANE::Models::IEEE80211ABG::WMMManager::resetCounters()
+void EMANE::Models::IEEE80211ABG::WMMManager::setNumCategories(const std::uint8_t u8NumCategories)
 {
-   for(auto & iter : totalUtilizationVector_)
-    {
-      iter = Microseconds::zero();
-    }
-
-   for(auto & iter : localUtilizationVector_)
-    {
-      iter = Microseconds::zero();
-    }
-
-    totalUtilizationMicroseconds_ = Microseconds::zero();
+    emane_rs_ieee80211abg_wmmmanager_set_num_categories(rs_state_, u8NumCategories);
 }
 
-
-
-EMANE::Models::IEEE80211ABG::WMMManager::UtilizationRatioVector
-EMANE::Models::IEEE80211ABG::WMMManager::getUtilizationRatios(const Microseconds & deltaTMicroseconds)
+EMANE::Models::IEEE80211ABG::WMMManager::UtilizationRatioVector EMANE::Models::IEEE80211ABG::WMMManager::getUtilizationRatios(const Microseconds & deltaTMicroseconds)
 {
-  // initialize to <total = 0.0, local = 0.0>
-  UtilizationRatioVector vec(u8NumCategories_, UtilizationRatioPair(0.0f, 0.0f));
-
-  // check for divide by 0
-  if((totalUtilizationMicroseconds_ > Microseconds::zero()) && (deltaTMicroseconds > Microseconds::zero()))
-   {
-     // get activity ratio (used / interval)
-     float fActivityRatio{getRatio(totalUtilizationMicroseconds_, deltaTMicroseconds)};
-
-     // clamp it
-     if(fActivityRatio > 1.0f)
-      {
-        fActivityRatio = 1.0f;
-      }
-
-     // get the utilization ratio(s)
-     for(std::uint8_t u8Category = 0; u8Category < u8NumCategories_; ++u8Category)
-      {
-        // set total ratio
-        vec[u8Category].first = getRatio(totalUtilizationVector_[u8Category], totalUtilizationMicroseconds_) * fActivityRatio;
-
-        // check for divide by 0
-        if(totalUtilizationVector_[u8Category] > Microseconds::zero())
-         {
-           // set local
-           vec[u8Category].second = getRatio(localUtilizationVector_[u8Category], totalUtilizationVector_[u8Category]);
-         }
-        else
-         {
-           vec[u8Category].second = 0.0f;
-         }
-
-        LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                               DEBUG_LEVEL,
-                               "MACI %03hu %s::%s: category %hhu, [total_bw %lf, ratio %f], "
-                               "usage [total %f, %3.2f%%]",
-                               id_,
-                               "WMMManager",
-                               __func__,
-                               u8Category,
-                               vec[u8Category].first,
-                               vec[u8Category].second,
-                               std::chrono::duration_cast<DoubleSeconds>(totalUtilizationMicroseconds_).count(),
-                               fActivityRatio * 100.0f);
-      }
-   }
-
-  // clear counters
-  resetCounters();
-
-  return vec;
+    UtilizationRatioPairC arr[256];
+    std::size_t len = emane_rs_ieee80211abg_wmmmanager_get_utilization_ratios(rs_state_, deltaTMicroseconds.count(), arr);
+    
+    UtilizationRatioVector vec;
+    vec.reserve(len);
+    for (std::size_t i = 0; i < len; ++i) {
+        vec.push_back(std::make_pair(arr[i].first, arr[i].second));
+    }
+    return vec;
 }
