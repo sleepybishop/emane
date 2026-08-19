@@ -1,139 +1,170 @@
 #include <cstdint>
-/*
- * Copyright (c) 2014,2016 - Adjacent Link LLC, Bridgewater, New Jersey
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
-
 #include "transportlayer.h"
 
+extern "C" {
+    void* emane_rs_transport_layer_create(void* cpp_this, void* implementor);
+    void emane_rs_transport_layer_destroy(void* ptr);
+    void emane_rs_transport_layer_initialize(void* ptr, void* registrar);
+    void emane_rs_transport_layer_configure(void* ptr, void* update);
+    void emane_rs_transport_layer_start(void* ptr);
+    void emane_rs_transport_layer_post_start(void* ptr);
+    void emane_rs_transport_layer_stop(void* ptr);
+    void emane_rs_transport_layer_destroy_impl(void* ptr);
+    void emane_rs_transport_layer_do_process_configuration(void* ptr, void* update);
+    void emane_rs_transport_layer_do_process_upstream_packet(void* ptr, void* pkt, void* msgs);
+    void emane_rs_transport_layer_do_process_downstream_packet(void* ptr, void* pkt, void* msgs);
+    void emane_rs_transport_layer_do_process_upstream_control(void* ptr, void* msgs);
+    void emane_rs_transport_layer_do_process_downstream_control(void* ptr, void* msgs);
+    void emane_rs_transport_layer_set_upstream_transport(void* ptr, void* transport);
+    void emane_rs_transport_layer_set_downstream_transport(void* ptr, void* transport);
+    void emane_rs_transport_layer_do_process_event(void* ptr, void* event_id, void* serialization);
+    void emane_rs_transport_layer_do_process_timed_event(void* ptr, void* event_id, const void* expire, const void* schedule, const void* fire, const void* arg);
+}
+
 EMANE::TransportLayer::TransportLayer(NEMId id,
-                                      NEMLayer * pImplementor,
-                                      PlatformServiceProvider * pPlatformService) :
-  NEMQueuedLayer{id, pPlatformService},
+                            NEMLayer * pImplementor,
+                            PlatformServiceProvider * pPlatformService) :
+  NEMQueuedLayer{id,pPlatformService},
   pImplementor_{pImplementor},
   pPlatformService_{pPlatformService}
-{}
+{
+  rs_state_ = emane_rs_transport_layer_create(this, pImplementor_.get());
+}
 
 EMANE::TransportLayer::~TransportLayer()
-{}
+{
+  emane_rs_transport_layer_destroy(rs_state_);
+}
 
 void EMANE::TransportLayer::initialize(Registrar & registrar)
 {
   NEMQueuedLayer::initialize(registrar);
-
-  pImplementor_->initialize(registrar);
+  emane_rs_transport_layer_initialize(rs_state_, &registrar);
 }
-
 
 void EMANE::TransportLayer::configure(const ConfigurationUpdate & update)
 {
-  pImplementor_->configure(update);
+  emane_rs_transport_layer_configure(rs_state_, const_cast<ConfigurationUpdate*>(&update));
 }
-
 
 void EMANE::TransportLayer::start()
 {
-  // start the queue processing thread
   NEMQueuedLayer::start();
-
-  pImplementor_->start();
+  emane_rs_transport_layer_start(rs_state_);
 }
-
 
 void EMANE::TransportLayer::postStart()
 {
-  pImplementor_->postStart();
+  emane_rs_transport_layer_post_start(rs_state_);
 }
-
 
 void EMANE::TransportLayer::stop()
 {
-  pImplementor_->stop();
-
-  // stop the queue processing thread
+  emane_rs_transport_layer_stop(rs_state_);
   NEMQueuedLayer::stop();
 }
 
-
 void EMANE::TransportLayer::destroy() throw()
 {
-  pImplementor_->destroy();
-}
-
-void EMANE::TransportLayer::setDownstreamTransport(DownstreamTransport * pDownstreamTransport)
-{
-  pImplementor_->setDownstreamTransport(pDownstreamTransport);
+  emane_rs_transport_layer_destroy_impl(rs_state_);
 }
 
 void EMANE::TransportLayer::doProcessConfiguration(const ConfigurationUpdate & update)
 {
-  pImplementor_->processConfiguration(update);
+  emane_rs_transport_layer_do_process_configuration(rs_state_, const_cast<ConfigurationUpdate*>(&update));
 }
 
 void EMANE::TransportLayer::doProcessUpstreamPacket(UpstreamPacket & pkt,
-                                                    const ControlMessages & ctrl)
+                                               const ControlMessages & msgs)
 {
-  static_cast<UpstreamTransport *>(pImplementor_.get())->processUpstreamPacket(pkt,ctrl);
+  emane_rs_transport_layer_do_process_upstream_packet(rs_state_, &pkt, const_cast<ControlMessages*>(&msgs));
 }
 
+void EMANE::TransportLayer::doProcessDownstreamPacket(DownstreamPacket & pkt,
+                                                 const ControlMessages & msgs)
+{
+  emane_rs_transport_layer_do_process_downstream_packet(rs_state_, &pkt, const_cast<ControlMessages*>(&msgs));
+}
 
 void EMANE::TransportLayer::doProcessUpstreamControl(const ControlMessages & msgs)
 {
-  pImplementor_->processUpstreamControl(msgs);
+  emane_rs_transport_layer_do_process_upstream_control(rs_state_, const_cast<ControlMessages*>(&msgs));
 }
 
+void EMANE::TransportLayer::doProcessDownstreamControl(const ControlMessages & msgs)
+{
+  emane_rs_transport_layer_do_process_downstream_control(rs_state_, const_cast<ControlMessages*>(&msgs));
+}
+
+void EMANE::TransportLayer::setUpstreamTransport(UpstreamTransport * pUpstreamTransport)
+{
+  emane_rs_transport_layer_set_upstream_transport(rs_state_, pUpstreamTransport);
+}
+
+void EMANE::TransportLayer::setDownstreamTransport(DownstreamTransport * pDownstreamTransport)
+{
+  emane_rs_transport_layer_set_downstream_transport(rs_state_, pDownstreamTransport);
+}
 
 void EMANE::TransportLayer::doProcessEvent(const EventId & eventId,
-                                           const Serialization & serialization)
+                                      const Serialization & serialization)
 {
-  pImplementor_->processEvent(eventId,serialization);
+  emane_rs_transport_layer_do_process_event(rs_state_, const_cast<EventId*>(&eventId), const_cast<Serialization*>(&serialization));
 }
-
 
 void EMANE::TransportLayer::doProcessTimedEvent(TimerEventId eventId,
-                                                const TimePoint & expireTime,
-                                                const TimePoint & scheduleTime,
-                                                const TimePoint & fireTime,
-                                                const void * arg)
+                                           const TimePoint & expireTime,
+                                           const TimePoint & scheduleTime,
+                                           const TimePoint & fireTime,
+                                           const void * arg)
 {
-  pImplementor_->processTimedEvent(eventId,expireTime,scheduleTime,fireTime,arg);
+  emane_rs_transport_layer_do_process_timed_event(rs_state_, &eventId, &expireTime, &scheduleTime, &fireTime, arg);
 }
 
-// method meaningless for a Transport layer
-void EMANE::TransportLayer::setUpstreamTransport(UpstreamTransport *)
-{}
-
-void EMANE::TransportLayer::doProcessDownstreamPacket(DownstreamPacket &,
-                                                      const ControlMessages &)
-{}
-
-
-void EMANE::TransportLayer::doProcessDownstreamControl(const ControlMessages &)
-{}
+extern "C" {
+    void emane_c_transport_layer_implementor_initialize(void* impl_ptr, void* registrar) {
+        static_cast<EMANE::NEMLayer*>(impl_ptr)->initialize(*static_cast<EMANE::Registrar*>(registrar));
+    }
+    void emane_c_transport_layer_implementor_configure(void* impl_ptr, void* update) {
+        static_cast<EMANE::NEMLayer*>(impl_ptr)->configure(*static_cast<EMANE::ConfigurationUpdate*>(update));
+    }
+    void emane_c_transport_layer_implementor_start(void* impl_ptr) {
+        static_cast<EMANE::NEMLayer*>(impl_ptr)->start();
+    }
+    void emane_c_transport_layer_implementor_post_start(void* impl_ptr) {
+        static_cast<EMANE::NEMLayer*>(impl_ptr)->postStart();
+    }
+    void emane_c_transport_layer_implementor_stop(void* impl_ptr) {
+        static_cast<EMANE::NEMLayer*>(impl_ptr)->stop();
+    }
+    void emane_c_transport_layer_implementor_destroy(void* impl_ptr) {
+        static_cast<EMANE::NEMLayer*>(impl_ptr)->destroy();
+    }
+    void emane_c_transport_layer_implementor_process_configuration(void* impl_ptr, void* update) {
+        static_cast<EMANE::NEMLayer*>(impl_ptr)->processConfiguration(*static_cast<EMANE::ConfigurationUpdate*>(update));
+    }
+    void emane_c_transport_layer_implementor_process_upstream_packet(void* impl_ptr, void* pkt, void* msgs) {
+        static_cast<EMANE::NEMLayer*>(impl_ptr)->processUpstreamPacket(*static_cast<EMANE::UpstreamPacket*>(pkt), *static_cast<EMANE::ControlMessages*>(msgs));
+    }
+    void emane_c_transport_layer_implementor_process_downstream_packet(void* impl_ptr, void* pkt, void* msgs) {
+        static_cast<EMANE::NEMLayer*>(impl_ptr)->processDownstreamPacket(*static_cast<EMANE::DownstreamPacket*>(pkt), *static_cast<EMANE::ControlMessages*>(msgs));
+    }
+    void emane_c_transport_layer_implementor_process_upstream_control(void* impl_ptr, void* msgs) {
+        static_cast<EMANE::NEMLayer*>(impl_ptr)->processUpstreamControl(*static_cast<EMANE::ControlMessages*>(msgs));
+    }
+    void emane_c_transport_layer_implementor_process_downstream_control(void* impl_ptr, void* msgs) {
+        static_cast<EMANE::NEMLayer*>(impl_ptr)->processDownstreamControl(*static_cast<EMANE::ControlMessages*>(msgs));
+    }
+    void emane_c_transport_layer_implementor_set_upstream_transport(void* impl_ptr, void* transport) {
+        static_cast<EMANE::NEMLayer*>(impl_ptr)->setUpstreamTransport(static_cast<EMANE::UpstreamTransport*>(transport));
+    }
+    void emane_c_transport_layer_implementor_set_downstream_transport(void* impl_ptr, void* transport) {
+        static_cast<EMANE::NEMLayer*>(impl_ptr)->setDownstreamTransport(static_cast<EMANE::DownstreamTransport*>(transport));
+    }
+    void emane_c_transport_layer_implementor_process_event(void* impl_ptr, void* event_id, void* serialization) {
+        static_cast<EMANE::NEMLayer*>(impl_ptr)->processEvent(*static_cast<EMANE::EventId*>(event_id), *static_cast<EMANE::Serialization*>(serialization));
+    }
+    void emane_c_transport_layer_implementor_process_timed_event(void* impl_ptr, void* event_id, const void* expire, const void* schedule, const void* fire, const void* arg) {
+        static_cast<EMANE::NEMLayer*>(impl_ptr)->processTimedEvent(*static_cast<EMANE::TimerEventId*>(event_id), *static_cast<const EMANE::TimePoint*>(expire), *static_cast<const EMANE::TimePoint*>(schedule), *static_cast<const EMANE::TimePoint*>(fire), arg);
+    }
+}

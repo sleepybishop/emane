@@ -73,6 +73,7 @@ namespace EMANE
 
   private:
     std::unique_ptr<NEMLayer> pImplementor_;
+    void* rs_state_;
 
     std::unique_ptr<PlatformServiceProvider> pPlatformService_;
 
