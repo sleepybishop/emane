@@ -7,9 +7,10 @@ pub mod control_port;
 pub mod xml;
 pub mod regex;
 pub mod events;
-pub mod config;
+pub mod configuration_service;
+pub use configuration_service as config;
 pub mod statistics;
-pub mod buildid;
+pub mod build_id_service;
 pub mod event_service;
 pub mod ota_manager;
 pub mod flow_control_manager;
@@ -155,7 +156,7 @@ pub extern "C" fn emane_rs_lognormal_fading_process(
 }
 pub mod nem_queued_layer;
 pub mod mac_layer;
-pub mod logger;
+pub mod log_service;
 pub mod timer_service;
 pub mod nem_layer_stack;
 pub mod nem_impl;

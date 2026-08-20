@@ -36,7 +36,7 @@
 #include "logservice.h"
 
 extern "C" {
-    size_t emane_rs_timer_schedule(uint64_t expire_micros, uint64_t interval_micros, const void* arg, void* p_user, void (*callback)(size_t, uint64_t, uint64_t, uint64_t, const void*, void*));
+    size_t emane_rs_timer_schedule(uint64_t expire_micros, uint64_t interval_micros, const void* arg, void* p_user, void (*callback)(size_t, uint64_t, uint64_t, uint64_t, const void*, void*), void (*free_callback)(void*));
     bool emane_rs_timer_cancel(size_t event_id);
 }
 
@@ -70,7 +70,7 @@ EMANE::TimerEventId EMANE::TimerServiceProxy::scheduleTimedEvent(const TimePoint
 {
   uint64_t expire_micros = std::chrono::duration_cast<std::chrono::microseconds>(timeout.time_since_epoch()).count();
   uint64_t interval_micros = std::chrono::duration_cast<std::chrono::microseconds>(interval).count();
-  return emane_rs_timer_schedule(expire_micros, interval_micros, arg, this, timer_callback);
+  return emane_rs_timer_schedule(expire_micros, interval_micros, arg, this, timer_callback, nullptr);
 }
 
 void EMANE::TimerServiceProxy::processTimedEvent(TimerEventId eventId,
