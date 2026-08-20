@@ -63,12 +63,8 @@ namespace EMANE
       private:
         typedef std::map<ModuleId,Events::CommEffect> CommEffectEntryMap;
         typedef std::map<ModuleId,CommEffectEntryMap> CommEffectEntryCache;
-        CommEffectEntryCache commeffectEntryCache_;
-        CommEffectEntryCache commeffectDeltaEntryCache_;
+        void* rust_loader_;
         
-        void loadCommEffectCache(NEMId dstNEM,
-                                 const Events::CommEffect & entry,
-                                 CommEffectEntryCache & cache);
       };
     }
   }

@@ -62,8 +62,7 @@ namespace EMANE
         
       private:
         typedef std::map<ModuleId,Events::AntennaProfile> AntennaProfileEntryMap;
-        AntennaProfileEntryMap antennaProfileEntryMap_;
-        AntennaProfileEntryMap antennaProfileEntryDeltaMap_;
+        void* rust_loader_;
       };
     }
   }

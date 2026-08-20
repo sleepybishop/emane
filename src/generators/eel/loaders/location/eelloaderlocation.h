@@ -65,8 +65,7 @@ namespace EMANE
       private:
       
         using LocationEntryMap = std::map<ModuleId,LocationEntry>;
-        LocationEntryMap locationEntryMap_;
-        LocationEntryMap locationEntryDeltaMap_;
+        void* rust_ptr_;
       };
     }
   }

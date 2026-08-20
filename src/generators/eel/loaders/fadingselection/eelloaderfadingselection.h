@@ -63,13 +63,8 @@ namespace EMANE
       private:
         using FadingSelectionEntryMap = std::map<ModuleId,Events::FadingSelection>;
         using FadingSelectionEntryCache = std::map<ModuleId,FadingSelectionEntryMap>;
-        FadingSelectionEntryCache fadingSelectionEntryCache_;
-        FadingSelectionEntryCache fadingSelectionDeltaEntryCache_;
+        void* rust_ptr_;
 
-        void loadFadingSelectionCache(NEMId targetNEM,
-                                      NEMId txNEM,
-                                      Events::FadingModel model,
-                                      FadingSelectionEntryCache & cache);
       };
     }
   }
