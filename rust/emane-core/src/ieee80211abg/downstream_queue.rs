@@ -68,7 +68,9 @@ pub unsafe extern "C" fn ieee80211abg_downstream_queue_create(id: u16) -> *mut F
 
 #[no_mangle]
 pub unsafe extern "C" fn ieee80211abg_downstream_queue_destroy(queue: *mut FfiDownstreamQueue) {
-    if queue.is_null() { return; }
+    if queue.is_null() {
+        return;
+    }
     let mut q = Box::from_raw(queue);
     for cat in q.categories.iter_mut() {
         for entry in cat.queue.drain(..) {
@@ -128,8 +130,8 @@ pub unsafe extern "C" fn ieee80211abg_downstream_queue_enqueue(
 ) {
     let q = &mut *queue;
     *num_dropped = 0;
-    
-    let mut drop = |ptr: *mut c_void| {
+
+    let drop = |ptr: *mut c_void| {
         if *num_dropped < max_dropped {
             *dropped_entries.add(*num_dropped) = ptr;
             *num_dropped += 1;
@@ -139,7 +141,7 @@ pub unsafe extern "C" fn ieee80211abg_downstream_queue_enqueue(
     };
 
     let is_broadcast = destination == 0xFFFF;
-    
+
     if category < q.num_active_categories {
         let cat = &mut q.categories[category as usize];
         if cat.max_queue_capacity == 0 {
@@ -147,10 +149,16 @@ pub unsafe extern "C" fn ieee80211abg_downstream_queue_enqueue(
         } else if cat.max_packet_size != 0 && length > cat.max_packet_size as usize {
             if is_broadcast {
                 ieee80211abg_downstream_queue_stat_add(cat.num_broadcast_packets_too_large, 1);
-                ieee80211abg_downstream_queue_stat_add(cat.num_broadcast_bytes_too_large, length as u32);
+                ieee80211abg_downstream_queue_stat_add(
+                    cat.num_broadcast_bytes_too_large,
+                    length as u32,
+                );
             } else {
                 ieee80211abg_downstream_queue_stat_add(cat.num_unicast_packets_too_large, 1);
-                ieee80211abg_downstream_queue_stat_add(cat.num_unicast_bytes_too_large, length as u32);
+                ieee80211abg_downstream_queue_stat_add(
+                    cat.num_unicast_bytes_too_large,
+                    length as u32,
+                );
             }
             drop(entry_ptr);
         } else {
@@ -160,17 +168,23 @@ pub unsafe extern "C" fn ieee80211abg_downstream_queue_enqueue(
                 }
             }
             cat.queue.push_back(entry_ptr);
-            
+
             let current_len = cat.queue.len() as u32;
             if current_len > ieee80211abg_downstream_queue_stat_get(cat.num_high_water_mark) {
                 ieee80211abg_downstream_queue_stat_set(cat.num_high_water_mark, current_len);
-                ieee80211abg_downstream_queue_stat_set(cat.num_high_water_max, cat.max_queue_capacity as u32);
+                ieee80211abg_downstream_queue_stat_set(
+                    cat.num_high_water_max,
+                    cat.max_queue_capacity as u32,
+                );
             }
         }
     } else {
         if is_broadcast {
             ieee80211abg_downstream_queue_stat_add(q.num_broadcast_packets_unsupported, 1);
-            ieee80211abg_downstream_queue_stat_add(q.num_broadcast_bytes_unsupported, length as u32);
+            ieee80211abg_downstream_queue_stat_add(
+                q.num_broadcast_bytes_unsupported,
+                length as u32,
+            );
         } else {
             ieee80211abg_downstream_queue_stat_add(q.num_unicast_packets_unsupported, 1);
             ieee80211abg_downstream_queue_stat_add(q.num_unicast_bytes_unsupported, length as u32);

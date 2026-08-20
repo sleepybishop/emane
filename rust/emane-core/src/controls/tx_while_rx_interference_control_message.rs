@@ -5,13 +5,17 @@ pub struct TxWhileRxInterferenceControlMessageImpl {
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_tx_while_rx_interference_control_message_create(rx_power_dbm: f64) -> *mut c_void {
+pub extern "C" fn emane_rs_tx_while_rx_interference_control_message_create(
+    rx_power_dbm: f64,
+) -> *mut c_void {
     let msg = Box::new(TxWhileRxInterferenceControlMessageImpl { rx_power_dbm });
     Box::into_raw(msg) as *mut c_void
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_tx_while_rx_interference_control_message_clone(ptr: *const c_void) -> *mut c_void {
+pub extern "C" fn emane_rs_tx_while_rx_interference_control_message_clone(
+    ptr: *const c_void,
+) -> *mut c_void {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -23,7 +27,9 @@ pub extern "C" fn emane_rs_tx_while_rx_interference_control_message_clone(ptr: *
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_tx_while_rx_interference_control_message_get_rx_power_dbm(ptr: *const c_void) -> f64 {
+pub extern "C" fn emane_rs_tx_while_rx_interference_control_message_get_rx_power_dbm(
+    ptr: *const c_void,
+) -> f64 {
     if ptr.is_null() {
         return 0.0;
     }
@@ -34,6 +40,10 @@ pub extern "C" fn emane_rs_tx_while_rx_interference_control_message_get_rx_power
 #[no_mangle]
 pub extern "C" fn emane_rs_tx_while_rx_interference_control_message_free(ptr: *mut c_void) {
     if !ptr.is_null() {
-        unsafe { drop(Box::from_raw(ptr as *mut TxWhileRxInterferenceControlMessageImpl)); }
+        unsafe {
+            drop(Box::from_raw(
+                ptr as *mut TxWhileRxInterferenceControlMessageImpl,
+            ));
+        }
     }
 }

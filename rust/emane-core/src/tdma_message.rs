@@ -1,5 +1,5 @@
-use crate::protobufs::emane_message::tdma_base_model_message::Message;
 use crate::protobufs::emane_message::tdma_base_model_message::message::{Fragment, MessageType};
+use crate::protobufs::emane_message::tdma_base_model_message::Message;
 use crate::protobufs::emane_message::TdmaBaseModelMessage;
 use prost::Message as ProstMessage;
 

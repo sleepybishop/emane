@@ -39,25 +39,33 @@ impl NemLayerStack {
 
     pub fn start(&self) {
         for layer in &self.layers {
-            unsafe { emane_c_component_start(*layer); }
+            unsafe {
+                emane_c_component_start(*layer);
+            }
         }
     }
 
     pub fn post_start(&self) {
         for layer in &self.layers {
-            unsafe { emane_c_component_post_start(*layer); }
+            unsafe {
+                emane_c_component_post_start(*layer);
+            }
         }
     }
 
     pub fn stop(&self) {
         for layer in &self.layers {
-            unsafe { emane_c_component_stop(*layer); }
+            unsafe {
+                emane_c_component_stop(*layer);
+            }
         }
     }
 
     pub fn destroy(&self) {
         for layer in &self.layers {
-            unsafe { emane_c_component_destroy(*layer); }
+            unsafe {
+                emane_c_component_destroy(*layer);
+            }
         }
     }
 }
@@ -71,48 +79,66 @@ pub extern "C" fn emane_rs_nem_layer_stack_create() -> *mut c_void {
 #[no_mangle]
 pub extern "C" fn emane_rs_nem_layer_stack_destroy(ptr: *mut c_void) {
     if !ptr.is_null() {
-        unsafe { let _ = Box::from_raw(ptr as *mut NemLayerStack); }
+        unsafe {
+            let _ = Box::from_raw(ptr as *mut NemLayerStack);
+        }
     }
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_nem_layer_stack_add(ptr: *mut c_void, layer: *mut c_void) {
-    if ptr.is_null() { return; }
+    if ptr.is_null() {
+        return;
+    }
     let stack = unsafe { &mut *(ptr as *mut NemLayerStack) };
     stack.add_layer(layer);
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_nem_layer_stack_connect(ptr: *mut c_void, up: *mut c_void, down: *mut c_void) {
-    if ptr.is_null() { return; }
+pub extern "C" fn emane_rs_nem_layer_stack_connect(
+    ptr: *mut c_void,
+    up: *mut c_void,
+    down: *mut c_void,
+) {
+    if ptr.is_null() {
+        return;
+    }
     let stack = unsafe { &mut *(ptr as *mut NemLayerStack) };
     stack.connect_layers(up, down);
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_nem_layer_stack_start(ptr: *mut c_void) {
-    if ptr.is_null() { return; }
+    if ptr.is_null() {
+        return;
+    }
     let stack = unsafe { &mut *(ptr as *mut NemLayerStack) };
     stack.start();
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_nem_layer_stack_post_start(ptr: *mut c_void) {
-    if ptr.is_null() { return; }
+    if ptr.is_null() {
+        return;
+    }
     let stack = unsafe { &mut *(ptr as *mut NemLayerStack) };
     stack.post_start();
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_nem_layer_stack_stop(ptr: *mut c_void) {
-    if ptr.is_null() { return; }
+    if ptr.is_null() {
+        return;
+    }
     let stack = unsafe { &mut *(ptr as *mut NemLayerStack) };
     stack.stop();
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_nem_layer_stack_destroy_layers(ptr: *mut c_void) {
-    if ptr.is_null() { return; }
+    if ptr.is_null() {
+        return;
+    }
     let stack = unsafe { &mut *(ptr as *mut NemLayerStack) };
     stack.destroy();
 }

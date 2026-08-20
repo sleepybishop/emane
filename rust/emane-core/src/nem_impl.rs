@@ -1,5 +1,4 @@
 use std::os::raw::c_void;
-use crate::nem_layer_stack::NemLayerStack;
 
 extern "C" {
     fn emane_c_nem_adapter_open_ota(adapter: *mut c_void);
@@ -17,7 +16,13 @@ pub struct NemImpl {
 }
 
 impl NemImpl {
-    pub fn new(id: u16, stack: *mut c_void, b_ext: bool, ota: *mut c_void, net: *mut c_void) -> Self {
+    pub fn new(
+        id: u16,
+        stack: *mut c_void,
+        b_ext: bool,
+        ota: *mut c_void,
+        net: *mut c_void,
+    ) -> Self {
         Self {
             id,
             stack,
@@ -78,7 +83,7 @@ pub extern "C" fn emane_rs_nem_impl_create(
     stack: *mut c_void,
     b_ext: bool,
     ota: *mut c_void,
-    net: *mut c_void
+    net: *mut c_void,
 ) -> *mut c_void {
     let nem = Box::new(NemImpl::new(id, stack, b_ext, ota, net));
     Box::into_raw(nem) as *mut c_void
@@ -87,34 +92,44 @@ pub extern "C" fn emane_rs_nem_impl_create(
 #[no_mangle]
 pub extern "C" fn emane_rs_nem_impl_destroy(ptr: *mut c_void) {
     if !ptr.is_null() {
-        unsafe { let _ = Box::from_raw(ptr as *mut NemImpl); }
+        unsafe {
+            let _ = Box::from_raw(ptr as *mut NemImpl);
+        }
     }
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_nem_impl_start(ptr: *mut c_void) {
-    if ptr.is_null() { return; }
+    if ptr.is_null() {
+        return;
+    }
     let nem = unsafe { &*(ptr as *mut NemImpl) };
     nem.start();
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_nem_impl_post_start(ptr: *mut c_void) {
-    if ptr.is_null() { return; }
+    if ptr.is_null() {
+        return;
+    }
     let nem = unsafe { &*(ptr as *mut NemImpl) };
     nem.post_start();
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_nem_impl_stop(ptr: *mut c_void) {
-    if ptr.is_null() { return; }
+    if ptr.is_null() {
+        return;
+    }
     let nem = unsafe { &*(ptr as *mut NemImpl) };
     nem.stop();
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_nem_impl_destroy_layers(ptr: *mut c_void) {
-    if ptr.is_null() { return; }
+    if ptr.is_null() {
+        return;
+    }
     let nem = unsafe { &*(ptr as *mut NemImpl) };
     nem.destroy();
 }

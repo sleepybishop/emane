@@ -90,7 +90,10 @@ pub extern "C" fn emane_rs_rfpipe_mac_process_upstream(
     let rnd: f32 = rand::thread_rng().gen();
 
     if pcr < rnd {
-        return RfpipeUpstreamAction { action: 0, drop_code: 1 }; // DROP_CODE_SINR
+        return RfpipeUpstreamAction {
+            action: 0,
+            drop_code: 1,
+        }; // DROP_CODE_SINR
     }
 
     state.neighbor_metric_manager.handle_rx_activity(
@@ -115,9 +118,15 @@ pub extern "C" fn emane_rs_rfpipe_mac_process_upstream(
     );
 
     if state.promiscuous_mode || dst == state.id || dst == 0xFFFF {
-        RfpipeUpstreamAction { action: 1, drop_code: 0 }
+        RfpipeUpstreamAction {
+            action: 1,
+            drop_code: 0,
+        }
     } else {
-        RfpipeUpstreamAction { action: 0, drop_code: 3 } // DROP_CODE_DST_MAC
+        RfpipeUpstreamAction {
+            action: 0,
+            drop_code: 3,
+        } // DROP_CODE_DST_MAC
     }
 }
 
@@ -225,16 +234,18 @@ pub extern "C" fn emane_rs_rfpipe_mac_configure(
     state.flow_control_enable = flow_control_enable;
     state.radio_metric_enable = radio_metric_enable;
     state.flow_control_tokens = flow_control_tokens;
-    
+
     if !pcr_curve_uri.is_null() {
         let c_str = unsafe { std::ffi::CStr::from_ptr(pcr_curve_uri) };
         if let Ok(s) = c_str.to_str() {
             state.pcr_curve_uri = s.to_owned();
         }
     }
-    
-    state.radio_metric_report_interval = Duration::from_micros(radio_metric_report_interval_microseconds);
-    state.neighbor_metric_delete_time = Duration::from_micros(neighbor_metric_delete_time_microseconds);
+
+    state.radio_metric_report_interval =
+        Duration::from_micros(radio_metric_report_interval_microseconds);
+    state.neighbor_metric_delete_time =
+        Duration::from_micros(neighbor_metric_delete_time_microseconds);
 }
 
 #[no_mangle]
@@ -243,7 +254,9 @@ pub extern "C" fn emane_rs_rfpipe_mac_start(ptr: *mut RfpipeMac) {
     if state.flow_control_enable {
         state.flow_control_manager.start(state.flow_control_tokens);
     }
-    state.neighbor_metric_manager.set_neighbor_delete_time_microseconds(state.neighbor_metric_delete_time);
+    state
+        .neighbor_metric_manager
+        .set_neighbor_delete_time_microseconds(state.neighbor_metric_delete_time);
     if !state.pcr_curve_uri.is_empty() {
         let _ = state.pcr_manager.load(&state.pcr_curve_uri);
     }
@@ -256,9 +269,11 @@ pub extern "C" fn emane_rs_rfpipe_mac_process_flow_control_message(
 ) -> bool {
     let state = unsafe { &mut *ptr };
     if state.flow_control_enable {
-        state.flow_control_manager.process_flow_control_message(msg_tokens).is_some()
+        state
+            .flow_control_manager
+            .process_flow_control_message(msg_tokens)
+            .is_some()
     } else {
         false
     }
 }
-

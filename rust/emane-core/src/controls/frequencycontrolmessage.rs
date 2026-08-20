@@ -39,7 +39,9 @@ pub unsafe extern "C" fn emane_rs_controls_freq_add_segment(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn emane_rs_controls_freq_clone(ptr: *const core::ffi::c_void) -> *mut core::ffi::c_void {
+pub unsafe extern "C" fn emane_rs_controls_freq_clone(
+    ptr: *const core::ffi::c_void,
+) -> *mut core::ffi::c_void {
     let msg = &*(ptr as *const FrequencyControlMessage);
     let cloned = Box::new(msg.clone());
     Box::into_raw(cloned) as *mut core::ffi::c_void

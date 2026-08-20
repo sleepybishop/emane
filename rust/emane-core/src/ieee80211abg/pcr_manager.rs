@@ -1,8 +1,7 @@
-
-use std::collections::HashMap;
-use std::ffi::{c_char, CStr, c_void};
-use std::fs;
 use roxmltree;
+use std::collections::HashMap;
+use std::ffi::{c_char, c_void, CStr};
+use std::fs;
 
 pub struct PCREntry {
     pub sinr: f32,
@@ -31,7 +30,8 @@ impl PCRManager {
 
     pub fn load(&mut self, uri: &str) -> Result<(), String> {
         let content = fs::read_to_string(uri).map_err(|e| format!("Failed to read file: {}", e))?;
-        let doc = roxmltree::Document::parse(&content).map_err(|e| format!("Failed to parse XML: {}", e))?;
+        let doc = roxmltree::Document::parse(&content)
+            .map_err(|e| format!("Failed to parse XML: {}", e))?;
 
         self.pcr_por_map.clear();
 
@@ -45,20 +45,38 @@ impl PCRManager {
 
                         for datarate_node in child.children() {
                             if datarate_node.has_tag_name("datarate") {
-                                let index: u16 = datarate_node.attribute("index").unwrap_or("0").parse().unwrap_or(0);
+                                let index: u16 = datarate_node
+                                    .attribute("index")
+                                    .unwrap_or("0")
+                                    .parse()
+                                    .unwrap_or(0);
                                 let mut pcr_entry_vector: Vec<PCREntry> = Vec::new();
 
                                 for row in datarate_node.children() {
                                     if row.has_tag_name("row") {
-                                        let sinr: f32 = row.attribute("sinr").unwrap_or("0").parse().unwrap_or(0.0);
-                                        let por_percent: f32 = row.attribute("por").unwrap_or("0").parse().unwrap_or(0.0);
+                                        let sinr: f32 = row
+                                            .attribute("sinr")
+                                            .unwrap_or("0")
+                                            .parse()
+                                            .unwrap_or(0.0);
+                                        let por_percent: f32 = row
+                                            .attribute("por")
+                                            .unwrap_or("0")
+                                            .parse()
+                                            .unwrap_or(0.0);
                                         let por = por_percent / 100.0;
 
                                         if let Some(last) = pcr_entry_vector.last() {
                                             if sinr == last.sinr {
-                                                return Err(format!("Duplicate sinr value {}", sinr));
+                                                return Err(format!(
+                                                    "Duplicate sinr value {}",
+                                                    sinr
+                                                ));
                                             } else if sinr < last.sinr {
-                                                return Err(format!("Out of order sinr value {}", sinr));
+                                                return Err(format!(
+                                                    "Out of order sinr value {}",
+                                                    sinr
+                                                ));
                                             }
                                         }
 
@@ -66,8 +84,21 @@ impl PCRManager {
                                     }
                                 }
 
-                                if self.pcr_por_map.insert(index, PCRPOR { pcr: pcr_entry_vector, por: Vec::new() }).is_some() {
-                                    return Err(format!("Duplicate datarate index value {}", index));
+                                if self
+                                    .pcr_por_map
+                                    .insert(
+                                        index,
+                                        PCRPOR {
+                                            pcr: pcr_entry_vector,
+                                            por: Vec::new(),
+                                        },
+                                    )
+                                    .is_some()
+                                {
+                                    return Err(format!(
+                                        "Duplicate datarate index value {}",
+                                        index
+                                    ));
                                 }
                             }
                         }

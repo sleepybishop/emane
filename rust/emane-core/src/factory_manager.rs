@@ -1,9 +1,8 @@
-
 use libc::{c_void, dlclose, dlerror, dlopen, dlsym, RTLD_NOW};
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
-use std::sync::{Arc, Mutex, OnceLock};
 use std::os::raw::c_char;
+use std::sync::{Arc, Mutex, OnceLock};
 
 type FactoryMap<T> = Mutex<HashMap<String, Arc<T>>>;
 
@@ -36,7 +35,6 @@ fn event_generator_factory_map() -> &'static FactoryMap<EventGeneratorFactory> {
     static MAP: OnceLock<FactoryMap<EventGeneratorFactory>> = OnceLock::new();
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
 }
-
 
 pub struct EventGeneratorFactory {
     handle: *mut c_void,
@@ -234,7 +232,9 @@ pub unsafe extern "C" fn emane_rs_factory_manager_create_mac_layer(
     err_buf: *mut c_char,
     err_buf_len: usize,
 ) -> *mut c_void {
-    let lib_name = CStr::from_ptr(s_library_file).to_string_lossy().into_owned();
+    let lib_name = CStr::from_ptr(s_library_file)
+        .to_string_lossy()
+        .into_owned();
     let mut map = mac_factory_map().lock().unwrap();
     let factory = map.entry(lib_name.clone()).or_insert_with(|| {
         Arc::new(LayerFactory::new(&lib_name).unwrap_or_else(|e| {
@@ -256,7 +256,9 @@ pub unsafe extern "C" fn emane_rs_factory_manager_create_phy_layer(
     err_buf: *mut c_char,
     err_buf_len: usize,
 ) -> *mut c_void {
-    let lib_name = CStr::from_ptr(s_library_file).to_string_lossy().into_owned();
+    let lib_name = CStr::from_ptr(s_library_file)
+        .to_string_lossy()
+        .into_owned();
     let mut map = phy_factory_map().lock().unwrap();
     let factory = map.entry(lib_name.clone()).or_insert_with(|| {
         Arc::new(LayerFactory::new(&lib_name).unwrap_or_else(|e| {
@@ -278,7 +280,9 @@ pub unsafe extern "C" fn emane_rs_factory_manager_create_shim_layer(
     err_buf: *mut c_char,
     err_buf_len: usize,
 ) -> *mut c_void {
-    let lib_name = CStr::from_ptr(s_library_file).to_string_lossy().into_owned();
+    let lib_name = CStr::from_ptr(s_library_file)
+        .to_string_lossy()
+        .into_owned();
     let mut map = shim_factory_map().lock().unwrap();
     let factory = map.entry(lib_name.clone()).or_insert_with(|| {
         Arc::new(LayerFactory::new(&lib_name).unwrap_or_else(|e| {
@@ -299,7 +303,9 @@ pub unsafe extern "C" fn emane_rs_factory_manager_create_transport(
     err_buf: *mut c_char,
     err_buf_len: usize,
 ) -> *mut c_void {
-    let lib_name = CStr::from_ptr(s_library_file).to_string_lossy().into_owned();
+    let lib_name = CStr::from_ptr(s_library_file)
+        .to_string_lossy()
+        .into_owned();
     let mut map = transport_factory_map().lock().unwrap();
     let factory = map.entry(lib_name.clone()).or_insert_with(|| {
         Arc::new(TransportFactory::new(&lib_name).unwrap_or_else(|e| {
@@ -320,7 +326,9 @@ pub unsafe extern "C" fn emane_rs_factory_manager_create_event_agent(
     err_buf: *mut c_char,
     err_buf_len: usize,
 ) -> *mut c_void {
-    let lib_name = CStr::from_ptr(s_library_file).to_string_lossy().into_owned();
+    let lib_name = CStr::from_ptr(s_library_file)
+        .to_string_lossy()
+        .into_owned();
     let mut map = event_agent_factory_map().lock().unwrap();
     let factory = map.entry(lib_name.clone()).or_insert_with(|| {
         Arc::new(TransportFactory::new(&lib_name).unwrap_or_else(|e| {
@@ -336,12 +344,14 @@ pub unsafe extern "C" fn emane_rs_factory_manager_create_event_agent(
 #[no_mangle]
 pub unsafe extern "C" fn emane_rs_factory_manager_create_event_generator(
     s_library_file: *const c_char,
-    id: u16,
+    _id: u16,
     platform: *mut c_void,
     err_buf: *mut c_char,
     err_buf_len: usize,
 ) -> *mut c_void {
-    let lib_name = CStr::from_ptr(s_library_file).to_string_lossy().into_owned();
+    let lib_name = CStr::from_ptr(s_library_file)
+        .to_string_lossy()
+        .into_owned();
     let mut map = event_generator_factory_map().lock().unwrap();
     let factory = map.entry(lib_name.clone()).or_insert_with(|| {
         Arc::new(EventGeneratorFactory::new(&lib_name).unwrap_or_else(|e| {

@@ -1,7 +1,7 @@
 use std::env;
 use std::process;
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
 pub struct EventServiceConfig {
     pub filename: String,
@@ -27,7 +27,7 @@ impl EventGeneratorManager {
     pub fn stop(&self) {
         println!("EventGeneratorManager stopped");
     }
-    
+
     pub fn post_start(&self) {
         println!("EventGeneratorManager post_start");
     }
@@ -39,9 +39,11 @@ pub struct EventDirector {
 
 impl EventDirector {
     pub fn new(filename: String) -> Self {
-        Self { config: EventServiceConfig::new(filename) }
+        Self {
+            config: EventServiceConfig::new(filename),
+        }
     }
-    
+
     pub fn construct(&self) -> EventGeneratorManager {
         EventGeneratorManager::new()
     }
@@ -75,12 +77,15 @@ fn usage(app_name: &str) {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let app_name = args.get(0).cloned().unwrap_or_else(|| "emaneeventservice".to_string());
-    
+    let app_name = args
+        .get(0)
+        .cloned()
+        .unwrap_or_else(|| "emaneeventservice".to_string());
+
     let mut config_url = None;
     let mut starttime: Option<Duration> = None;
     let mut nextday = false;
-    
+
     let mut i = 1;
     while i < args.len() {
         let arg = &args[i];
@@ -96,14 +101,24 @@ fn main() {
                 let time_str = &args[i];
                 let parts: Vec<&str> = time_str.split(':').collect();
                 if parts.len() == 3 {
-                    if let (Ok(h), Ok(m), Ok(s)) = (parts[0].parse::<u64>(), parts[1].parse::<u64>(), parts[2].parse::<u64>()) {
+                    if let (Ok(h), Ok(m), Ok(s)) = (
+                        parts[0].parse::<u64>(),
+                        parts[1].parse::<u64>(),
+                        parts[2].parse::<u64>(),
+                    ) {
                         starttime = Some(Duration::from_secs(h * 3600 + m * 60 + s));
                     } else {
-                        eprintln!("Error in format of start time {} --starttime HH:MM:SS", time_str);
+                        eprintln!(
+                            "Error in format of start time {} --starttime HH:MM:SS",
+                            time_str
+                        );
                         process::exit(1);
                     }
                 } else {
-                    eprintln!("Error in format of start time {} --starttime HH:MM:SS", time_str);
+                    eprintln!(
+                        "Error in format of start time {} --starttime HH:MM:SS",
+                        time_str
+                    );
                     process::exit(1);
                 }
             } else {
@@ -112,12 +127,24 @@ fn main() {
             }
         } else if arg == "-n" || arg == "--nextday" {
             nextday = true;
-        } else if arg == "-d" || arg == "--daemonize" || arg == "-r" || arg == "--realtime" || arg == "--syslog" {
+        } else if arg == "-d"
+            || arg == "--daemonize"
+            || arg == "-r"
+            || arg == "--realtime"
+            || arg == "--syslog"
+        {
             // Flags without arguments
         } else if arg.starts_with("-") {
             // Options with arguments
-            if arg == "-f" || arg == "--logfile" || arg == "-l" || arg == "--loglevel" 
-                || arg == "--pidfile" || arg == "-p" || arg == "--priority" || arg == "--uuidfile" {
+            if arg == "-f"
+                || arg == "--logfile"
+                || arg == "-l"
+                || arg == "--loglevel"
+                || arg == "--pidfile"
+                || arg == "-p"
+                || arg == "--priority"
+                || arg == "--uuidfile"
+            {
                 i += 1; // skip argument value
             } else {
                 eprintln!("unknown option {}", arg);
@@ -133,7 +160,7 @@ fn main() {
         }
         i += 1;
     }
-    
+
     let config_url = match config_url {
         Some(url) => url,
         None => {
@@ -141,17 +168,17 @@ fn main() {
             process::exit(1);
         }
     };
-    
+
     let director = EventDirector::new(config_url);
     let manager = director.construct();
-    
+
     if let Some(st) = starttime {
-        let mut t = unsafe { libc::time(std::ptr::null_mut()) };
+        let t = unsafe { libc::time(std::ptr::null_mut()) };
         let tm_ptr = unsafe { libc::localtime(&t) };
-        let seconds_passed = (unsafe { (*tm_ptr).tm_hour } * 3600 
-                            + unsafe { (*tm_ptr).tm_min } * 60 
-                            + unsafe { (*tm_ptr).tm_sec }) as u64;
-                            
+        let seconds_passed = (unsafe { (*tm_ptr).tm_hour } * 3600
+            + unsafe { (*tm_ptr).tm_min } * 60
+            + unsafe { (*tm_ptr).tm_sec }) as u64;
+
         let mut st_secs = st.as_secs();
         if nextday {
             st_secs += 24 * 60 * 60 - seconds_passed;
@@ -163,14 +190,14 @@ fn main() {
                 process::exit(1);
             }
         }
-        
+
         thread::sleep(Duration::from_secs(st_secs));
     }
-    
+
     manager.start();
     manager.post_start();
-    
+
     // Typically wait here for signals before stopping
-    
+
     manager.stop();
 }

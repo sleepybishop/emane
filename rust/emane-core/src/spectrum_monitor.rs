@@ -1,8 +1,6 @@
-
-use std::collections::{HashMap, HashSet, BTreeMap};
-use std::ffi::c_void;
 use crate::noise_recorder::NoiseRecorder;
-use crate::spectral_mask::{get_manager, frequency_overlap_ratio};
+use std::collections::{HashMap, HashSet};
+use std::ffi::c_void;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
@@ -69,16 +67,16 @@ type NoiseRecord = (
     u64, // rx freq
     MaskOverlap,
     u64, // start rx freq
-    u64  // end rx freq
+    u64, // end rx freq
 );
 
 type FilterRecord = (
     u16, // filter index
     MaskOverlap,
-    u64, // tx freq
+    u64,           // tx freq
     *const c_void, // filter match criterion
-    u64, // start rx freq
-    u64  // end rx freq
+    u64,           // start rx freq
+    u64,           // end rx freq
 );
 
 unsafe impl Send for SpectrumMonitor {}
@@ -105,8 +103,10 @@ pub struct SpectrumMonitor {
     foi: HashSet<u64>,
 
     filter_noise_recorder_map: HashMap<u16, (u64, u64, Box<NoiseRecorder>, *const c_void)>,
-    filter_transmitter_bandwidth_cache: HashMap<u64, (HashMap<u64, Vec<FilterRecord>>, HashSet<u64>)>,
-    filter_transmitter_spectral_mask_cache: HashMap<u64, (HashMap<u64, Vec<FilterRecord>>, HashSet<u64>)>,
+    filter_transmitter_bandwidth_cache:
+        HashMap<u64, (HashMap<u64, Vec<FilterRecord>>, HashSet<u64>)>,
+    filter_transmitter_spectral_mask_cache:
+        HashMap<u64, (HashMap<u64, Vec<FilterRecord>>, HashSet<u64>)>,
 }
 
 fn doppler_shift(freq: u64, doppler_factor: f64) -> i64 {
@@ -170,8 +170,9 @@ impl SpectrumMonitor {
         self.foi = foi.iter().copied().collect();
 
         self.transmitter_bandwidth_cache.clear();
-        self.transmitter_bandwidth_cache.insert(u64_bandwidth_hz, (HashMap::new(), HashSet::new()));
-        
+        self.transmitter_bandwidth_cache
+            .insert(u64_bandwidth_hz, (HashMap::new(), HashSet::new()));
+
         self.noise_recorder_map.clear();
         for &freq in &self.foi {
             self.noise_recorder_map.insert(
@@ -214,7 +215,13 @@ impl SpectrumMonitor {
         }
     }
 
-    pub fn request_i(&self, now: i64, u64_frequency_hz: u64, duration: i64, timepoint: i64) -> (Vec<f64>, i64, i64, f64, bool) {
+    pub fn request_i(
+        &self,
+        now: i64,
+        u64_frequency_hz: u64,
+        duration: i64,
+        timepoint: i64,
+    ) -> (Vec<f64>, i64, i64, f64, bool) {
         let mut valid_duration = duration;
         if valid_duration > self.max_duration {
             if self.b_max_clamp {
@@ -225,13 +232,31 @@ impl SpectrumMonitor {
         }
         if let Some(recorder) = self.noise_recorder_map.get(&u64_frequency_hz) {
             let (vec, start) = recorder.get(now, valid_duration, timepoint);
-            (vec, start, self.bin_size, self.d_receiver_sensitivity_milli_watt, self.mode == NoiseMode::All)
+            (
+                vec,
+                start,
+                self.bin_size,
+                self.d_receiver_sensitivity_milli_watt,
+                self.mode == NoiseMode::All,
+            )
         } else {
-            (Vec::new(), 0, self.bin_size, self.d_receiver_sensitivity_milli_watt, false)
+            (
+                Vec::new(),
+                0,
+                self.bin_size,
+                self.d_receiver_sensitivity_milli_watt,
+                false,
+            )
         }
     }
 
-    pub fn request_filter_i(&self, now: i64, filter_index: u16, duration: i64, timepoint: i64) -> (Vec<f64>, i64, i64, f64, usize) {
+    pub fn request_filter_i(
+        &self,
+        now: i64,
+        filter_index: u16,
+        duration: i64,
+        timepoint: i64,
+    ) -> (Vec<f64>, i64, i64, f64, usize) {
         let mut valid_duration = duration;
         if valid_duration > self.max_duration {
             if self.b_max_clamp {
@@ -242,7 +267,13 @@ impl SpectrumMonitor {
         }
         if let Some((_, _, recorder, _)) = self.filter_noise_recorder_map.get(&filter_index) {
             let (vec, start) = recorder.get(now, valid_duration, timepoint);
-            (vec, start, self.bin_size, self.d_receiver_sensitivity_milli_watt, recorder.get_sub_band_bin_count())
+            (
+                vec,
+                start,
+                self.bin_size,
+                self.d_receiver_sensitivity_milli_watt,
+                recorder.get_sub_band_bin_count(),
+            )
         } else {
             panic!("Unknown filter id");
         }
@@ -281,27 +312,31 @@ impl SpectrumMonitor {
     }
 
     pub fn remove_filter(&mut self, filter_index: u16) {
-        if self.filter_noise_recorder_map.remove(&filter_index).is_some() {
+        if self
+            .filter_noise_recorder_map
+            .remove(&filter_index)
+            .is_some()
+        {
             self.filter_transmitter_bandwidth_cache.clear();
         }
     }
 
     pub fn update(
         &mut self,
-        now: i64,
-        tx_time: i64,
-        propagation_delay: i64,
-        d_doppler_factor: f64,
-        segments: &[FfiFrequencySegment],
-        u64_segment_bandwidth_hz: u64,
-        rx_powers_milli_watt: &[f64],
-        b_in_band: bool,
-        transmitters: &[u16],
-        u16_sub_id: u16,
-        tx_antenna_index: u16,
-        spectral_mask_index: u16,
-        filter_data_ptr: *const u8,
-        filter_data_len: usize,
+        _now: i64,
+        _tx_time: i64,
+        _propagation_delay: i64,
+        _d_doppler_factor: f64,
+        _segments: &[FfiFrequencySegment],
+        _u64_segment_bandwidth_hz: u64,
+        _rx_powers_milli_watt: &[f64],
+        _b_in_band: bool,
+        _transmitters: &[u16],
+        _u16_sub_id: u16,
+        _tx_antenna_index: u16,
+        _spectral_mask_index: u16,
+        _filter_data_ptr: *const u8,
+        _filter_data_len: usize,
     ) -> (i64, i64, i64, Vec<FfiFrequencySegment>, bool, f64) {
         // dummy update to fix compilation issue while I build the rest.
         (0, 0, 0, Vec::new(), false, 0.0)
@@ -310,7 +345,7 @@ impl SpectrumMonitor {
 
 // TODO update
 
-// FFI 
+// FFI
 #[no_mangle]
 pub extern "C" fn emane_rs_spectrum_monitor_new() -> *mut c_void {
     Box::into_raw(Box::new(SpectrumMonitor::new())) as *mut c_void
@@ -319,7 +354,9 @@ pub extern "C" fn emane_rs_spectrum_monitor_new() -> *mut c_void {
 #[no_mangle]
 pub extern "C" fn emane_rs_spectrum_monitor_free(ptr: *mut c_void) {
     if !ptr.is_null() {
-        unsafe { let _ = Box::from_raw(ptr as *mut SpectrumMonitor); }
+        unsafe {
+            let _ = Box::from_raw(ptr as *mut SpectrumMonitor);
+        }
     }
 }
 
@@ -340,7 +377,9 @@ pub extern "C" fn emane_rs_spectrum_monitor_initialize(
     b_max_clamp: bool,
     b_exclude_same_sub_id_from_filter: bool,
 ) {
-    if ptr.is_null() { return; }
+    if ptr.is_null() {
+        return;
+    }
     let monitor = unsafe { &mut *(ptr as *mut SpectrumMonitor) };
     let foi = unsafe { std::slice::from_raw_parts(foi_ptr, foi_len) };
     let m = match mode {
@@ -400,9 +439,10 @@ pub extern "C" fn emane_rs_spectrum_monitor_update(
     }
     let monitor = unsafe { &mut *(ptr as *mut SpectrumMonitor) };
     let segments = unsafe { std::slice::from_raw_parts(segments_ptr, segments_len) };
-    let rx_powers_milli_watt = unsafe { std::slice::from_raw_parts(rx_powers_milli_watt_ptr, rx_powers_milli_watt_len) };
+    let rx_powers_milli_watt =
+        unsafe { std::slice::from_raw_parts(rx_powers_milli_watt_ptr, rx_powers_milli_watt_len) };
     let transmitters = unsafe { std::slice::from_raw_parts(transmitters_ptr, transmitters_len) };
-    
+
     let (t, p, d, mut segs, r, s) = monitor.update(
         now,
         tx_time,
@@ -419,11 +459,11 @@ pub extern "C" fn emane_rs_spectrum_monitor_update(
         filter_data_ptr,
         filter_data_len,
     );
-    
+
     segs.shrink_to_fit();
     let slen = segs.len();
     let sptr = segs.leak().as_mut_ptr();
-    
+
     FfiSpectrumUpdate {
         tx_time: t,
         propagation_delay: p,
@@ -436,9 +476,14 @@ pub extern "C" fn emane_rs_spectrum_monitor_update(
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_spectrum_monitor_free_update_segments(segments: *mut FfiFrequencySegment, len: usize) {
+pub extern "C" fn emane_rs_spectrum_monitor_free_update_segments(
+    segments: *mut FfiFrequencySegment,
+    len: usize,
+) {
     if !segments.is_null() {
-        unsafe { let _ = Vec::from_raw_parts(segments, len, len); }
+        unsafe {
+            let _ = Vec::from_raw_parts(segments, len, len);
+        }
     }
 }
 
@@ -448,7 +493,9 @@ pub extern "C" fn emane_rs_spectrum_monitor_get_frequencies(
     out_freqs: *mut u64,
     max_len: usize,
 ) -> usize {
-    if ptr.is_null() { return 0; }
+    if ptr.is_null() {
+        return 0;
+    }
     let monitor = unsafe { &*(ptr as *const SpectrumMonitor) };
     let freqs = monitor.get_frequencies();
     let count = std::cmp::min(freqs.len(), max_len);
@@ -459,8 +506,12 @@ pub extern "C" fn emane_rs_spectrum_monitor_get_frequencies(
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_spectrum_monitor_get_receiver_sensitivity_dbm(ptr: *const c_void) -> f64 {
-    if ptr.is_null() { return 0.0; }
+pub extern "C" fn emane_rs_spectrum_monitor_get_receiver_sensitivity_dbm(
+    ptr: *const c_void,
+) -> f64 {
+    if ptr.is_null() {
+        return 0.0;
+    }
     let monitor = unsafe { &*(ptr as *const SpectrumMonitor) };
     monitor.get_receiver_sensitivity_dbm()
 }
@@ -472,7 +523,9 @@ pub extern "C" fn emane_rs_spectrum_monitor_dump(
     out_data: *mut *mut f64,
     out_len: *mut usize,
 ) {
-    if ptr.is_null() { return; }
+    if ptr.is_null() {
+        return;
+    }
     let monitor = unsafe { &*(ptr as *const SpectrumMonitor) };
     let mut data = monitor.dump(u64_frequency_hz);
     data.shrink_to_fit();
@@ -490,7 +543,9 @@ pub extern "C" fn emane_rs_spectrum_monitor_dump_filter(
     out_len: *mut usize,
     out_sub_band_bin_count: *mut usize,
 ) {
-    if ptr.is_null() { return; }
+    if ptr.is_null() {
+        return;
+    }
     let monitor = unsafe { &*(ptr as *const SpectrumMonitor) };
     let (mut data, count) = monitor.dump_filter(filter_index);
     data.shrink_to_fit();
@@ -520,7 +575,8 @@ pub extern "C" fn emane_rs_spectrum_monitor_request_i(
         };
     }
     let monitor = unsafe { &*(ptr as *const SpectrumMonitor) };
-    let (mut data, start, bin, sens, is_all) = monitor.request_i(now, u64_frequency_hz, duration, timepoint);
+    let (mut data, start, bin, sens, is_all) =
+        monitor.request_i(now, u64_frequency_hz, duration, timepoint);
     data.shrink_to_fit();
     let length = data.len();
     let data_ptr = data.leak().as_mut_ptr();
@@ -552,7 +608,9 @@ pub extern "C" fn emane_rs_spectrum_monitor_initialize_filter(
     u64_bandwidth_bin_size_hz: u64,
     p_filter_match_criterion: *const c_void,
 ) {
-    if ptr.is_null() { return; }
+    if ptr.is_null() {
+        return;
+    }
     let monitor = unsafe { &mut *(ptr as *mut SpectrumMonitor) };
     monitor.initialize_filter(
         filter_index,
@@ -565,7 +623,9 @@ pub extern "C" fn emane_rs_spectrum_monitor_initialize_filter(
 
 #[no_mangle]
 pub extern "C" fn emane_rs_spectrum_monitor_remove_filter(ptr: *mut c_void, filter_index: u16) {
-    if ptr.is_null() { return; }
+    if ptr.is_null() {
+        return;
+    }
     let monitor = unsafe { &mut *(ptr as *mut SpectrumMonitor) };
     monitor.remove_filter(filter_index);
 }
@@ -589,7 +649,8 @@ pub extern "C" fn emane_rs_spectrum_monitor_request_filter_i(
         };
     }
     let monitor = unsafe { &*(ptr as *const SpectrumMonitor) };
-    let (mut data, start, bin, sens, count) = monitor.request_filter_i(now, filter_index, duration, timepoint);
+    let (mut data, start, bin, sens, count) =
+        monitor.request_filter_i(now, filter_index, duration, timepoint);
     data.shrink_to_fit();
     let length = data.len();
     let data_ptr = data.leak().as_mut_ptr();

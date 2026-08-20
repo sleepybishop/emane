@@ -21,14 +21,20 @@ impl EelLoaderPluginFactory {
         let create_ptr = unsafe { libc::dlsym(handle, c_create) };
         if create_ptr.is_null() {
             unsafe { libc::dlclose(handle) };
-            return Err(format!("{} missing create symbol. (Missing DECLARE_EEL_LOADER_PLUGIN()?)", library_name));
+            return Err(format!(
+                "{} missing create symbol. (Missing DECLARE_EEL_LOADER_PLUGIN()?)",
+                library_name
+            ));
         }
 
         let c_destroy = b"destroy\0".as_ptr() as *const c_char;
         let destroy_ptr = unsafe { libc::dlsym(handle, c_destroy) };
         if destroy_ptr.is_null() {
             unsafe { libc::dlclose(handle) };
-            return Err(format!("{} missing destroy symbol. (Missing DECLARE_EEL_LOADER_PLUGIN()?)", library_name));
+            return Err(format!(
+                "{} missing destroy symbol. (Missing DECLARE_EEL_LOADER_PLUGIN()?)",
+                library_name
+            ));
         }
 
         Ok(EelLoaderPluginFactory {
@@ -63,13 +69,15 @@ pub extern "C" fn emane_rs_eel_loader_plugin_factory_new() -> *mut EelLoaderPlug
 #[no_mangle]
 pub extern "C" fn emane_rs_eel_loader_plugin_factory_construct(
     library_name: *const c_char,
-    error_out: *mut *mut c_char
+    error_out: *mut *mut c_char,
 ) -> *mut EelLoaderPluginFactory {
     let lib_str = unsafe { CStr::from_ptr(library_name) }.to_string_lossy();
     match EelLoaderPluginFactory::construct(&lib_str) {
         Ok(f) => Box::into_raw(Box::new(f)),
         Err(e) => {
-            unsafe { *error_out = CString::new(e).unwrap().into_raw(); }
+            unsafe {
+                *error_out = CString::new(e).unwrap().into_raw();
+            }
             ptr::null_mut()
         }
     }
@@ -78,20 +86,31 @@ pub extern "C" fn emane_rs_eel_loader_plugin_factory_construct(
 #[no_mangle]
 pub extern "C" fn emane_rs_eel_loader_plugin_factory_free(ptr: *mut EelLoaderPluginFactory) {
     if !ptr.is_null() {
-        unsafe { drop(Box::from_raw(ptr)); }
+        unsafe {
+            drop(Box::from_raw(ptr));
+        }
     }
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_eel_loader_plugin_factory_create_plugin(ptr: *const EelLoaderPluginFactory) -> *mut c_void {
-    if ptr.is_null() { return ptr::null_mut(); }
+pub extern "C" fn emane_rs_eel_loader_plugin_factory_create_plugin(
+    ptr: *const EelLoaderPluginFactory,
+) -> *mut c_void {
+    if ptr.is_null() {
+        return ptr::null_mut();
+    }
     let factory = unsafe { &*ptr };
     factory.create_plugin()
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_eel_loader_plugin_factory_destroy_plugin(ptr: *const EelLoaderPluginFactory, plugin: *mut c_void) {
-    if ptr.is_null() || plugin.is_null() { return; }
+pub extern "C" fn emane_rs_eel_loader_plugin_factory_destroy_plugin(
+    ptr: *const EelLoaderPluginFactory,
+    plugin: *mut c_void,
+) {
+    if ptr.is_null() || plugin.is_null() {
+        return;
+    }
     let factory = unsafe { &*ptr };
     factory.destroy_plugin(plugin)
 }
@@ -99,6 +118,8 @@ pub extern "C" fn emane_rs_eel_loader_plugin_factory_destroy_plugin(ptr: *const 
 #[no_mangle]
 pub extern "C" fn emane_rs_eel_loader_plugin_factory_free_error(err: *mut c_char) {
     if !err.is_null() {
-        unsafe { drop(CString::from_raw(err)); }
+        unsafe {
+            drop(CString::from_raw(err));
+        }
     }
 }

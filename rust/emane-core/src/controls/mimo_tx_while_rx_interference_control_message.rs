@@ -1,4 +1,3 @@
-
 use std::os::raw::c_void;
 
 #[derive(Clone)]
@@ -31,9 +30,7 @@ pub extern "C" fn emane_rs_controls_mimo_tx_rx_create() -> *mut c_void {
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_controls_mimo_tx_rx_add_frequency_group(
-    ptr: *mut c_void,
-) -> usize {
+pub extern "C" fn emane_rs_controls_mimo_tx_rx_add_frequency_group(ptr: *mut c_void) -> usize {
     let msg = unsafe { &mut *(ptr as *mut MimoTxWhileRxInterferenceControlMessageRs) };
     msg.frequency_groups.push(Vec::new());
     msg.frequency_groups.len() - 1
@@ -65,7 +62,8 @@ pub extern "C" fn emane_rs_controls_mimo_tx_rx_add_rx_antenna(
     antenna_index: u16,
 ) -> usize {
     let msg = unsafe { &mut *(ptr as *mut MimoTxWhileRxInterferenceControlMessageRs) };
-    msg.rx_antenna_interferences.push((antenna_index, Vec::new()));
+    msg.rx_antenna_interferences
+        .push((antenna_index, Vec::new()));
     msg.rx_antenna_interferences.len() - 1
 }
 
@@ -101,7 +99,6 @@ pub extern "C" fn emane_rs_controls_mimo_tx_rx_add_interference_power(
     }
 }
 
-
 #[no_mangle]
 pub extern "C" fn emane_rs_controls_mimo_tx_rx_clone(ptr: *const c_void) -> *mut c_void {
     let msg = unsafe { &*(ptr as *const MimoTxWhileRxInterferenceControlMessageRs) };
@@ -112,6 +109,8 @@ pub extern "C" fn emane_rs_controls_mimo_tx_rx_clone(ptr: *const c_void) -> *mut
 #[no_mangle]
 pub extern "C" fn emane_rs_controls_mimo_tx_rx_destroy(ptr: *mut c_void) {
     if !ptr.is_null() {
-        unsafe { let _ = Box::from_raw(ptr as *mut MimoTxWhileRxInterferenceControlMessageRs); }
+        unsafe {
+            let _ = Box::from_raw(ptr as *mut MimoTxWhileRxInterferenceControlMessageRs);
+        }
     }
 }

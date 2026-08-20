@@ -1,4 +1,3 @@
-
 #[derive(Default)]
 pub struct FlowControlManager {
     tokens_available: u16,
@@ -15,47 +14,48 @@ impl FlowControlManager {
             ..Default::default()
         }
     }
-    
+
     pub fn start(&mut self, total_tokens: u16) -> u16 {
         self.total_tokens_available = total_tokens;
         self.tokens_available = total_tokens;
         self.update_shadow_and_ack()
     }
-    
+
     pub fn stop(&mut self) {
         self.total_tokens_available = 0;
         self.tokens_available = 0;
         self.shadow_token_count = 0;
     }
-    
+
     pub fn add_token(&mut self, tokens: u16) -> (u16, bool, Option<u16>) {
-        let status = (self.tokens_available as u32 + tokens as u32) <= self.total_tokens_available as u32;
+        let status =
+            (self.tokens_available as u32 + tokens as u32) <= self.total_tokens_available as u32;
         if status {
             self.tokens_available += tokens;
         }
-        
+
         let mut send_update = None;
         if self.shadow_token_count == 0 && self.tokens_available > 0 {
             send_update = Some(self.update_shadow_and_ack());
         }
-        
+
         (self.tokens_available, status, send_update)
     }
-    
+
     pub fn remove_token(&mut self) -> (u16, bool) {
         if self.ack_pending {
             return (self.tokens_available, false);
         }
-        
+
         if self.tokens_available == 0 {
             return (self.tokens_available, false);
         }
-        
+
         self.tokens_available -= 1;
         self.shadow_token_count -= 1;
         (self.tokens_available, true)
     }
-    
+
     pub fn process_flow_control_message(&mut self, tokens: u16) -> Option<u16> {
         if !self.ack_pending {
             Some(self.update_shadow_and_ack())
@@ -68,7 +68,7 @@ impl FlowControlManager {
             }
         }
     }
-    
+
     fn update_shadow_and_ack(&mut self) -> u16 {
         let tokens = self.tokens_available;
         self.shadow_token_count = tokens;
@@ -86,12 +86,17 @@ pub extern "C" fn emane_rs_flow_control_manager_create() -> *mut FlowControlMana
 #[no_mangle]
 pub extern "C" fn emane_rs_flow_control_manager_destroy(ptr: *mut FlowControlManager) {
     if !ptr.is_null() {
-        unsafe { let _ = Box::from_raw(ptr); }
+        unsafe {
+            let _ = Box::from_raw(ptr);
+        }
     }
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_flow_control_manager_start(ptr: *mut FlowControlManager, total_tokens: u16) -> u16 {
+pub extern "C" fn emane_rs_flow_control_manager_start(
+    ptr: *mut FlowControlManager,
+    total_tokens: u16,
+) -> u16 {
     if let Some(m) = unsafe { ptr.as_mut() } {
         m.start(total_tokens)
     } else {
@@ -115,7 +120,10 @@ pub struct FfiAddTokenResult {
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_flow_control_manager_add_token(ptr: *mut FlowControlManager, tokens: u16) -> FfiAddTokenResult {
+pub extern "C" fn emane_rs_flow_control_manager_add_token(
+    ptr: *mut FlowControlManager,
+    tokens: u16,
+) -> FfiAddTokenResult {
     if let Some(m) = unsafe { ptr.as_mut() } {
         let (tokens_available, status, send_update) = m.add_token(tokens);
         FfiAddTokenResult {
@@ -125,7 +133,12 @@ pub extern "C" fn emane_rs_flow_control_manager_add_token(ptr: *mut FlowControlM
             send_update: send_update.unwrap_or(0),
         }
     } else {
-        FfiAddTokenResult { tokens_available: 0, status: false, has_send_update: false, send_update: 0 }
+        FfiAddTokenResult {
+            tokens_available: 0,
+            status: false,
+            has_send_update: false,
+            send_update: 0,
+        }
     }
 }
 
@@ -136,12 +149,20 @@ pub struct FfiRemoveTokenResult {
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_flow_control_manager_remove_token(ptr: *mut FlowControlManager) -> FfiRemoveTokenResult {
+pub extern "C" fn emane_rs_flow_control_manager_remove_token(
+    ptr: *mut FlowControlManager,
+) -> FfiRemoveTokenResult {
     if let Some(m) = unsafe { ptr.as_mut() } {
         let (tokens_available, status) = m.remove_token();
-        FfiRemoveTokenResult { tokens_available, status }
+        FfiRemoveTokenResult {
+            tokens_available,
+            status,
+        }
     } else {
-        FfiRemoveTokenResult { tokens_available: 0, status: false }
+        FfiRemoveTokenResult {
+            tokens_available: 0,
+            status: false,
+        }
     }
 }
 
@@ -152,7 +173,10 @@ pub struct FfiProcessMessageResult {
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_flow_control_manager_process_message(ptr: *mut FlowControlManager, tokens: u16) -> FfiProcessMessageResult {
+pub extern "C" fn emane_rs_flow_control_manager_process_message(
+    ptr: *mut FlowControlManager,
+    tokens: u16,
+) -> FfiProcessMessageResult {
     if let Some(m) = unsafe { ptr.as_mut() } {
         let res = m.process_flow_control_message(tokens);
         FfiProcessMessageResult {
@@ -160,6 +184,9 @@ pub extern "C" fn emane_rs_flow_control_manager_process_message(ptr: *mut FlowCo
             send_update: res.unwrap_or(0),
         }
     } else {
-        FfiProcessMessageResult { has_send_update: false, send_update: 0 }
+        FfiProcessMessageResult {
+            has_send_update: false,
+            send_update: 0,
+        }
     }
 }

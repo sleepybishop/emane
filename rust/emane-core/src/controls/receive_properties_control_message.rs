@@ -24,7 +24,9 @@ pub extern "C" fn emane_rs_receive_properties_control_message_create(
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_receive_properties_control_message_clone(ptr: *const c_void) -> *mut c_void {
+pub extern "C" fn emane_rs_receive_properties_control_message_clone(
+    ptr: *const c_void,
+) -> *mut c_void {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -39,7 +41,9 @@ pub extern "C" fn emane_rs_receive_properties_control_message_clone(ptr: *const 
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_receive_properties_control_message_get_tx_time(ptr: *const c_void) -> u64 {
+pub extern "C" fn emane_rs_receive_properties_control_message_get_tx_time(
+    ptr: *const c_void,
+) -> u64 {
     if ptr.is_null() {
         return 0;
     }
@@ -48,7 +52,9 @@ pub extern "C" fn emane_rs_receive_properties_control_message_get_tx_time(ptr: *
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_receive_properties_control_message_get_propagation_delay(ptr: *const c_void) -> u64 {
+pub extern "C" fn emane_rs_receive_properties_control_message_get_propagation_delay(
+    ptr: *const c_void,
+) -> u64 {
     if ptr.is_null() {
         return 0;
     }
@@ -66,7 +72,9 @@ pub extern "C" fn emane_rs_receive_properties_control_message_get_span(ptr: *con
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_receive_properties_control_message_get_receiver_sensitivity_dbm(ptr: *const c_void) -> f64 {
+pub extern "C" fn emane_rs_receive_properties_control_message_get_receiver_sensitivity_dbm(
+    ptr: *const c_void,
+) -> f64 {
     if ptr.is_null() {
         return 0.0;
     }
@@ -77,6 +85,10 @@ pub extern "C" fn emane_rs_receive_properties_control_message_get_receiver_sensi
 #[no_mangle]
 pub extern "C" fn emane_rs_receive_properties_control_message_free(ptr: *mut c_void) {
     if !ptr.is_null() {
-        unsafe { drop(Box::from_raw(ptr as *mut ReceivePropertiesControlMessageImpl)); }
+        unsafe {
+            drop(Box::from_raw(
+                ptr as *mut ReceivePropertiesControlMessageImpl,
+            ));
+        }
     }
 }

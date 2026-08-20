@@ -39,7 +39,9 @@ pub unsafe extern "C" fn emane_rs_controls_transmitter_clone(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn emane_rs_controls_transmitter_destroy(msg: *mut TransmitterControlMessage) {
+pub unsafe extern "C" fn emane_rs_controls_transmitter_destroy(
+    msg: *mut TransmitterControlMessage,
+) {
     if !msg.is_null() {
         unsafe { drop(Box::from_raw(msg)) }
     }

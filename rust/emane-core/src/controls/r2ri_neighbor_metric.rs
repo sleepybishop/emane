@@ -54,11 +54,11 @@ pub unsafe extern "C" fn emane_r2ri_neighbor_metric_control_message_clone(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn emane_r2ri_neighbor_metric_control_message_destroy(
-    msg_ptr: *mut c_void,
-) {
+pub unsafe extern "C" fn emane_r2ri_neighbor_metric_control_message_destroy(msg_ptr: *mut c_void) {
     if !msg_ptr.is_null() {
-        drop(Box::from_raw(msg_ptr as *mut R2riNeighborMetricControlMessage));
+        drop(Box::from_raw(
+            msg_ptr as *mut R2riNeighborMetricControlMessage,
+        ));
     }
 }
 

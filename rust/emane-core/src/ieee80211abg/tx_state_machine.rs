@@ -1,10 +1,16 @@
-use std::ffi::{c_void};
+use std::ffi::c_void;
 use std::os::raw::c_char;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 extern "C" {
-    fn emane_ieee80211abg_maclayer_sendDownstreamBroadcastData(maclayer: *mut c_void, entry: *mut c_void);
-    fn emane_ieee80211abg_maclayer_sendDownstreamUnicastData(maclayer: *mut c_void, entry: *mut c_void);
+    fn emane_ieee80211abg_maclayer_sendDownstreamBroadcastData(
+        maclayer: *mut c_void,
+        entry: *mut c_void,
+    );
+    fn emane_ieee80211abg_maclayer_sendDownstreamUnicastData(
+        maclayer: *mut c_void,
+        entry: *mut c_void,
+    );
     fn emane_ieee80211abg_maclayer_setDelayTime(maclayer: *mut c_void, entry: *mut c_void);
 
     fn emane_ieee80211abg_maclayer_getStatistics(maclayer: *mut c_void) -> *mut c_void;
@@ -18,11 +24,18 @@ extern "C" {
     fn emane_ieee80211abg_entry_set_numRetries(entry: *mut c_void, numRetries: u8);
     fn emane_ieee80211abg_entry_get_maxRetries(entry: *mut c_void) -> u8;
     fn emane_ieee80211abg_entry_get_length(entry: *mut c_void) -> usize;
-    fn emane_ieee80211abg_entry_set_duration_and_tx_time_now(entry: *mut c_void, durationMicroseconds: u64);
+    fn emane_ieee80211abg_entry_set_duration_and_tx_time_now(
+        entry: *mut c_void,
+        durationMicroseconds: u64,
+    );
     fn emane_ieee80211abg_entry_get_preTxDelayTime_micro(entry: *mut c_void) -> u64;
     fn emane_ieee80211abg_entry_get_postTxWaitTime_micro(entry: *mut c_void) -> u64;
-    
-    fn emane_ieee80211abg_modetimingparameters_getMessageDurationMicroseconds(ptr: *mut c_void, category: u8, len: usize) -> u64;
+
+    fn emane_ieee80211abg_modetimingparameters_getMessageDurationMicroseconds(
+        ptr: *mut c_void,
+        category: u8,
+        len: usize,
+    ) -> u64;
 }
 
 const NEM_BROADCAST_MAC_ADDRESS: u16 = 0xFFFF;
@@ -51,19 +64,26 @@ pub struct TxStateMachine {
 
 impl TxStateMachine {
     pub fn new() -> Self {
-        Self { state: TxState::Idle }
+        Self {
+            state: TxState::Idle,
+        }
     }
 
     pub fn process(&mut self, maclayer: *mut c_void, entry: *mut c_void) -> bool {
         match self.state {
             TxState::Idle => {
-                let begin_time_micro = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64;
+                let begin_time_micro = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_micros() as u64;
                 let dest = unsafe { emane_ieee80211abg_entry_get_destination(entry) };
-                
+
                 if dest == NEM_BROADCAST_MAC_ADDRESS {
-                    if unsafe { emane_ieee80211abg_entry_is_txop_timeout(entry, begin_time_micro) } {
+                    if unsafe { emane_ieee80211abg_entry_is_txop_timeout(entry, begin_time_micro) }
+                    {
                         let stats = unsafe { emane_ieee80211abg_maclayer_getStatistics(maclayer) };
-                        crate::ieee80211abg::mac_statistics::MACStatistics::new(stats).incrementDownstreamBroadcastDataDiscardDueToTxop();
+                        crate::ieee80211abg::mac_statistics::MACStatistics::new(stats)
+                            .incrementDownstreamBroadcastDataDiscardDueToTxop();
                         return false;
                     } else {
                         unsafe { emane_ieee80211abg_maclayer_setDelayTime(maclayer, entry) };
@@ -71,9 +91,11 @@ impl TxStateMachine {
                         return true;
                     }
                 } else {
-                    if unsafe { emane_ieee80211abg_entry_is_txop_timeout(entry, begin_time_micro) } {
+                    if unsafe { emane_ieee80211abg_entry_is_txop_timeout(entry, begin_time_micro) }
+                    {
                         let stats = unsafe { emane_ieee80211abg_maclayer_getStatistics(maclayer) };
-                        crate::ieee80211abg::mac_statistics::MACStatistics::new(stats).incrementDownstreamUnicastDataDiscardDueToTxop();
+                        crate::ieee80211abg::mac_statistics::MACStatistics::new(stats)
+                            .incrementDownstreamUnicastDataDiscardDueToTxop();
                         return false;
                     } else {
                         unsafe { emane_ieee80211abg_maclayer_setDelayTime(maclayer, entry) };
@@ -85,37 +107,49 @@ impl TxStateMachine {
                         return true;
                     }
                 }
-            },
+            }
             TxState::BroadcastPreTx => {
                 self.state = TxState::BroadcastTx;
                 true
-            },
+            }
             TxState::BroadcastTx => {
                 let timing = unsafe { emane_ieee80211abg_maclayer_getModeTiming(maclayer) };
                 let length = unsafe { emane_ieee80211abg_entry_get_length(entry) };
-                let duration = unsafe { emane_ieee80211abg_modetimingparameters_getMessageDurationMicroseconds(timing, MSG_TYPE_BROADCAST_DATA, length) };
+                let duration = unsafe {
+                    emane_ieee80211abg_modetimingparameters_getMessageDurationMicroseconds(
+                        timing,
+                        MSG_TYPE_BROADCAST_DATA,
+                        length,
+                    )
+                };
                 unsafe { emane_ieee80211abg_entry_set_duration_and_tx_time_now(entry, duration) };
                 unsafe { emane_ieee80211abg_maclayer_sendDownstreamBroadcastData(maclayer, entry) };
                 self.state = TxState::BroadcastPostTx;
                 true
-            },
+            }
             TxState::BroadcastPostTx => {
                 self.state = TxState::Idle;
                 false
-            },
+            }
             TxState::UnicastPreTx => {
                 self.state = TxState::UnicastTx;
                 true
-            },
+            }
             TxState::UnicastTx => {
                 let timing = unsafe { emane_ieee80211abg_maclayer_getModeTiming(maclayer) };
                 let length = unsafe { emane_ieee80211abg_entry_get_length(entry) };
-                let duration = unsafe { emane_ieee80211abg_modetimingparameters_getMessageDurationMicroseconds(timing, MSG_TYPE_UNICAST_DATA, length) };
+                let duration = unsafe {
+                    emane_ieee80211abg_modetimingparameters_getMessageDurationMicroseconds(
+                        timing,
+                        MSG_TYPE_UNICAST_DATA,
+                        length,
+                    )
+                };
                 unsafe { emane_ieee80211abg_entry_set_duration_and_tx_time_now(entry, duration) };
                 unsafe { emane_ieee80211abg_maclayer_sendDownstreamUnicastData(maclayer, entry) };
                 self.state = TxState::UnicastPostTx;
                 true
-            },
+            }
             TxState::UnicastPostTx => {
                 if unsafe { emane_ieee80211abg_entry_get_bCollisionOccured(entry) } {
                     let num_retries = unsafe { emane_ieee80211abg_entry_get_numRetries(entry) };
@@ -123,7 +157,8 @@ impl TxStateMachine {
                     if num_retries >= max_retries {
                         self.state = TxState::Idle;
                         let stats = unsafe { emane_ieee80211abg_maclayer_getStatistics(maclayer) };
-                        crate::ieee80211abg::mac_statistics::MACStatistics::new(stats).incrementDownstreamUnicastDataDiscardDueToRetries();
+                        crate::ieee80211abg::mac_statistics::MACStatistics::new(stats)
+                            .incrementDownstreamUnicastDataDiscardDueToRetries();
                         false
                     } else {
                         unsafe { emane_ieee80211abg_entry_set_numRetries(entry, num_retries + 1) };
@@ -135,20 +170,26 @@ impl TxStateMachine {
                     self.state = TxState::Idle;
                     false
                 }
-            },
+            }
             TxState::UnicastRtsCtsPreTx => {
                 self.state = TxState::UnicastRtsCtsTx;
                 true
-            },
+            }
             TxState::UnicastRtsCtsTx => {
                 let timing = unsafe { emane_ieee80211abg_maclayer_getModeTiming(maclayer) };
                 let length = unsafe { emane_ieee80211abg_entry_get_length(entry) };
-                let duration = unsafe { emane_ieee80211abg_modetimingparameters_getMessageDurationMicroseconds(timing, MSG_TYPE_UNICAST_RTS_CTS_DATA, length) };
+                let duration = unsafe {
+                    emane_ieee80211abg_modetimingparameters_getMessageDurationMicroseconds(
+                        timing,
+                        MSG_TYPE_UNICAST_RTS_CTS_DATA,
+                        length,
+                    )
+                };
                 unsafe { emane_ieee80211abg_entry_set_duration_and_tx_time_now(entry, duration) };
                 unsafe { emane_ieee80211abg_maclayer_sendDownstreamUnicastData(maclayer, entry) };
                 self.state = TxState::UnicastRtsCtsPostTx;
                 true
-            },
+            }
             TxState::UnicastRtsCtsPostTx => {
                 if unsafe { emane_ieee80211abg_entry_get_bCollisionOccured(entry) } {
                     let num_retries = unsafe { emane_ieee80211abg_entry_get_numRetries(entry) };
@@ -156,7 +197,8 @@ impl TxStateMachine {
                     if num_retries >= max_retries {
                         self.state = TxState::Idle;
                         let stats = unsafe { emane_ieee80211abg_maclayer_getStatistics(maclayer) };
-                        crate::ieee80211abg::mac_statistics::MACStatistics::new(stats).incrementDownstreamUnicastRtsCtsDataDiscardDueToRetries();
+                        crate::ieee80211abg::mac_statistics::MACStatistics::new(stats)
+                            .incrementDownstreamUnicastRtsCtsDataDiscardDueToRetries();
                         false
                     } else {
                         unsafe { emane_ieee80211abg_entry_set_numRetries(entry, num_retries + 1) };
@@ -168,7 +210,7 @@ impl TxStateMachine {
                     self.state = TxState::Idle;
                     false
                 }
-            },
+            }
         }
     }
 
@@ -176,14 +218,18 @@ impl TxStateMachine {
         match self.state {
             TxState::Idle => false,
             TxState::BroadcastPreTx | TxState::UnicastPreTx | TxState::UnicastRtsCtsPreTx => {
-                unsafe { *out_time = emane_ieee80211abg_entry_get_preTxDelayTime_micro(entry); }
+                unsafe {
+                    *out_time = emane_ieee80211abg_entry_get_preTxDelayTime_micro(entry);
+                }
                 true
-            },
+            }
             TxState::BroadcastTx | TxState::UnicastTx | TxState::UnicastRtsCtsTx => false,
             TxState::BroadcastPostTx | TxState::UnicastPostTx | TxState::UnicastRtsCtsPostTx => {
-                unsafe { *out_time = emane_ieee80211abg_entry_get_postTxWaitTime_micro(entry); }
+                unsafe {
+                    *out_time = emane_ieee80211abg_entry_get_postTxWaitTime_micro(entry);
+                }
                 true
-            },
+            }
         }
     }
 
@@ -211,18 +257,28 @@ pub extern "C" fn emane_ieee80211abg_tx_state_machine_new() -> *mut c_void {
 #[no_mangle]
 pub extern "C" fn emane_ieee80211abg_tx_state_machine_free(ptr: *mut c_void) {
     if !ptr.is_null() {
-        unsafe { drop(Box::from_raw(ptr as *mut TxStateMachine)); }
+        unsafe {
+            drop(Box::from_raw(ptr as *mut TxStateMachine));
+        }
     }
 }
 
 #[no_mangle]
-pub extern "C" fn emane_ieee80211abg_tx_state_machine_process(ptr: *mut c_void, maclayer: *mut c_void, entry: *mut c_void) -> bool {
+pub extern "C" fn emane_ieee80211abg_tx_state_machine_process(
+    ptr: *mut c_void,
+    maclayer: *mut c_void,
+    entry: *mut c_void,
+) -> bool {
     let sm = unsafe { &mut *(ptr as *mut TxStateMachine) };
     sm.process(maclayer, entry)
 }
 
 #[no_mangle]
-pub extern "C" fn emane_ieee80211abg_tx_state_machine_getWaitTime(ptr: *mut c_void, entry: *mut c_void, out_time: *mut u64) -> bool {
+pub extern "C" fn emane_ieee80211abg_tx_state_machine_getWaitTime(
+    ptr: *mut c_void,
+    entry: *mut c_void,
+    out_time: *mut u64,
+) -> bool {
     let sm = unsafe { &*(ptr as *mut TxStateMachine) };
     sm.get_wait_time(entry, out_time)
 }
@@ -234,6 +290,10 @@ pub extern "C" fn emane_ieee80211abg_tx_state_machine_statename(ptr: *mut c_void
 }
 
 #[no_mangle]
-pub extern "C" fn emane_ieee80211abg_tx_state_machine_update(ptr: *mut c_void, maclayer: *mut c_void, entry: *mut c_void) {
+pub extern "C" fn emane_ieee80211abg_tx_state_machine_update(
+    _ptr: *mut c_void,
+    _maclayer: *mut c_void,
+    _entry: *mut c_void,
+) {
     // update is a no-op in C++ class
 }

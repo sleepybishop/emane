@@ -1,25 +1,22 @@
-use std::net::{TcpListener, TcpStream};
-use std::io::{Read, Write};
-use std::thread;
 use prost::Message;
-use std::ffi::{CString, CStr};
-use std::os::raw::c_char;
+use std::ffi::{CStr, CString};
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::thread;
 
-use crate::protobufs::emane_remote_control_port_api::{Request, Response, Any, request, response};
 use crate::protobufs::emane_remote_control_port_api::any::AnyType;
+use crate::protobufs::emane_remote_control_port_api::{request, response, Any, Request, Response};
 
-use crate::statistics::{
-    emane_rs_statistic_query, emane_rs_statistic_free_query_result,
-    emane_rs_statistic_query_table, emane_rs_statistic_free_table_query_result,
-    emane_rs_statistic_clear, emane_rs_statistic_clear_table,
-    FfiStringArray as StatFfiStringArray
-};
 use crate::config::{
-    emane_rs_config_query, emane_rs_config_free_update,
-    emane_rs_config_update, FfiConfigUpdate, FfiConfigItemUpdate,
-    FfiStringArray as ConfigFfiStringArray
+    emane_rs_config_free_update, emane_rs_config_query, emane_rs_config_update,
+    FfiConfigItemUpdate, FfiConfigUpdate, FfiStringArray as ConfigFfiStringArray,
 };
 use crate::config::{FfiAny, FfiAnyArray};
+use crate::statistics::{
+    emane_rs_statistic_clear, emane_rs_statistic_clear_table, emane_rs_statistic_free_query_result,
+    emane_rs_statistic_free_table_query_result, emane_rs_statistic_query,
+    emane_rs_statistic_query_table, FfiStringArray as StatFfiStringArray,
+};
 
 fn parse_ffi_any(val: &FfiAny) -> Any {
     let mut any = Any::default();
@@ -50,7 +47,11 @@ fn parse_ffi_any(val: &FfiAny) -> Any {
         12 => any.b_value = Some(val.i64_value != 0),
         11 | 13 => {
             if !val.s_value.is_null() {
-                any.s_value = Some(unsafe { CStr::from_ptr(val.s_value) }.to_string_lossy().into_owned());
+                any.s_value = Some(
+                    unsafe { CStr::from_ptr(val.s_value) }
+                        .to_string_lossy()
+                        .into_owned(),
+                );
             }
         }
         _ => {}
@@ -67,15 +68,43 @@ fn any_to_ffi_any(any: &Any) -> (FfiAny, Option<CString>) {
         s_value: std::ptr::null(),
     };
     let mut cstr = None;
-    
+
     match any.r#type {
-        1 | 3 | 5 => if let Some(v) = any.i32_value { ffi.i64_value = v as i64; },
-        2 | 4 | 6 => if let Some(v) = any.u32_value { ffi.u64_value = v as u64; },
-        7 => if let Some(v) = any.i64_value { ffi.i64_value = v; },
-        8 => if let Some(v) = any.u64_value { ffi.u64_value = v; },
-        9 => if let Some(v) = any.f_value { ffi.d_value = v as f64; },
-        10 => if let Some(v) = any.d_value { ffi.d_value = v; },
-        12 => if let Some(v) = any.b_value { ffi.i64_value = if v { 1 } else { 0 }; },
+        1 | 3 | 5 => {
+            if let Some(v) = any.i32_value {
+                ffi.i64_value = v as i64;
+            }
+        }
+        2 | 4 | 6 => {
+            if let Some(v) = any.u32_value {
+                ffi.u64_value = v as u64;
+            }
+        }
+        7 => {
+            if let Some(v) = any.i64_value {
+                ffi.i64_value = v;
+            }
+        }
+        8 => {
+            if let Some(v) = any.u64_value {
+                ffi.u64_value = v;
+            }
+        }
+        9 => {
+            if let Some(v) = any.f_value {
+                ffi.d_value = v as f64;
+            }
+        }
+        10 => {
+            if let Some(v) = any.d_value {
+                ffi.d_value = v;
+            }
+        }
+        12 => {
+            if let Some(v) = any.b_value {
+                ffi.i64_value = if v { 1 } else { 0 };
+            }
+        }
         11 | 13 => {
             if let Some(ref s) = any.s_value {
                 let c = CString::new(s.clone()).unwrap();
@@ -93,10 +122,12 @@ fn handle_query_manifest(_build_id: u16) -> response::query::Manifest {
     manifest
 }
 
-fn handle_query_configuration(query: &request::query::Configuration) -> response::query::Configuration {
+fn handle_query_configuration(
+    query: &request::query::Configuration,
+) -> response::query::Configuration {
     let mut resp = response::query::Configuration::default();
     resp.build_id = query.build_id;
-    
+
     let mut c_names = Vec::new();
     let mut c_ptrs = Vec::new();
     for name in &query.names {
@@ -104,29 +135,36 @@ fn handle_query_configuration(query: &request::query::Configuration) -> response
         c_ptrs.push(c_str.as_ptr());
         c_names.push(c_str);
     }
-    
+
     let arr = ConfigFfiStringArray {
-        data: if c_ptrs.is_empty() { std::ptr::null() } else { c_ptrs.as_ptr() },
-        len: c_ptrs.len()
+        data: if c_ptrs.is_empty() {
+            std::ptr::null()
+        } else {
+            c_ptrs.as_ptr()
+        },
+        len: c_ptrs.len(),
     };
-    
+
     let res = emane_rs_config_query(query.build_id as u16, arr);
-    
+
     if !res.data.is_null() {
         let slice = unsafe { std::slice::from_raw_parts(res.data, res.len) };
         for item in slice {
-            let name = unsafe { CStr::from_ptr(item.name) }.to_string_lossy().into_owned();
+            let name = unsafe { CStr::from_ptr(item.name) }
+                .to_string_lossy()
+                .into_owned();
             let mut param = response::query::configuration::Parameter::default();
             param.name = name;
-            
-            let val_slice = unsafe { std::slice::from_raw_parts(item.values.data, item.values.len) };
+
+            let val_slice =
+                unsafe { std::slice::from_raw_parts(item.values.data, item.values.len) };
             for v in val_slice {
                 param.values.push(parse_ffi_any(v));
             }
             resp.parameters.push(param);
         }
     }
-    
+
     emane_rs_config_free_update(res);
     resp
 }
@@ -134,7 +172,7 @@ fn handle_query_configuration(query: &request::query::Configuration) -> response
 fn handle_query_statistic(query: &request::query::Statistic) -> response::query::Statistic {
     let mut resp = response::query::Statistic::default();
     resp.build_id = query.build_id;
-    
+
     let mut c_names = Vec::new();
     let mut c_ptrs = Vec::new();
     for name in &query.names {
@@ -142,34 +180,47 @@ fn handle_query_statistic(query: &request::query::Statistic) -> response::query:
         c_ptrs.push(c_str.as_ptr());
         c_names.push(c_str);
     }
-    
+
     let arr = StatFfiStringArray {
-        data: if c_ptrs.is_empty() { std::ptr::null() } else { c_ptrs.as_ptr() },
-        len: c_ptrs.len()
+        data: if c_ptrs.is_empty() {
+            std::ptr::null()
+        } else {
+            c_ptrs.as_ptr()
+        },
+        len: c_ptrs.len(),
     };
-    
+
     let mut err_buf = vec![0i8; 1024];
-    let res = emane_rs_statistic_query(query.build_id as u16, arr, err_buf.as_mut_ptr(), err_buf.len());
-    
+    let res = emane_rs_statistic_query(
+        query.build_id as u16,
+        arr,
+        err_buf.as_mut_ptr(),
+        err_buf.len(),
+    );
+
     if !res.data.is_null() {
         let slice = unsafe { std::slice::from_raw_parts(res.data, res.len) };
         for item in slice {
-            let name = unsafe { CStr::from_ptr(item.name) }.to_string_lossy().into_owned();
+            let name = unsafe { CStr::from_ptr(item.name) }
+                .to_string_lossy()
+                .into_owned();
             let mut element = response::query::statistic::Element::default();
             element.name = name;
             element.value = parse_ffi_any(&item.value);
             resp.elements.push(element);
         }
     }
-    
+
     emane_rs_statistic_free_query_result(res);
     resp
 }
 
-fn handle_query_statistic_table(query: &request::query::StatisticTable) -> response::query::StatisticTable {
+fn handle_query_statistic_table(
+    query: &request::query::StatisticTable,
+) -> response::query::StatisticTable {
     let mut resp = response::query::StatisticTable::default();
     resp.build_id = query.build_id;
-    
+
     let mut c_names = Vec::new();
     let mut c_ptrs = Vec::new();
     for name in &query.names {
@@ -177,27 +228,42 @@ fn handle_query_statistic_table(query: &request::query::StatisticTable) -> respo
         c_ptrs.push(c_str.as_ptr());
         c_names.push(c_str);
     }
-    
+
     let arr = StatFfiStringArray {
-        data: if c_ptrs.is_empty() { std::ptr::null() } else { c_ptrs.as_ptr() },
-        len: c_ptrs.len()
+        data: if c_ptrs.is_empty() {
+            std::ptr::null()
+        } else {
+            c_ptrs.as_ptr()
+        },
+        len: c_ptrs.len(),
     };
-    
+
     let mut err_buf = vec![0i8; 1024];
-    let res = emane_rs_statistic_query_table(query.build_id as u16, arr, err_buf.as_mut_ptr(), err_buf.len());
-    
+    let res = emane_rs_statistic_query_table(
+        query.build_id as u16,
+        arr,
+        err_buf.as_mut_ptr(),
+        err_buf.len(),
+    );
+
     if !res.data.is_null() {
         let slice = unsafe { std::slice::from_raw_parts(res.data, res.len) };
         for item in slice {
-            let name = unsafe { CStr::from_ptr(item.name) }.to_string_lossy().into_owned();
+            let name = unsafe { CStr::from_ptr(item.name) }
+                .to_string_lossy()
+                .into_owned();
             let mut table = response::query::statistic_table::Table::default();
             table.name = name;
-            
+
             let labels = unsafe { std::slice::from_raw_parts(item.labels.data, item.labels.len) };
             for &lbl in labels {
-                table.labels.push(unsafe { CStr::from_ptr(lbl) }.to_string_lossy().into_owned());
+                table.labels.push(
+                    unsafe { CStr::from_ptr(lbl) }
+                        .to_string_lossy()
+                        .into_owned(),
+                );
             }
-            
+
             let rows = unsafe { std::slice::from_raw_parts(item.rows, item.rows_len) };
             for row in rows {
                 let mut r = response::query::statistic_table::table::Row::default();
@@ -210,7 +276,7 @@ fn handle_query_statistic_table(query: &request::query::StatisticTable) -> respo
             resp.tables.push(table);
         }
     }
-    
+
     emane_rs_statistic_free_table_query_result(res);
     resp
 }
@@ -219,50 +285,57 @@ fn process_request(req: Request) -> Response {
     let mut resp = Response::default();
     resp.sequence = req.sequence;
     resp.reference = req.sequence; // or whatever reference semantics are
-    
+
     match req.r#type {
-        1 => { // TYPE_REQUEST_QUERY
+        1 => {
+            // TYPE_REQUEST_QUERY
             resp.r#type = response::ResponseMessageType::TypeResponseQuery as i32;
             let mut query_resp = response::Query::default();
             if let Some(query) = req.query {
                 query_resp.r#type = query.r#type;
                 match query.r#type {
-                    1 => { // Configuration
+                    1 => {
+                        // Configuration
                         if let Some(c) = query.configuration {
                             query_resp.configuration = Some(handle_query_configuration(&c));
                         }
-                    },
-                    2 => { // Manifest
+                    }
+                    2 => {
+                        // Manifest
                         query_resp.manifest = Some(handle_query_manifest(0));
-                    },
-                    3 => { // Statistic
+                    }
+                    3 => {
+                        // Statistic
                         if let Some(s) = query.statistic {
                             query_resp.statistic = Some(handle_query_statistic(&s));
                         }
-                    },
-                    4 => { // StatisticTable
+                    }
+                    4 => {
+                        // StatisticTable
                         if let Some(s) = query.statistic_table {
                             query_resp.statistic_table = Some(handle_query_statistic_table(&s));
                         }
-                    },
+                    }
                     _ => {}
                 }
             }
             resp.query = Some(query_resp);
-        },
-        2 => { // TYPE_REQUEST_UPDATE
+        }
+        2 => {
+            // TYPE_REQUEST_UPDATE
             resp.r#type = response::ResponseMessageType::TypeResponseUpdate as i32;
             let mut upd_resp = response::Update::default();
             if let Some(update) = req.update {
                 upd_resp.r#type = update.r#type;
                 match update.r#type {
-                    1 => { // Configuration
+                    1 => {
+                        // Configuration
                         if let Some(c) = update.configuration {
                             let mut req_items = Vec::new();
                             let mut c_names = Vec::new();
                             let mut string_arrays = Vec::new();
                             let mut ffi_anys_arrays = Vec::new();
-                            
+
                             for param in &c.parameters {
                                 let c_name = CString::new(param.name.clone()).unwrap();
                                 let mut ffi_anys = Vec::new();
@@ -276,29 +349,43 @@ fn process_request(req: Request) -> Response {
                                 ffi_anys_arrays.push(ffi_anys);
                                 c_names.push(c_name);
                             }
-                            
+
                             for i in 0..c.parameters.len() {
                                 req_items.push(FfiConfigItemUpdate {
                                     name: c_names[i].as_ptr(),
                                     values: FfiAnyArray {
-                                        data: if ffi_anys_arrays[i].is_empty() { std::ptr::null() } else { ffi_anys_arrays[i].as_ptr() },
-                                        len: ffi_anys_arrays[i].len()
-                                    }
+                                        data: if ffi_anys_arrays[i].is_empty() {
+                                            std::ptr::null()
+                                        } else {
+                                            ffi_anys_arrays[i].as_ptr()
+                                        },
+                                        len: ffi_anys_arrays[i].len(),
+                                    },
                                 });
                             }
-                            
+
                             let ffi_req = FfiConfigUpdate {
-                                data: if req_items.is_empty() { std::ptr::null() } else { req_items.as_ptr() },
-                                len: req_items.len()
+                                data: if req_items.is_empty() {
+                                    std::ptr::null()
+                                } else {
+                                    req_items.as_ptr()
+                                },
+                                len: req_items.len(),
                             };
-                            
+
                             let mut err_buf = vec![0i8; 1024];
                             unsafe {
-                                emane_rs_config_update(c.build_id as u16, ffi_req, err_buf.as_mut_ptr(), err_buf.len());
+                                emane_rs_config_update(
+                                    c.build_id as u16,
+                                    ffi_req,
+                                    err_buf.as_mut_ptr(),
+                                    err_buf.len(),
+                                );
                             }
                         }
-                    },
-                    2 => { // StatisticClear
+                    }
+                    2 => {
+                        // StatisticClear
                         if let Some(s) = update.statistic_clear {
                             let mut c_names = Vec::new();
                             let mut c_ptrs = Vec::new();
@@ -308,14 +395,24 @@ fn process_request(req: Request) -> Response {
                                 c_names.push(c_str);
                             }
                             let arr = StatFfiStringArray {
-                                data: if c_ptrs.is_empty() { std::ptr::null() } else { c_ptrs.as_ptr() },
-                                len: c_ptrs.len()
+                                data: if c_ptrs.is_empty() {
+                                    std::ptr::null()
+                                } else {
+                                    c_ptrs.as_ptr()
+                                },
+                                len: c_ptrs.len(),
                             };
                             let mut err_buf = vec![0i8; 1024];
-                            emane_rs_statistic_clear(s.build_id as u16, arr, err_buf.as_mut_ptr(), err_buf.len());
+                            emane_rs_statistic_clear(
+                                s.build_id as u16,
+                                arr,
+                                err_buf.as_mut_ptr(),
+                                err_buf.len(),
+                            );
                         }
-                    },
-                    3 => { // StatisticTableClear
+                    }
+                    3 => {
+                        // StatisticTableClear
                         if let Some(s) = update.statistic_table_clear {
                             let mut c_names = Vec::new();
                             let mut c_ptrs = Vec::new();
@@ -325,21 +422,30 @@ fn process_request(req: Request) -> Response {
                                 c_names.push(c_str);
                             }
                             let arr = StatFfiStringArray {
-                                data: if c_ptrs.is_empty() { std::ptr::null() } else { c_ptrs.as_ptr() },
-                                len: c_ptrs.len()
+                                data: if c_ptrs.is_empty() {
+                                    std::ptr::null()
+                                } else {
+                                    c_ptrs.as_ptr()
+                                },
+                                len: c_ptrs.len(),
                             };
                             let mut err_buf = vec![0i8; 1024];
-                            emane_rs_statistic_clear_table(s.build_id as u16, arr, err_buf.as_mut_ptr(), err_buf.len());
+                            emane_rs_statistic_clear_table(
+                                s.build_id as u16,
+                                arr,
+                                err_buf.as_mut_ptr(),
+                                err_buf.len(),
+                            );
                         }
-                    },
+                    }
                     _ => {}
                 }
             }
             resp.update = Some(upd_resp);
-        },
+        }
         _ => {}
     }
-    
+
     resp
 }
 
@@ -354,7 +460,7 @@ fn handle_client(mut stream: TcpStream) {
         if stream.read_exact(&mut buf).is_err() {
             break;
         }
-        
+
         if let Ok(req) = Request::decode(&buf[..]) {
             let resp = process_request(req);
             let mut out_buf = Vec::new();
@@ -381,9 +487,9 @@ pub fn start_control_port(endpoint: &str) {
             return;
         }
     };
-    
+
     println!("Control Port listening on {}", endpoint);
-    
+
     thread::spawn(move || {
         for stream in listener.incoming() {
             match stream {

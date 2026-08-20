@@ -37,13 +37,17 @@ pub extern "C" fn emane_rs_controls_spectrum_filter_remove_destroy(ptr: *mut c_v
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_controls_spectrum_filter_remove_get_filter_index(ptr: *const c_void) -> u16 {
+pub extern "C" fn emane_rs_controls_spectrum_filter_remove_get_filter_index(
+    ptr: *const c_void,
+) -> u16 {
     let msg = unsafe { &*(ptr as *const SpectrumFilterRemoveControlMessageRs) };
     msg.filter_index
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_controls_spectrum_filter_remove_get_antenna_index(ptr: *const c_void) -> u16 {
+pub extern "C" fn emane_rs_controls_spectrum_filter_remove_get_antenna_index(
+    ptr: *const c_void,
+) -> u16 {
     let msg = unsafe { &*(ptr as *const SpectrumFilterRemoveControlMessageRs) };
     msg.antenna_index
 }

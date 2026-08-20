@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, Condvar};
+use std::sync::{Arc, Condvar, Mutex};
 
 type SendControlCallback = extern "C" fn(*mut std::ffi::c_void, u16);
 
@@ -16,7 +16,13 @@ pub struct FlowControlClient {
 impl FlowControlClient {
     pub fn new(transport_ptr: *mut std::ffi::c_void, send_cb: SendControlCallback) -> Self {
         Self {
-            state: Arc::new((Mutex::new(FlowControlState { tokens_available: 0, cancel: false }), Condvar::new())),
+            state: Arc::new((
+                Mutex::new(FlowControlState {
+                    tokens_available: 0,
+                    cancel: false,
+                }),
+                Condvar::new(),
+            )),
             transport_ptr,
             send_cb,
         }
@@ -54,23 +60,28 @@ impl FlowControlClient {
     pub fn process_flow_control_message(&self, tokens: u16) {
         let (lock, cvar) = &*self.state;
         let mut state = lock.lock().unwrap();
-        
+
         state.tokens_available = tokens;
         (self.send_cb)(self.transport_ptr, state.tokens_available);
-        
+
         cvar.notify_all();
     }
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_flow_control_client_new(transport_ptr: *mut std::ffi::c_void, send_cb: SendControlCallback) -> *mut FlowControlClient {
+pub extern "C" fn emane_rs_flow_control_client_new(
+    transport_ptr: *mut std::ffi::c_void,
+    send_cb: SendControlCallback,
+) -> *mut FlowControlClient {
     Box::into_raw(Box::new(FlowControlClient::new(transport_ptr, send_cb)))
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_flow_control_client_free(ptr: *mut FlowControlClient) {
     if !ptr.is_null() {
-        unsafe { let _ = Box::from_raw(ptr); }
+        unsafe {
+            let _ = Box::from_raw(ptr);
+        }
     }
 }
 
@@ -89,23 +100,33 @@ pub extern "C" fn emane_rs_flow_control_client_stop(ptr: *mut FlowControlClient)
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_flow_control_client_remove_token(ptr: *mut FlowControlClient, status: *mut bool) -> u16 {
+pub extern "C" fn emane_rs_flow_control_client_remove_token(
+    ptr: *mut FlowControlClient,
+    status: *mut bool,
+) -> u16 {
     if let Some(client) = unsafe { ptr.as_ref() } {
         let (tokens, ok) = client.remove_token();
         if !status.is_null() {
-            unsafe { *status = ok; }
+            unsafe {
+                *status = ok;
+            }
         }
         tokens
     } else {
         if !status.is_null() {
-            unsafe { *status = false; }
+            unsafe {
+                *status = false;
+            }
         }
         0
     }
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_flow_control_client_process_message(ptr: *mut FlowControlClient, tokens: u16) {
+pub extern "C" fn emane_rs_flow_control_client_process_message(
+    ptr: *mut FlowControlClient,
+    tokens: u16,
+) {
     if let Some(client) = unsafe { ptr.as_ref() } {
         client.process_flow_control_message(tokens);
     }

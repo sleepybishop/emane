@@ -1,6 +1,6 @@
+use libc::{c_int, size_t};
 use std::collections::HashMap;
 use std::os::raw::c_void;
-use libc::{c_int, size_t};
 use std::sync::Mutex;
 
 pub const ETH_ALEN: usize = 6;
@@ -42,7 +42,9 @@ pub extern "C" fn emane_rs_ethernet_transport_new() -> *mut EthernetTransportSta
 #[no_mangle]
 pub extern "C" fn emane_rs_ethernet_transport_free(state: *mut EthernetTransportState) {
     if !state.is_null() {
-        unsafe { drop(Box::from_raw(state)); }
+        unsafe {
+            drop(Box::from_raw(state));
+        }
     }
 }
 
@@ -60,9 +62,27 @@ pub extern "C" fn emane_rs_ethernet_transport_verify_frame(
     let payload_len = len - ETH_HEADER_LEN;
 
     match eth_protocol {
-        ETH_P_IPV4 => if payload_len < IPV4_HEADER_LEN { -1 } else { 0 },
-        ETH_P_IPV6 => if payload_len < IPV6_HEADER_LEN { -1 } else { 0 },
-        ETH_P_ARP => if payload_len < ETHARP_HEADER_LEN { -1 } else { 0 },
+        ETH_P_IPV4 => {
+            if payload_len < IPV4_HEADER_LEN {
+                -1
+            } else {
+                0
+            }
+        }
+        ETH_P_IPV6 => {
+            if payload_len < IPV6_HEADER_LEN {
+                -1
+            } else {
+                0
+            }
+        }
+        ETH_P_ARP => {
+            if payload_len < ETHARP_HEADER_LEN {
+                -1
+            } else {
+                0
+            }
+        }
         _ => 1,
     }
 }
@@ -77,8 +97,10 @@ pub extern "C" fn emane_rs_ethernet_transport_add_entry(
         return;
     }
     let state = unsafe { &*state_ptr };
-    let mac: [u8; 6] = unsafe { std::slice::from_raw_parts(mac_bytes, 6) }.try_into().unwrap();
-    
+    let mac: [u8; 6] = unsafe { std::slice::from_raw_parts(mac_bytes, 6) }
+        .try_into()
+        .unwrap();
+
     if let Ok(mut cache) = state.mac_cache.lock() {
         cache.insert(mac, nem_id);
     }
@@ -94,18 +116,22 @@ pub extern "C" fn emane_rs_ethernet_transport_lookup_arp_cache(
         return false;
     }
     let state = unsafe { &*state_ptr };
-    let mac: [u8; 6] = unsafe { std::slice::from_raw_parts(mac_bytes, 6) }.try_into().unwrap();
-    
+    let mac: [u8; 6] = unsafe { std::slice::from_raw_parts(mac_bytes, 6) }
+        .try_into()
+        .unwrap();
+
     if let Ok(cache) = state.mac_cache.lock() {
         if let Some(nem_id) = cache.get(&mac) {
-            unsafe { *found_nem = *nem_id; }
+            unsafe {
+                *found_nem = *nem_id;
+            }
             return true;
         }
     }
     false
 }
 
-// In parseFrame and updateArpCache, we can keep the C++ implementations and just 
+// In parseFrame and updateArpCache, we can keep the C++ implementations and just
 // make them call emane_rs_ethernet_transport_lookup_arp_cache and emane_rs_ethernet_transport_add_entry!
 // But wait, the instruction says "Port the core business logic of EthernetTransport into Rust."
 // So I should port parseFrame and updateArpCache to Rust.
@@ -130,10 +156,10 @@ pub extern "C" fn emane_rs_ethernet_transport_parse_frame(
 
     let state = unsafe { &*state_ptr };
     let buf_slice = unsafe { std::slice::from_raw_parts(buf as *const u8, len) };
-    
+
     let dest_mac: [u8; 6] = buf_slice[0..6].try_into().unwrap();
     let eth_protocol = u16::from_be_bytes([buf_slice[12], buf_slice[13]]);
-    
+
     let resolve_nem = || -> u16 {
         if broadcast_mode {
             NEM_BROADCAST_MAC_ADDRESS
@@ -161,7 +187,7 @@ pub extern "C" fn emane_rs_ethernet_transport_parse_frame(
                 }
             }
             0
-        },
+        }
         ETH_P_IPV6 => {
             unsafe {
                 *nem_dest = resolve_nem();
@@ -175,14 +201,14 @@ pub extern "C" fn emane_rs_ethernet_transport_parse_frame(
                 }
             }
             0
-        },
+        }
         ETH_P_ARP => {
             unsafe {
                 *nem_dest = resolve_nem();
                 *dscp = eth_type_arp_priority;
             }
             0
-        },
+        }
         _ => {
             unsafe {
                 if broadcast_mode {
@@ -200,7 +226,7 @@ pub extern "C" fn emane_rs_ethernet_transport_parse_frame(
                 } else {
                     *nem_dest = u16::from_be_bytes([dest_mac[4], dest_mac[5]]);
                 }
-                
+
                 let mut prio = 0;
                 if query_unknown_cb(cpp_obj, eth_protocol, &mut prio) {
                     *dscp = prio;
@@ -243,15 +269,18 @@ pub extern "C" fn emane_rs_ethernet_transport_update_arp_cache(
                     buf_slice[ETH_HEADER_LEN + 7],
                 ]);
                 if arp_op == ETH_ARPOP_REPLY || arp_op == ETH_ARPOP_REQUEST {
-                    let sender_mac: [u8; 6] = buf_slice[ETH_HEADER_LEN + 8..ETH_HEADER_LEN + 14].try_into().unwrap();
+                    let sender_mac: [u8; 6] = buf_slice[ETH_HEADER_LEN + 8..ETH_HEADER_LEN + 14]
+                        .try_into()
+                        .unwrap();
                     if let Ok(mut cache) = state.mac_cache.lock() {
                         cache.insert(sender_mac, nem_id);
                     }
                 }
             }
-        },
+        }
         ETH_P_IPV6 => {
-            if len >= ETH_HEADER_LEN + IPV6_HEADER_LEN + 8 { // +8 for ICMPv6 min
+            if len >= ETH_HEADER_LEN + IPV6_HEADER_LEN + 8 {
+                // +8 for ICMPv6 min
                 let next_header = buf_slice[ETH_HEADER_LEN + 6];
                 if next_header == IPV6_P_ICMP {
                     let icmp_type = buf_slice[ETH_HEADER_LEN + IPV6_HEADER_LEN];
@@ -262,7 +291,7 @@ pub extern "C" fn emane_rs_ethernet_transport_update_arp_cache(
                     }
                 }
             }
-        },
+        }
         _ => {}
     }
 }

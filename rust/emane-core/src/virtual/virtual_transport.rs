@@ -2,7 +2,10 @@ use crate::r#virtual::tuntap::TunTap;
 use libc::{c_void, iovec, readv, writev};
 use std::ffi::CStr;
 use std::os::raw::c_char;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::thread;
 
 unsafe impl Send for VirtualTransport {}
@@ -17,7 +20,11 @@ pub struct VirtualTransport {
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_virtual_transport_new(id: u16, cpp_obj: *mut c_void, cb: extern "C" fn(*mut c_void, *const u8, usize)) -> *mut VirtualTransport {
+pub extern "C" fn emane_rs_virtual_transport_new(
+    id: u16,
+    cpp_obj: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const u8, usize),
+) -> *mut VirtualTransport {
     let vt = Box::new(VirtualTransport {
         id,
         tun_tap: None,
@@ -61,11 +68,11 @@ pub extern "C" fn emane_rs_virtual_transport_start(
             vt.canceled.store(false, Ordering::SeqCst);
             let tun_arc = Arc::new(tun);
             vt.tun_tap = Some(tun_arc.clone());
-            
+
             let canceled = vt.canceled.clone();
             let cpp_obj_usize = vt.cpp_obj as usize;
             let cb = vt.cb;
-            
+
             vt.thread = Some(thread::spawn(move || {
                 let mut buf = [0u8; 65535];
                 while !canceled.load(Ordering::SeqCst) {
@@ -77,18 +84,14 @@ pub extern "C" fn emane_rs_virtual_transport_start(
                     if len > 0 {
                         unsafe {
                             let cpp_obj = cpp_obj_usize as *mut c_void;
-                            cb(
-                                cpp_obj,
-                                buf.as_ptr(),
-                                len as usize,
-                            );
+                            cb(cpp_obj, buf.as_ptr(), len as usize);
                         }
                     } else if len < 0 {
                         break;
                     }
                 }
             }));
-            
+
             0
         }
         Err(_) => -1,
@@ -97,7 +100,9 @@ pub extern "C" fn emane_rs_virtual_transport_start(
 
 #[no_mangle]
 pub extern "C" fn emane_rs_virtual_transport_stop(ptr: *mut VirtualTransport) {
-    if ptr.is_null() { return; }
+    if ptr.is_null() {
+        return;
+    }
     let vt = unsafe { &mut *ptr };
     vt.stop();
 }
@@ -120,7 +125,9 @@ pub extern "C" fn emane_rs_virtual_transport_process_upstream_packet(
     buf: *const u8,
     len: usize,
 ) -> i32 {
-    if ptr.is_null() { return -1; }
+    if ptr.is_null() {
+        return -1;
+    }
     let vt = unsafe { &*ptr };
     if let Some(tun) = &vt.tun_tap {
         let mut iov = iovec {

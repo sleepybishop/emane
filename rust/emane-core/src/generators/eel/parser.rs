@@ -1,6 +1,5 @@
 use std::ffi::{CStr, CString};
-use std::os::raw::{c_char, c_void};
-use std::ptr;
+use std::os::raw::c_char;
 use std::slice;
 
 pub struct EelInputParser {}
@@ -10,9 +9,11 @@ impl EelInputParser {
         let mut args = Vec::new();
         let mut pos = 0;
         let bytes = input.as_bytes();
-        
+
         // Skip leading whitespace
-        while pos < bytes.len() && (bytes[pos] == b' ' || bytes[pos] == b'\t' || bytes[pos] == b'\n') {
+        while pos < bytes.len()
+            && (bytes[pos] == b' ' || bytes[pos] == b'\t' || bytes[pos] == b'\n')
+        {
             pos += 1;
         }
 
@@ -55,7 +56,9 @@ impl EelInputParser {
             }
 
             if arg_start < arg_end {
-                let arg = std::str::from_utf8(&bytes[arg_start..arg_end]).unwrap().to_string();
+                let arg = std::str::from_utf8(&bytes[arg_start..arg_end])
+                    .unwrap()
+                    .to_string();
                 args.push(arg);
             } else if is_quote {
                 args.push(String::new());
@@ -65,7 +68,9 @@ impl EelInputParser {
                 break;
             }
 
-            while pos < bytes.len() && (bytes[pos] == b' ' || bytes[pos] == b'\t' || bytes[pos] == b'\n') {
+            while pos < bytes.len()
+                && (bytes[pos] == b' ' || bytes[pos] == b'\t' || bytes[pos] == b'\n')
+            {
                 pos += 1;
             }
             if pos < bytes.len() && bytes[pos] == b'#' {
@@ -101,7 +106,7 @@ pub extern "C" fn emane_rs_eel_input_parser_parse(
     error_out: *mut *mut c_char,
 ) -> bool {
     let input_str = unsafe { CStr::from_ptr(input) }.to_string_lossy();
-    
+
     match EelInputParser::parse(&input_str) {
         Ok(Some((time, module_id, event_type, args))) => {
             if time == 0.0 && module_id.is_empty() && event_type.is_empty() && args.is_empty() {
@@ -116,7 +121,7 @@ pub extern "C" fn emane_rs_eel_input_parser_parse(
                 for a in args {
                     args_c.push(CString::new(a).unwrap().into_raw());
                 }
-                
+
                 let mut args_c_boxed = args_c.into_boxed_slice();
                 *args_out = args_c_boxed.as_mut_ptr();
                 *args_len_out = args_c_boxed.len();
@@ -143,10 +148,16 @@ pub extern "C" fn emane_rs_eel_input_parser_free_strings(
     error: *mut c_char,
 ) {
     unsafe {
-        if !s_event_type.is_null() { drop(CString::from_raw(s_event_type)); }
-        if !s_module_id.is_null() { drop(CString::from_raw(s_module_id)); }
-        if !error.is_null() { drop(CString::from_raw(error)); }
-        
+        if !s_event_type.is_null() {
+            drop(CString::from_raw(s_event_type));
+        }
+        if !s_module_id.is_null() {
+            drop(CString::from_raw(s_module_id));
+        }
+        if !error.is_null() {
+            drop(CString::from_raw(error));
+        }
+
         if !args.is_null() {
             let slice = slice::from_raw_parts_mut(args, args_len);
             for &mut ptr in slice.iter_mut() {

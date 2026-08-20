@@ -21,9 +21,7 @@ pub extern "C" fn emane_rs_controls_spectrum_filter_data_create(
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_controls_spectrum_filter_data_clone(
-    ptr: *const c_void,
-) -> *mut c_void {
+pub extern "C" fn emane_rs_controls_spectrum_filter_data_clone(ptr: *const c_void) -> *mut c_void {
     let msg = unsafe { &*(ptr as *const SpectrumFilterDataControlMessageRs) };
     let cloned = Box::new(msg.clone());
     Box::into_raw(cloned) as *mut c_void

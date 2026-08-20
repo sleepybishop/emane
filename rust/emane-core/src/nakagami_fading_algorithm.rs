@@ -13,7 +13,16 @@ impl NakagamiFadingAlgorithm {
         }
     }
 
-    pub fn compute(&mut self, power_dbm: f64, distance_meters: f64, d0: f64, d1: f64, m0: f64, m1: f64, m2: f64) -> f64 {
+    pub fn compute(
+        &mut self,
+        power_dbm: f64,
+        distance_meters: f64,
+        d0: f64,
+        d1: f64,
+        m0: f64,
+        m1: f64,
+        m2: f64,
+    ) -> f64 {
         let m = if distance_meters < d0 {
             m0
         } else if distance_meters < d1 {
@@ -25,7 +34,7 @@ impl NakagamiFadingAlgorithm {
         // db_to_milliwatt equivalent in Rust
         let mw = 10_f64.powf(power_dbm / 10.0);
         let scale = mw / m;
-        
+
         let gamma = Gamma::new(m, scale).unwrap();
         gamma.sample(&mut self.rng)
     }
@@ -39,7 +48,9 @@ pub extern "C" fn emane_rs_nakagami_fading_new() -> *mut NakagamiFadingAlgorithm
 #[no_mangle]
 pub extern "C" fn emane_rs_nakagami_fading_free(ptr: *mut NakagamiFadingAlgorithm) {
     if !ptr.is_null() {
-        unsafe { let _ = Box::from_raw(ptr); }
+        unsafe {
+            let _ = Box::from_raw(ptr);
+        }
     }
 }
 

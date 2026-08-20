@@ -19,8 +19,10 @@ impl WMMManager {
 
     pub fn set_num_categories(&mut self, num_categories: u8) {
         if self.num_categories != num_categories {
-            self.total_utilization_vector.resize(num_categories as usize, 0);
-            self.local_utilization_vector.resize(num_categories as usize, 0);
+            self.total_utilization_vector
+                .resize(num_categories as usize, 0);
+            self.local_utilization_vector
+                .resize(num_categories as usize, 0);
             self.num_categories = num_categories;
             self.reset_counters();
         }
@@ -57,17 +59,21 @@ impl WMMManager {
         let mut vec = vec![(0.0, 0.0); self.num_categories as usize];
 
         if self.total_utilization_microseconds > 0 && delta_t_microseconds > 0 {
-            let mut activity_ratio = self.total_utilization_microseconds as f32 / delta_t_microseconds as f32;
+            let mut activity_ratio =
+                self.total_utilization_microseconds as f32 / delta_t_microseconds as f32;
             if activity_ratio > 1.0 {
                 activity_ratio = 1.0;
             }
 
             for category in 0..(self.num_categories as usize) {
-                let total_ratio = (self.total_utilization_vector[category] as f32 / self.total_utilization_microseconds as f32) * activity_ratio;
+                let total_ratio = (self.total_utilization_vector[category] as f32
+                    / self.total_utilization_microseconds as f32)
+                    * activity_ratio;
                 vec[category].0 = total_ratio;
 
                 if self.total_utilization_vector[category] > 0 {
-                    vec[category].1 = self.local_utilization_vector[category] as f32 / self.total_utilization_vector[category] as f32;
+                    vec[category].1 = self.local_utilization_vector[category] as f32
+                        / self.total_utilization_vector[category] as f32;
                 } else {
                     vec[category].1 = 0.0;
                 }

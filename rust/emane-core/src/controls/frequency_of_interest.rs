@@ -7,7 +7,9 @@ pub struct FrequencyOfInterestControlMessage {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn emane_rs_controls_foi_create(bandwidth_hz: u64) -> *mut FrequencyOfInterestControlMessage {
+pub unsafe extern "C" fn emane_rs_controls_foi_create(
+    bandwidth_hz: u64,
+) -> *mut FrequencyOfInterestControlMessage {
     let msg = Box::new(FrequencyOfInterestControlMessage {
         bandwidth_hz,
         frequency_set: HashSet::new(),
@@ -16,14 +18,19 @@ pub unsafe extern "C" fn emane_rs_controls_foi_create(bandwidth_hz: u64) -> *mut
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn emane_rs_controls_foi_add_frequency(ptr: *mut FrequencyOfInterestControlMessage, freq: u64) {
+pub unsafe extern "C" fn emane_rs_controls_foi_add_frequency(
+    ptr: *mut FrequencyOfInterestControlMessage,
+    freq: u64,
+) {
     if let Some(msg) = unsafe { ptr.as_mut() } {
         msg.frequency_set.insert(freq);
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn emane_rs_controls_foi_clone(ptr: *const FrequencyOfInterestControlMessage) -> *mut FrequencyOfInterestControlMessage {
+pub unsafe extern "C" fn emane_rs_controls_foi_clone(
+    ptr: *const FrequencyOfInterestControlMessage,
+) -> *mut FrequencyOfInterestControlMessage {
     if let Some(msg) = unsafe { ptr.as_ref() } {
         Box::into_raw(Box::new(msg.clone()))
     } else {
@@ -32,7 +39,9 @@ pub unsafe extern "C" fn emane_rs_controls_foi_clone(ptr: *const FrequencyOfInte
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn emane_rs_controls_foi_destroy(ptr: *mut FrequencyOfInterestControlMessage) {
+pub unsafe extern "C" fn emane_rs_controls_foi_destroy(
+    ptr: *mut FrequencyOfInterestControlMessage,
+) {
     if !ptr.is_null() {
         unsafe { drop(Box::from_raw(ptr)) }
     }

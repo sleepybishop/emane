@@ -1,4 +1,3 @@
-
 use std::os::raw::c_void;
 
 #[derive(Clone)]
@@ -33,9 +32,7 @@ pub extern "C" fn emane_rs_controls_mimo_tx_props_create() -> *mut c_void {
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_controls_mimo_tx_props_add_frequency_group(
-    ptr: *mut c_void,
-) -> usize {
+pub extern "C" fn emane_rs_controls_mimo_tx_props_add_frequency_group(ptr: *mut c_void) -> usize {
     let msg = unsafe { &mut *(ptr as *mut MimoTransmitPropertiesControlMessageRs) };
     msg.frequency_groups.push(Vec::new());
     msg.frequency_groups.len() - 1
@@ -88,6 +85,8 @@ pub extern "C" fn emane_rs_controls_mimo_tx_props_clone(ptr: *const c_void) -> *
 #[no_mangle]
 pub extern "C" fn emane_rs_controls_mimo_tx_props_destroy(ptr: *mut c_void) {
     if !ptr.is_null() {
-        unsafe { let _ = Box::from_raw(ptr as *mut MimoTransmitPropertiesControlMessageRs); }
+        unsafe {
+            let _ = Box::from_raw(ptr as *mut MimoTransmitPropertiesControlMessageRs);
+        }
     }
 }

@@ -6,19 +6,13 @@ pub struct RxAntennaRemoveControlMessageRs {
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_controls_rx_antenna_remove_create(
-    antenna_index: u16,
-) -> *mut c_void {
-    let msg = Box::new(RxAntennaRemoveControlMessageRs {
-        antenna_index,
-    });
+pub extern "C" fn emane_rs_controls_rx_antenna_remove_create(antenna_index: u16) -> *mut c_void {
+    let msg = Box::new(RxAntennaRemoveControlMessageRs { antenna_index });
     Box::into_raw(msg) as *mut c_void
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_controls_rx_antenna_remove_clone(
-    ptr: *const c_void,
-) -> *mut c_void {
+pub extern "C" fn emane_rs_controls_rx_antenna_remove_clone(ptr: *const c_void) -> *mut c_void {
     let msg = unsafe { &*(ptr as *const RxAntennaRemoveControlMessageRs) };
     let cloned = Box::new(msg.clone());
     Box::into_raw(cloned) as *mut c_void

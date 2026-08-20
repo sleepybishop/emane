@@ -1,8 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::ffi::{CStr, CString};
+use std::os::raw::c_char;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::os::raw::c_char;
-use std::ffi::{CStr, CString};
 
 #[repr(C)]
 pub struct FfiNEMLayerComponent {
@@ -36,7 +36,7 @@ pub struct BuildIdService {
     transport_manager_build_id: Option<u16>,
     event_generator_manager_build_id: Option<u16>,
     event_agent_manager_build_id: Option<u16>,
-    
+
     nem_layer_components: HashMap<u16, Vec<NEMLayerComponent>>,
     nem_transport_adapters: HashMap<u16, u16>,
     nem_transports: HashMap<u16, u16>,
@@ -74,7 +74,9 @@ fn get_build_id_service() -> &'static Mutex<BuildIdService> {
 }
 
 fn write_error(msg: &str, err_buf: *mut c_char, err_len: usize) {
-    if err_buf.is_null() || err_len == 0 { return; }
+    if err_buf.is_null() || err_len == 0 {
+        return;
+    }
     let c_msg = std::ffi::CString::new(msg).unwrap_or_default();
     let bytes = c_msg.as_bytes_with_nul();
     let copy_len = std::cmp::min(bytes.len(), err_len - 1);
@@ -91,7 +93,11 @@ pub extern "C" fn emane_rs_buildid_assign() -> u16 {
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_buildid_register_nem_manager(build_id: u16, err_buf: *mut c_char, err_len: usize) {
+pub extern "C" fn emane_rs_buildid_register_nem_manager(
+    build_id: u16,
+    err_buf: *mut c_char,
+    err_len: usize,
+) {
     let mut s = get_build_id_service().lock().unwrap();
     if s.nem_manager_build_id.is_none() {
         s.nem_manager_build_id = Some(build_id);
@@ -101,7 +107,11 @@ pub extern "C" fn emane_rs_buildid_register_nem_manager(build_id: u16, err_buf: 
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_buildid_register_transport_manager(build_id: u16, err_buf: *mut c_char, err_len: usize) {
+pub extern "C" fn emane_rs_buildid_register_transport_manager(
+    build_id: u16,
+    err_buf: *mut c_char,
+    err_len: usize,
+) {
     let mut s = get_build_id_service().lock().unwrap();
     if s.transport_manager_build_id.is_none() {
         s.transport_manager_build_id = Some(build_id);
@@ -111,17 +121,29 @@ pub extern "C" fn emane_rs_buildid_register_transport_manager(build_id: u16, err
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_buildid_register_event_generator_manager(build_id: u16, err_buf: *mut c_char, err_len: usize) {
+pub extern "C" fn emane_rs_buildid_register_event_generator_manager(
+    build_id: u16,
+    err_buf: *mut c_char,
+    err_len: usize,
+) {
     let mut s = get_build_id_service().lock().unwrap();
     if s.event_generator_manager_build_id.is_none() {
         s.event_generator_manager_build_id = Some(build_id);
     } else {
-        write_error("Event Generator Manager already registered", err_buf, err_len);
+        write_error(
+            "Event Generator Manager already registered",
+            err_buf,
+            err_len,
+        );
     }
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_buildid_register_event_agent_manager(build_id: u16, err_buf: *mut c_char, err_len: usize) {
+pub extern "C" fn emane_rs_buildid_register_event_agent_manager(
+    build_id: u16,
+    err_buf: *mut c_char,
+    err_len: usize,
+) {
     let mut s = get_build_id_service().lock().unwrap();
     if s.event_agent_manager_build_id.is_none() {
         s.event_agent_manager_build_id = Some(build_id);
@@ -131,15 +153,23 @@ pub extern "C" fn emane_rs_buildid_register_event_agent_manager(build_id: u16, e
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_buildid_register_layer(nem_id: u16, build_id: u16, layer_type: i32, plugin_name: *const c_char) {
+pub extern "C" fn emane_rs_buildid_register_layer(
+    nem_id: u16,
+    build_id: u16,
+    layer_type: i32,
+    plugin_name: *const c_char,
+) {
     let mut s = get_build_id_service().lock().unwrap();
     let name = if plugin_name.is_null() {
         String::new()
     } else {
         unsafe { CStr::from_ptr(plugin_name).to_string_lossy().into_owned() }
     };
-    
-    let entry = s.nem_layer_components.entry(nem_id).or_insert_with(Vec::new);
+
+    let entry = s
+        .nem_layer_components
+        .entry(nem_id)
+        .or_insert_with(Vec::new);
     entry.push(NEMLayerComponent {
         build_id,
         layer_type,
@@ -181,7 +211,7 @@ pub extern "C" fn emane_rs_buildid_register_event_agent(build_id: u16) {
 pub extern "C" fn emane_rs_buildid_get_nem_layer_component_map() -> FfiNEMLayerComponentMap {
     let s = get_build_id_service().lock().unwrap();
     let mut list_vec = Vec::new();
-    
+
     for (&nem_id, components) in &s.nem_layer_components {
         let mut comp_vec = Vec::new();
         for comp in components {
@@ -199,7 +229,7 @@ pub extern "C" fn emane_rs_buildid_get_nem_layer_component_map() -> FfiNEMLayerC
         });
         std::mem::forget(comp_boxed);
     }
-    
+
     let mut list_boxed = list_vec.into_boxed_slice();
     let map = FfiNEMLayerComponentMap {
         nems: list_boxed.as_mut_ptr(),
@@ -218,12 +248,23 @@ pub extern "C" fn emane_rs_buildid_free_nem_layer_component_map(map: FfiNEMLayer
                 let comps = unsafe { std::slice::from_raw_parts_mut(list.components, list.len) };
                 for comp in comps {
                     if !comp.plugin_name.is_null() {
-                        unsafe { let _ = CString::from_raw(comp.plugin_name as *mut c_char); }
+                        unsafe {
+                            let _ = CString::from_raw(comp.plugin_name as *mut c_char);
+                        }
                     }
                 }
-                unsafe { drop(Box::from_raw(std::slice::from_raw_parts_mut(list.components, list.len))); }
+                unsafe {
+                    drop(Box::from_raw(std::slice::from_raw_parts_mut(
+                        list.components,
+                        list.len,
+                    )));
+                }
             }
         }
-        unsafe { drop(Box::from_raw(std::slice::from_raw_parts_mut(map.nems, map.len))); }
+        unsafe {
+            drop(Box::from_raw(std::slice::from_raw_parts_mut(
+                map.nems, map.len,
+            )));
+        }
     }
 }

@@ -1,8 +1,8 @@
-use std::os::raw::{c_char, c_void, c_int, c_double};
-use std::ffi::{CString, CStr};
-use std::ptr;
-use std::fs;
-use libc::{open, grantpt, unlockpt, posix_openpt, ptsname_r, O_RDWR, O_NOCTTY, read, write, time, gmtime_r, time_t, tm, unlink};
+use libc::{
+    gmtime_r, grantpt, posix_openpt, ptsname_r, time, time_t, tm, unlockpt, write, O_NOCTTY, O_RDWR,
+};
+use std::ffi::CStr;
+use std::os::raw::{c_char, c_double, c_void};
 
 pub struct GpsdLocationAgent {
     nem_id: u16,
@@ -35,7 +35,7 @@ impl GpsdLocationAgent {
 
     pub fn start(&mut self, pseudo_terminal_file: &str) {
         self.pseudo_terminal_file = pseudo_terminal_file.to_string();
-        
+
         unsafe {
             self.master_pty = posix_openpt(O_RDWR | O_NOCTTY);
             if self.master_pty < 0 {
@@ -54,9 +54,11 @@ impl GpsdLocationAgent {
             if ptsname_r(self.master_pty, pts_name.as_mut_ptr(), 1024) != 0 {
                 panic!("ptsname_r failed");
             }
-            
-            let pts_str = CStr::from_ptr(pts_name.as_ptr()).to_string_lossy().into_owned();
-            
+
+            let pts_str = CStr::from_ptr(pts_name.as_ptr())
+                .to_string_lossy()
+                .into_owned();
+
             // Create symlink
             let _ = std::fs::remove_file(&self.pseudo_terminal_file);
             if std::os::unix::fs::symlink(&pts_str, &self.pseudo_terminal_file).is_err() {
@@ -67,25 +69,27 @@ impl GpsdLocationAgent {
 
     pub fn stop(&mut self) {
         if self.master_pty >= 0 {
-            unsafe { libc::close(self.master_pty); }
+            unsafe {
+                libc::close(self.master_pty);
+            }
             self.master_pty = -1;
         }
         let _ = std::fs::remove_file(&self.pseudo_terminal_file);
     }
-    
+
     pub fn do_checksum_nmea(buf: &mut String) {
         let mut chksum: u8 = 0;
         let bytes = buf.as_bytes();
-        
+
         if bytes.len() > 1 && bytes[0] == b'$' {
             for i in 1..bytes.len() {
                 chksum ^= bytes[i];
             }
         }
-        
+
         buf.push_str(&format!("*{:02X}\r\n", chksum));
     }
-    
+
     pub fn write_pty(&self, buf: &str) {
         if self.master_pty >= 0 {
             unsafe {
@@ -111,8 +115,12 @@ impl GpsdLocationAgent {
         let lat_hemisphere = if lat > 0.0 { 'N' } else { 'S' };
         let lon_hemisphere = if lon > 0.0 { 'E' } else { 'W' };
 
-        if lat < 0.0 { lat = -lat; }
-        if lon < 0.0 { lon = -lon; }
+        if lat < 0.0 {
+            lat = -lat;
+        }
+        if lon < 0.0 {
+            lon = -lon;
+        }
 
         let lat_deg = lat as i32;
         let lon_deg = lon as i32;
@@ -195,14 +203,18 @@ pub extern "C" fn emane_rs_gpsd_agent_new(nem_id: u16) -> *mut GpsdLocationAgent
 #[no_mangle]
 pub extern "C" fn emane_rs_gpsd_agent_free(ptr: *mut GpsdLocationAgent) {
     if !ptr.is_null() {
-        unsafe { let _ = Box::from_raw(ptr); }
+        unsafe {
+            let _ = Box::from_raw(ptr);
+        }
     }
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_gpsd_agent_start(ptr: *mut GpsdLocationAgent, pty_file: *const c_char) {
     let agent = unsafe { &mut *ptr };
-    let file = unsafe { CStr::from_ptr(pty_file) }.to_string_lossy().into_owned();
+    let file = unsafe { CStr::from_ptr(pty_file) }
+        .to_string_lossy()
+        .into_owned();
     agent.start(&file);
 }
 

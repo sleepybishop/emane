@@ -7,8 +7,14 @@ extern "C" {
     fn emane_ieee80211abg_macconfig_getUnicastDataRateKbps(ptr: *mut std::ffi::c_void) -> u32;
     fn emane_ieee80211abg_macconfig_getBroadcastDataRateKbps(ptr: *mut std::ffi::c_void) -> u32;
     fn emane_ieee80211abg_macconfig_getMaxDataRateKbps(ptr: *mut std::ffi::c_void) -> u32;
-    fn emane_ieee80211abg_macconfig_getUnicastDataRateKbps_by_category(ptr: *mut std::ffi::c_void, arg0: u8) -> u32;
-    fn emane_ieee80211abg_macconfig_getBroadcastDataRateKbps_by_category(ptr: *mut std::ffi::c_void, arg0: u8) -> u32;
+    fn emane_ieee80211abg_macconfig_getUnicastDataRateKbps_by_category(
+        ptr: *mut std::ffi::c_void,
+        arg0: u8,
+    ) -> u32;
+    fn emane_ieee80211abg_macconfig_getBroadcastDataRateKbps_by_category(
+        ptr: *mut std::ffi::c_void,
+        arg0: u8,
+    ) -> u32;
     fn emane_ieee80211abg_macconfig_getMaxP2pDistance(ptr: *mut std::ffi::c_void) -> u32;
     fn emane_ieee80211abg_macconfig_getNumAccessCategories(ptr: *mut std::ffi::c_void) -> u8;
     fn emane_ieee80211abg_macconfig_getRtsThreshold(ptr: *mut std::ffi::c_void) -> u16;
@@ -16,15 +22,29 @@ extern "C" {
     fn emane_ieee80211abg_macconfig_getQueueEntrySize(ptr: *mut std::ffi::c_void, arg0: u8) -> u16;
     fn emane_ieee80211abg_macconfig_getCWMin(ptr: *mut std::ffi::c_void, arg0: u8) -> u16;
     fn emane_ieee80211abg_macconfig_getCWMax(ptr: *mut std::ffi::c_void, arg0: u8) -> u16;
-    fn emane_ieee80211abg_macconfig_getAifsMicroseconds(ptr: *mut std::ffi::c_void, arg0: u8) -> u64;
-    fn emane_ieee80211abg_macconfig_getTxOpMicroseconds(ptr: *mut std::ffi::c_void, arg0: u8) -> u64;
+    fn emane_ieee80211abg_macconfig_getAifsMicroseconds(
+        ptr: *mut std::ffi::c_void,
+        arg0: u8,
+    ) -> u64;
+    fn emane_ieee80211abg_macconfig_getTxOpMicroseconds(
+        ptr: *mut std::ffi::c_void,
+        arg0: u8,
+    ) -> u64;
     fn emane_ieee80211abg_macconfig_getRetryLimit(ptr: *mut std::ffi::c_void, arg0: u8) -> u8;
     fn emane_ieee80211abg_macconfig_getFlowControlTokens(ptr: *mut std::ffi::c_void) -> u16;
     fn emane_ieee80211abg_macconfig_getFlowControlEnable(ptr: *mut std::ffi::c_void) -> bool;
-    fn emane_ieee80211abg_macconfig_getNeighborTimeoutMicroseconds(ptr: *mut std::ffi::c_void) -> u64;
-    fn emane_ieee80211abg_macconfig_getChannelActivityIntervalMicroseconds(ptr: *mut std::ffi::c_void) -> u64;
-    fn emane_ieee80211abg_macconfig_getNeighborMetricDeleteTimeMicroseconds(ptr: *mut std::ffi::c_void) -> u64;
-    fn emane_ieee80211abg_macconfig_getRadioMetricReportIntervalMicroseconds(ptr: *mut std::ffi::c_void) -> u64;
+    fn emane_ieee80211abg_macconfig_getNeighborTimeoutMicroseconds(
+        ptr: *mut std::ffi::c_void,
+    ) -> u64;
+    fn emane_ieee80211abg_macconfig_getChannelActivityIntervalMicroseconds(
+        ptr: *mut std::ffi::c_void,
+    ) -> u64;
+    fn emane_ieee80211abg_macconfig_getNeighborMetricDeleteTimeMicroseconds(
+        ptr: *mut std::ffi::c_void,
+    ) -> u64;
+    fn emane_ieee80211abg_macconfig_getRadioMetricReportIntervalMicroseconds(
+        ptr: *mut std::ffi::c_void,
+    ) -> u64;
     fn emane_ieee80211abg_macconfig_getRadioMetricEnable(ptr: *mut std::ffi::c_void) -> bool;
 }
 

@@ -80,6 +80,8 @@ pub extern "C" fn emane_rs_controls_rx_antenna_add_clone(ptr: *const c_void) -> 
 #[no_mangle]
 pub extern "C" fn emane_rs_controls_rx_antenna_add_destroy(ptr: *mut c_void) {
     if !ptr.is_null() {
-        unsafe { let _ = Box::from_raw(ptr as *mut RxAntennaAddControlMessageRs); }
+        unsafe {
+            let _ = Box::from_raw(ptr as *mut RxAntennaAddControlMessageRs);
+        }
     }
 }

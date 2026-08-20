@@ -1,11 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::os::raw::{c_char, c_void};
-use std::ffi::CStr;
-use std::time::{SystemTime, Duration};
-use crate::tdma_message::{BaseModelMessage, MessageComponent, FfiTdmaMessageType};
-use roxmltree::Document;
-use std::fs;
+use crate::tdma_message::{BaseModelMessage, FfiTdmaMessageType};
 use rand::Rng;
+use roxmltree::Document;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::CStr;
+use std::fs;
+use std::os::raw::{c_char, c_void};
+use std::time::SystemTime;
 
 #[repr(C)]
 pub struct FFIFrequencySegment {
@@ -19,31 +19,48 @@ pub struct FFIReceiveManagerCallbacks {
     pub rm_cpp: *mut c_void,
     pub log_error: unsafe extern "C" fn(*mut c_void, u16, *const c_char),
     pub log_debug: unsafe extern "C" fn(*mut c_void, u16, *const c_char),
-    pub spectrum_request_and_noise: unsafe extern "C" fn(
-        *mut c_void, u64, u64, u64, f64, *mut f64, *mut bool
-    ) -> bool, // returns false on SpectrumServiceException
-    pub publish_inbound: unsafe extern "C" fn(
-        *mut c_void, u16, u16, u8, usize, u32
-    ),
+    pub spectrum_request_and_noise:
+        unsafe extern "C" fn(*mut c_void, u64, u64, u64, f64, *mut f64, *mut bool) -> bool, // returns false on SpectrumServiceException
+    pub publish_inbound: unsafe extern "C" fn(*mut c_void, u16, u16, u8, usize, u32),
     pub publish_inbound_component: unsafe extern "C" fn(
-        *mut c_void, u16, u32,
-        u32, u16, u8, *const u8, usize,
-        bool, u32, u32, u64, bool
+        *mut c_void,
+        u16,
+        u32,
+        u32,
+        u16,
+        u8,
+        *const u8,
+        usize,
+        bool,
+        u32,
+        u32,
+        u64,
+        bool,
     ),
     pub publish_inbound_message: unsafe extern "C" fn(
-        *mut c_void, u16, *const c_void, u32 // *const c_void is *const BaseModelMessage
+        *mut c_void,
+        u16,
+        *const c_void,
+        u32, // *const c_void is *const BaseModelMessage
     ),
-    pub update_neighbor_rx_metric: unsafe extern "C" fn(
-        *mut c_void, u16, u64, *const u8, f64, f64, u64, u64, u64
-    ),
-    pub send_upstream_packet: unsafe extern "C" fn(
-        *mut c_void, u16, u16, u8, u64, *const u8, *const u8, usize
-    ),
-    pub process_packet_meta_info: unsafe extern "C" fn(
-        *mut c_void, u16, u64, f64, f64, u64
-    ),
+    pub update_neighbor_rx_metric:
+        unsafe extern "C" fn(*mut c_void, u16, u64, *const u8, f64, f64, u64, u64, u64),
+    pub send_upstream_packet:
+        unsafe extern "C" fn(*mut c_void, u16, u16, u8, u64, *const u8, *const u8, usize),
+    pub process_packet_meta_info: unsafe extern "C" fn(*mut c_void, u16, u64, f64, f64, u64),
     pub process_scheduler_packet: unsafe extern "C" fn(
-        *mut c_void, u16, u16, u8, u64, *const u8, *const u8, usize, u64, f64, f64, u64
+        *mut c_void,
+        u16,
+        u16,
+        u8,
+        u64,
+        *const u8,
+        *const u8,
+        usize,
+        u64,
+        f64,
+        f64,
+        u64,
     ),
 }
 
@@ -65,7 +82,7 @@ impl PorManager {
     pub fn load(&mut self, s_pcr_file_name: &str) -> Result<(), String> {
         let content = fs::read_to_string(s_pcr_file_name).map_err(|e| e.to_string())?;
         let doc = Document::parse(&content).map_err(|e| e.to_string())?;
-        
+
         let root = doc.root_element();
         if root.tag_name().name() != "tdmabasemodel-pcr" {
             return Err("Invalid root element".into());
@@ -76,9 +93,11 @@ impl PorManager {
         }
 
         for data_rate_node in root.children().filter(|n| n.has_tag_name("datarate")) {
-            let bps_str = data_rate_node.attribute("bps").ok_or("Missing bps attribute")?;
+            let bps_str = data_rate_node
+                .attribute("bps")
+                .ok_or("Missing bps attribute")?;
             let u64_data_rate_bps = Self::parse_si_prefix(bps_str).ok_or("Invalid bps")?;
-            
+
             if self.data_rate_table.is_empty() {
                 self.default_curve_data_rate = u64_data_rate_bps;
             }
@@ -87,7 +106,10 @@ impl PorManager {
             let mut min_sinr = i32::MAX;
             let mut max_sinr = i32::MIN;
 
-            for entry_node in data_rate_node.children().filter(|n| n.has_tag_name("entry")) {
+            for entry_node in data_rate_node
+                .children()
+                .filter(|n| n.has_tag_name("entry"))
+            {
                 let sinr_str = entry_node.attribute("sinr").ok_or("Missing sinr")?;
                 let por_str = entry_node.attribute("por").ok_or("Missing por")?;
 
@@ -96,7 +118,10 @@ impl PorManager {
                 let por = por / 100.0;
 
                 if curve.insert(scaled_sinr, por).is_some() {
-                    return Err(format!("duplicate PCR SINR value for datarate: {}", u64_data_rate_bps));
+                    return Err(format!(
+                        "duplicate PCR SINR value for datarate: {}",
+                        u64_data_rate_bps
+                    ));
                 }
 
                 min_sinr = min_sinr.min(scaled_sinr);
@@ -116,7 +141,11 @@ impl PorManager {
             }
             curve.extend(interpolation);
 
-            if self.data_rate_table.insert(u64_data_rate_bps, (min_sinr, max_sinr, curve)).is_some() {
+            if self
+                .data_rate_table
+                .insert(u64_data_rate_bps, (min_sinr, max_sinr, curve))
+                .is_some()
+            {
                 return Err(format!("duplicate PCR datarate: {}", u64_data_rate_bps));
             }
         }
@@ -124,7 +153,9 @@ impl PorManager {
     }
 
     pub fn get_por(&self, u64_data_rate_bps: u64, f_sinr: f32, packet_length_bytes: usize) -> f32 {
-        let curve_data = self.data_rate_table.get(&u64_data_rate_bps)
+        let curve_data = self
+            .data_rate_table
+            .get(&u64_data_rate_bps)
             .or_else(|| self.data_rate_table.get(&self.default_curve_data_rate));
 
         if let Some((min_sinr, max_sinr, curve)) = curve_data {
@@ -137,7 +168,8 @@ impl PorManager {
             }
             if let Some(&por) = curve.get(&scaled_sinr) {
                 if self.modifier_length_bytes > 0 {
-                    return por.powf(packet_length_bytes as f32 / self.modifier_length_bytes as f32);
+                    return por
+                        .powf(packet_length_bytes as f32 / self.modifier_length_bytes as f32);
                 }
                 return por;
             }
@@ -171,11 +203,10 @@ impl PorManager {
     }
 }
 
-
 pub struct ReceiveManager {
     id: u16,
     callbacks: FFIReceiveManagerCallbacks,
-    
+
     // pendingInfo_ elements
     pending_base_model_message: Option<Box<BaseModelMessage>>,
     pending_pkt_source: u16,
@@ -188,18 +219,19 @@ pub struct ReceiveManager {
     pending_span_micro: u64,
     pending_begin_time_micro: u64,
     pending_packet_sequence: u64,
-    
+
     pending_absolute_slot_index: u64,
     por_manager: PorManager,
-    
+
     promiscuous_mode: bool,
     fragment_check_threshold_sec: u64,
     fragment_timeout_threshold_sec: u64,
-    
+
     // fragmentStore_
     // key: (source, priority, fragment_sequence)
     // val: (index_set, parts, last_fragment_time_micro, destination, total_num_fragments)
-    fragment_store: BTreeMap<(u16, u8, u64), (BTreeSet<u32>, BTreeMap<u32, Vec<u8>>, u64, u16, u32)>,
+    fragment_store:
+        BTreeMap<(u16, u8, u64), (BTreeSet<u32>, BTreeMap<u32, Vec<u8>>, u64, u16, u32)>,
     last_fragment_check_time_micro: u64,
 }
 
@@ -269,25 +301,33 @@ impl ReceiveManager {
 
         if self.pending_absolute_slot_index == 0 {
             self.pending_absolute_slot_index = u64_absolute_slot_index;
-            self.update_pending(bmm, src, dst, ctime, uuid, length, sor, segments, span, begin_time, seq);
+            self.update_pending(
+                bmm, src, dst, ctime, uuid, length, sor, segments, span, begin_time, seq,
+            );
             b_return = true;
         } else if self.pending_absolute_slot_index < u64_absolute_slot_index {
             self.process(u64_absolute_slot_index);
             self.pending_absolute_slot_index = u64_absolute_slot_index;
-            self.update_pending(bmm, src, dst, ctime, uuid, length, sor, segments, span, begin_time, seq);
+            self.update_pending(
+                bmm, src, dst, ctime, uuid, length, sor, segments, span, begin_time, seq,
+            );
             b_return = true;
         } else if self.pending_absolute_slot_index > u64_absolute_slot_index {
             let msg = format!("MACI {:03} TDMA::ReceiveManager enqueue: pending slot: {} greater than enqueue: {}", 
                               self.id, self.pending_absolute_slot_index, u64_absolute_slot_index);
             let c_msg = std::ffi::CString::new(msg).unwrap();
             unsafe { (self.callbacks.log_error)(self.callbacks.rm_cpp, self.id, c_msg.as_ptr()) };
-            
+
             self.pending_absolute_slot_index = u64_absolute_slot_index;
-            self.update_pending(bmm, src, dst, ctime, uuid, length, sor, segments, span, begin_time, seq);
+            self.update_pending(
+                bmm, src, dst, ctime, uuid, length, sor, segments, span, begin_time, seq,
+            );
             b_return = true;
         } else {
             if sor < self.pending_start_of_reception_micro {
-                self.update_pending(bmm, src, dst, ctime, uuid, length, sor, segments, span, begin_time, seq);
+                self.update_pending(
+                    bmm, src, dst, ctime, uuid, length, sor, segments, span, begin_time, seq,
+                );
             }
         }
         b_return
@@ -322,7 +362,10 @@ impl ReceiveManager {
     }
 
     pub fn process(&mut self, u64_absolute_slot_index: u64) {
-        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_micros() as u64;
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
 
         if self.pending_absolute_slot_index + 1 == u64_absolute_slot_index {
             self.pending_absolute_slot_index = 0;
@@ -333,53 +376,65 @@ impl ReceiveManager {
 
             if let Some(bmm) = self.pending_base_model_message.take() {
                 if let Some(freq_seg) = self.pending_frequency_segments.first() {
-                    let success = unsafe { (self.callbacks.spectrum_request_and_noise)(
-                        self.callbacks.rm_cpp,
-                        freq_seg.frequency_hz,
-                        self.pending_span_micro,
-                        self.pending_start_of_reception_micro,
-                        freq_seg.rx_power_dbm,
-                        &mut d_noise_floor_db,
-                        &mut b_signal_in_noise
-                    ) };
+                    let success = unsafe {
+                        (self.callbacks.spectrum_request_and_noise)(
+                            self.callbacks.rm_cpp,
+                            freq_seg.frequency_hz,
+                            self.pending_span_micro,
+                            self.pending_start_of_reception_micro,
+                            freq_seg.rx_power_dbm,
+                            &mut d_noise_floor_db,
+                            &mut b_signal_in_noise,
+                        )
+                    };
 
                     if !success {
-                        unsafe { (self.callbacks.publish_inbound_message)(
-                            self.callbacks.rm_cpp,
-                            self.pending_pkt_source,
-                            &*bmm as *const _ as *const c_void,
-                            5 // DROP_SPECTRUM_SERVICE
-                        ) };
+                        unsafe {
+                            (self.callbacks.publish_inbound_message)(
+                                self.callbacks.rm_cpp,
+                                self.pending_pkt_source,
+                                &*bmm as *const _ as *const c_void,
+                                5, // DROP_SPECTRUM_SERVICE
+                            )
+                        };
                         return;
                     }
 
                     d_sinr = freq_seg.rx_power_dbm - d_noise_floor_db;
-                    
-                    let por = self.por_manager.get_por(bmm.data_rate_bps, d_sinr as f32, self.pending_length);
+
+                    let por = self.por_manager.get_por(
+                        bmm.data_rate_bps,
+                        d_sinr as f32,
+                        self.pending_length,
+                    );
                     let mut rng = rand::thread_rng();
                     let random: f32 = rng.gen_range(0.0..1.0);
 
                     if por < random {
-                        unsafe { (self.callbacks.publish_inbound_message)(
-                            self.callbacks.rm_cpp,
-                            self.pending_pkt_source,
-                            &*bmm as *const _ as *const c_void,
-                            6 // DROP_SINR
-                        ) };
+                        unsafe {
+                            (self.callbacks.publish_inbound_message)(
+                                self.callbacks.rm_cpp,
+                                self.pending_pkt_source,
+                                &*bmm as *const _ as *const c_void,
+                                6, // DROP_SINR
+                            )
+                        };
                         return;
                     }
 
-                    unsafe { (self.callbacks.update_neighbor_rx_metric)(
-                        self.callbacks.rm_cpp,
-                        self.pending_pkt_source,
-                        self.pending_packet_sequence,
-                        self.pending_pkt_uuid.as_ptr(),
-                        d_sinr,
-                        d_noise_floor_db,
-                        self.pending_start_of_reception_micro,
-                        freq_seg.duration_micro,
-                        bmm.data_rate_bps
-                    ) };
+                    unsafe {
+                        (self.callbacks.update_neighbor_rx_metric)(
+                            self.callbacks.rm_cpp,
+                            self.pending_pkt_source,
+                            self.pending_packet_sequence,
+                            self.pending_pkt_uuid.as_ptr(),
+                            d_sinr,
+                            d_noise_floor_db,
+                            self.pending_start_of_reception_micro,
+                            freq_seg.duration_micro,
+                            bmm.data_rate_bps,
+                        )
+                    };
 
                     let broadcast_mac: u16 = 0xFFFF;
 
@@ -389,14 +444,27 @@ impl ReceiveManager {
 
                         if self.promiscuous_mode || dst == self.id || dst == broadcast_mac {
                             if message.is_fragment {
-                                let key = (self.pending_pkt_source, priority, message.fragment_sequence);
-                                
+                                let key =
+                                    (self.pending_pkt_source, priority, message.fragment_sequence);
+
                                 let entry = self.fragment_store.entry(key).or_insert_with(|| {
-                                    (BTreeSet::new(), BTreeMap::new(), now, dst, if message.more_fragments { 0 } else { message.fragment_index + 1 })
+                                    (
+                                        BTreeSet::new(),
+                                        BTreeMap::new(),
+                                        now,
+                                        dst,
+                                        if message.more_fragments {
+                                            0
+                                        } else {
+                                            message.fragment_index + 1
+                                        },
+                                    )
                                 });
-                                
+
                                 if entry.0.insert(message.fragment_index) {
-                                    entry.1.insert(message.fragment_offset, message.data.clone());
+                                    entry
+                                        .1
+                                        .insert(message.fragment_offset, message.data.clone());
                                     entry.2 = now;
                                     if !message.more_fragments {
                                         entry.4 = message.fragment_index + 1;
@@ -408,58 +476,130 @@ impl ReceiveManager {
                                             combined_data.extend_from_slice(part);
                                         }
 
-                                        unsafe { (self.callbacks.publish_inbound)(
-                                            self.callbacks.rm_cpp,
-                                            self.pending_pkt_source,
-                                            dst,
-                                            priority,
-                                            combined_data.len(),
-                                            0 // ACCEPT_GOOD
-                                        ) };
-
-                                        if message.msg_type as i32 == FfiTdmaMessageType::Data as i32 {
-                                            unsafe { (self.callbacks.send_upstream_packet)(
+                                        unsafe {
+                                            (self.callbacks.publish_inbound)(
                                                 self.callbacks.rm_cpp,
                                                 self.pending_pkt_source,
                                                 dst,
                                                 priority,
-                                                self.pending_pkt_creation_time_micro,
-                                                self.pending_pkt_uuid.as_ptr(),
-                                                combined_data.as_ptr(),
-                                                combined_data.len()
-                                            ) };
-                                            unsafe { (self.callbacks.process_packet_meta_info)(
-                                                self.callbacks.rm_cpp,
-                                                self.pending_pkt_source,
-                                                u64_absolute_slot_index - 1,
-                                                freq_seg.rx_power_dbm,
-                                                d_sinr,
-                                                bmm.data_rate_bps
-                                            ) };
-                                        } else {
-                                            unsafe { (self.callbacks.process_scheduler_packet)(
-                                                self.callbacks.rm_cpp,
-                                                self.pending_pkt_source,
-                                                dst,
-                                                priority,
-                                                self.pending_pkt_creation_time_micro,
-                                                self.pending_pkt_uuid.as_ptr(),
-                                                combined_data.as_ptr(),
                                                 combined_data.len(),
-                                                u64_absolute_slot_index - 1,
-                                                freq_seg.rx_power_dbm,
-                                                d_sinr,
-                                                bmm.data_rate_bps
-                                            ) };
+                                                0, // ACCEPT_GOOD
+                                            )
+                                        };
+
+                                        if message.msg_type as i32
+                                            == FfiTdmaMessageType::Data as i32
+                                        {
+                                            unsafe {
+                                                (self.callbacks.send_upstream_packet)(
+                                                    self.callbacks.rm_cpp,
+                                                    self.pending_pkt_source,
+                                                    dst,
+                                                    priority,
+                                                    self.pending_pkt_creation_time_micro,
+                                                    self.pending_pkt_uuid.as_ptr(),
+                                                    combined_data.as_ptr(),
+                                                    combined_data.len(),
+                                                )
+                                            };
+                                            unsafe {
+                                                (self.callbacks.process_packet_meta_info)(
+                                                    self.callbacks.rm_cpp,
+                                                    self.pending_pkt_source,
+                                                    u64_absolute_slot_index - 1,
+                                                    freq_seg.rx_power_dbm,
+                                                    d_sinr,
+                                                    bmm.data_rate_bps,
+                                                )
+                                            };
+                                        } else {
+                                            unsafe {
+                                                (self.callbacks.process_scheduler_packet)(
+                                                    self.callbacks.rm_cpp,
+                                                    self.pending_pkt_source,
+                                                    dst,
+                                                    priority,
+                                                    self.pending_pkt_creation_time_micro,
+                                                    self.pending_pkt_uuid.as_ptr(),
+                                                    combined_data.as_ptr(),
+                                                    combined_data.len(),
+                                                    u64_absolute_slot_index - 1,
+                                                    freq_seg.rx_power_dbm,
+                                                    d_sinr,
+                                                    bmm.data_rate_bps,
+                                                )
+                                            };
                                         }
                                         self.fragment_store.remove(&key);
                                     }
                                 }
                             } else {
-                                unsafe { (self.callbacks.publish_inbound_component)(
+                                unsafe {
+                                    (self.callbacks.publish_inbound_component)(
+                                        self.callbacks.rm_cpp,
+                                        self.pending_pkt_source,
+                                        0, // ACCEPT_GOOD
+                                        message.msg_type as u32,
+                                        message.destination,
+                                        message.priority,
+                                        message.data.as_ptr(),
+                                        message.data.len(),
+                                        message.is_fragment,
+                                        message.fragment_index,
+                                        message.fragment_offset,
+                                        message.fragment_sequence,
+                                        message.more_fragments,
+                                    )
+                                };
+
+                                if message.msg_type as i32 == FfiTdmaMessageType::Data as i32 {
+                                    unsafe {
+                                        (self.callbacks.send_upstream_packet)(
+                                            self.callbacks.rm_cpp,
+                                            self.pending_pkt_source,
+                                            dst,
+                                            priority,
+                                            self.pending_pkt_creation_time_micro,
+                                            self.pending_pkt_uuid.as_ptr(),
+                                            message.data.as_ptr(),
+                                            message.data.len(),
+                                        )
+                                    };
+                                    unsafe {
+                                        (self.callbacks.process_packet_meta_info)(
+                                            self.callbacks.rm_cpp,
+                                            self.pending_pkt_source,
+                                            u64_absolute_slot_index - 1,
+                                            freq_seg.rx_power_dbm,
+                                            d_sinr,
+                                            bmm.data_rate_bps,
+                                        )
+                                    };
+                                } else {
+                                    unsafe {
+                                        (self.callbacks.process_scheduler_packet)(
+                                            self.callbacks.rm_cpp,
+                                            self.pending_pkt_source,
+                                            dst,
+                                            priority,
+                                            self.pending_pkt_creation_time_micro,
+                                            self.pending_pkt_uuid.as_ptr(),
+                                            message.data.as_ptr(),
+                                            message.data.len(),
+                                            u64_absolute_slot_index - 1,
+                                            freq_seg.rx_power_dbm,
+                                            d_sinr,
+                                            bmm.data_rate_bps,
+                                        )
+                                    };
+                                }
+                            }
+                        } else {
+                            unsafe {
+                                (self.callbacks.publish_inbound_component)(
                                     self.callbacks.rm_cpp,
                                     self.pending_pkt_source,
-                                    0, // ACCEPT_GOOD
+                                    8, // DROP_DESTINATION_MAC
                                     message.msg_type as u32,
                                     message.destination,
                                     message.priority,
@@ -469,81 +609,33 @@ impl ReceiveManager {
                                     message.fragment_index,
                                     message.fragment_offset,
                                     message.fragment_sequence,
-                                    message.more_fragments
-                                ) };
-
-                                if message.msg_type as i32 == FfiTdmaMessageType::Data as i32 {
-                                    unsafe { (self.callbacks.send_upstream_packet)(
-                                        self.callbacks.rm_cpp,
-                                        self.pending_pkt_source,
-                                        dst,
-                                        priority,
-                                        self.pending_pkt_creation_time_micro,
-                                        self.pending_pkt_uuid.as_ptr(),
-                                        message.data.as_ptr(),
-                                        message.data.len()
-                                    ) };
-                                    unsafe { (self.callbacks.process_packet_meta_info)(
-                                        self.callbacks.rm_cpp,
-                                        self.pending_pkt_source,
-                                        u64_absolute_slot_index - 1,
-                                        freq_seg.rx_power_dbm,
-                                        d_sinr,
-                                        bmm.data_rate_bps
-                                    ) };
-                                } else {
-                                    unsafe { (self.callbacks.process_scheduler_packet)(
-                                        self.callbacks.rm_cpp,
-                                        self.pending_pkt_source,
-                                        dst,
-                                        priority,
-                                        self.pending_pkt_creation_time_micro,
-                                        self.pending_pkt_uuid.as_ptr(),
-                                        message.data.as_ptr(),
-                                        message.data.len(),
-                                        u64_absolute_slot_index - 1,
-                                        freq_seg.rx_power_dbm,
-                                        d_sinr,
-                                        bmm.data_rate_bps
-                                    ) };
-                                }
-                            }
-                        } else {
-                            unsafe { (self.callbacks.publish_inbound_component)(
-                                self.callbacks.rm_cpp,
-                                self.pending_pkt_source,
-                                8, // DROP_DESTINATION_MAC
-                                message.msg_type as u32,
-                                message.destination,
-                                message.priority,
-                                message.data.as_ptr(),
-                                message.data.len(),
-                                message.is_fragment,
-                                message.fragment_index,
-                                message.fragment_offset,
-                                message.fragment_sequence,
-                                message.more_fragments
-                            ) };
+                                    message.more_fragments,
+                                )
+                            };
                         }
                     }
                 }
             }
         }
 
-        if self.last_fragment_check_time_micro + self.fragment_check_threshold_sec * 1_000_000 <= now {
+        if self.last_fragment_check_time_micro + self.fragment_check_threshold_sec * 1_000_000
+            <= now
+        {
             let mut keys_to_remove = Vec::new();
             for (key, val) in &self.fragment_store {
                 let last_fragment_time = val.2;
                 if last_fragment_time + self.fragment_timeout_threshold_sec * 1_000_000 <= now {
                     let total_bytes: usize = val.1.values().map(|v| v.len()).sum();
-                    unsafe { (self.callbacks.publish_inbound)(
-                        self.callbacks.rm_cpp,
-                        key.0, // src
-                        val.3, // dst
-                        key.1, // priority
-                        total_bytes,
-                        4 // DROP_MISS_FRAGMENT
-                    ) };
+                    unsafe {
+                        (self.callbacks.publish_inbound)(
+                            self.callbacks.rm_cpp,
+                            key.0, // src
+                            val.3, // dst
+                            key.1, // priority
+                            total_bytes,
+                            4, // DROP_MISS_FRAGMENT
+                        )
+                    };
                     keys_to_remove.push(key.clone());
                 }
             }
@@ -555,11 +647,10 @@ impl ReceiveManager {
     }
 }
 
-
 #[no_mangle]
 pub unsafe extern "C" fn tdma_receivemanager_new(
     id: u16,
-    callbacks: *const FFIReceiveManagerCallbacks
+    callbacks: *const FFIReceiveManagerCallbacks,
 ) -> *mut ReceiveManager {
     if callbacks.is_null() {
         return std::ptr::null_mut();
@@ -589,13 +680,19 @@ pub unsafe extern "C" fn tdma_receivemanager_free(rm: *mut ReceiveManager) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tdma_receivemanager_set_promiscuous_mode(rm: *mut ReceiveManager, enable: bool) {
+pub unsafe extern "C" fn tdma_receivemanager_set_promiscuous_mode(
+    rm: *mut ReceiveManager,
+    enable: bool,
+) {
     let rm = unsafe { &mut *rm };
     rm.set_promiscuous_mode(enable);
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tdma_receivemanager_load_curves(rm: *mut ReceiveManager, file: *const c_char) {
+pub unsafe extern "C" fn tdma_receivemanager_load_curves(
+    rm: *mut ReceiveManager,
+    file: *const c_char,
+) {
     let rm = unsafe { &mut *rm };
     let c_str = unsafe { CStr::from_ptr(file) };
     if let Ok(s) = c_str.to_str() {
@@ -604,13 +701,19 @@ pub unsafe extern "C" fn tdma_receivemanager_load_curves(rm: *mut ReceiveManager
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tdma_receivemanager_set_fragment_check_threshold(rm: *mut ReceiveManager, seconds: u64) {
+pub unsafe extern "C" fn tdma_receivemanager_set_fragment_check_threshold(
+    rm: *mut ReceiveManager,
+    seconds: u64,
+) {
     let rm = unsafe { &mut *rm };
     rm.set_fragment_check_threshold(seconds);
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tdma_receivemanager_set_fragment_timeout_threshold(rm: *mut ReceiveManager, seconds: u64) {
+pub unsafe extern "C" fn tdma_receivemanager_set_fragment_timeout_threshold(
+    rm: *mut ReceiveManager,
+    seconds: u64,
+) {
     let rm = unsafe { &mut *rm };
     rm.set_fragment_timeout_threshold(seconds);
 }
@@ -630,10 +733,10 @@ pub unsafe extern "C" fn tdma_receivemanager_enqueue(
     segments_count: usize,
     span: u64,
     begin_time: u64,
-    seq: u64
+    seq: u64,
 ) -> bool {
     let rm = unsafe { &mut *rm };
-    
+
     // Deserialize BaseModelMessage
     let bmm_ptr = crate::tdma_message::emane_rs_tdma_message_deserialize(bmm_bytes, bmm_len);
     if bmm_ptr.is_null() {
@@ -662,15 +765,19 @@ pub unsafe extern "C" fn tdma_receivemanager_enqueue(
         }
     }
 
-    rm.enqueue(bmm, src, dst, ctime, &uuid_arr, length, sor, segs, span, begin_time, seq)
+    rm.enqueue(
+        bmm, src, dst, ctime, &uuid_arr, length, sor, segs, span, begin_time, seq,
+    )
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tdma_receivemanager_process(rm: *mut ReceiveManager, u64_absolute_slot_index: u64) {
+pub unsafe extern "C" fn tdma_receivemanager_process(
+    rm: *mut ReceiveManager,
+    u64_absolute_slot_index: u64,
+) {
     let rm = unsafe { &mut *rm };
     rm.process(u64_absolute_slot_index);
 }
-
 
 #[no_mangle]
 pub unsafe extern "C" fn tdma_pormanager_new() -> *mut PorManager {
@@ -698,7 +805,7 @@ pub unsafe extern "C" fn tdma_pormanager_get_por(
     pm: *mut PorManager,
     u64_data_rate_bps: u64,
     f_sinr: f32,
-    packet_length_bytes: usize
+    packet_length_bytes: usize,
 ) -> f32 {
     let pm = unsafe { &*pm };
     pm.get_por(u64_data_rate_bps, f_sinr, packet_length_bytes)

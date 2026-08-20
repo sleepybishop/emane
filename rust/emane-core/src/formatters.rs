@@ -1,5 +1,5 @@
-use std::os::raw::c_char;
 use std::ffi::CString;
+use std::os::raw::c_char;
 
 pub type AddStringCallback = extern "C" fn(*mut std::os::raw::c_void, *const c_char);
 
@@ -99,7 +99,8 @@ pub extern "C" fn emane_rs_format_antenna_profile_element(
     let s = CString::new(format!(
         "nem: {} profile: {} antenna az: {} antenna el: {}",
         nem_id, profile_id, azimuth, elevation
-    )).unwrap();
+    ))
+    .unwrap();
     add_string(ctx, s.as_ptr());
 }
 
@@ -118,7 +119,8 @@ pub extern "C" fn emane_rs_format_comm_effect_element(
     let s = CString::new(format!(
         "nem: {} latency: {} jitter: {} loss: {} dup: {} unicast bps: {} broadcast bps: {}",
         nem_id, latency_sec, jitter_sec, prob_loss, prob_dup, unicast_bps, broadcast_bps
-    )).unwrap();
+    ))
+    .unwrap();
     add_string(ctx, s.as_ptr());
 }
 
@@ -130,16 +132,13 @@ pub extern "C" fn emane_rs_format_fading_selection_element(
     add_string: AddStringCallback,
 ) {
     let model_str = match fading_model {
-        0 => "none", // NONE
-        1 => "nakagami", // NAKAGAMI
+        0 => "none",      // NONE
+        1 => "nakagami",  // NAKAGAMI
         2 => "lognormal", // LOGNORMAL
         _ => "unknown",
     };
-    
-    let s = CString::new(format!(
-        "nem: {} model: {}",
-        nem_id, model_str
-    )).unwrap();
+
+    let s = CString::new(format!("nem: {} model: {}", nem_id, model_str)).unwrap();
     add_string(ctx, s.as_ptr());
 }
 
@@ -154,23 +153,18 @@ pub extern "C" fn emane_rs_format_pathloss_element(
     let s = CString::new(format!(
         "nem: {} fwd pathloss: {} rev pathloss: {}",
         nem_id, fwd_pathloss, rev_pathloss
-    )).unwrap();
+    ))
+    .unwrap();
     add_string(ctx, s.as_ptr());
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_format_pathloss_ex_start(
-    nem_id: u16,
-) -> *mut String {
+pub extern "C" fn emane_rs_format_pathloss_ex_start(nem_id: u16) -> *mut String {
     Box::into_raw(Box::new(format!("nem: {}", nem_id)))
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_format_pathloss_ex_append(
-    ptr: *mut String,
-    freq: u64,
-    pathloss: f32,
-) {
+pub extern "C" fn emane_rs_format_pathloss_ex_append(ptr: *mut String, freq: u64, pathloss: f32) {
     if !ptr.is_null() {
         let s = unsafe { &mut *ptr };
         use std::fmt::Write;
@@ -584,4 +578,3 @@ pub extern "C" fn emane_rs_format_location_event_nem(
     let s1 = CString::new(format!("nem: {}", nem_id)).unwrap();
     add_string(ctx, s1.as_ptr());
 }
-

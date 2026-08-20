@@ -1,7 +1,10 @@
-use pcap::{Capture, Active};
+use pcap::{Active, Capture};
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_void};
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::thread;
 
 unsafe impl Send for RawTransport {}
@@ -17,13 +20,18 @@ pub struct RawTransport {
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_raw_transport_new(id: u16, cpp_obj: *mut c_void, cb: extern "C" fn(*mut c_void, *const u8, usize)) -> *mut RawTransport {
+pub extern "C" fn emane_rs_raw_transport_new(
+    id: u16,
+    cpp_obj: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const u8, usize),
+) -> *mut RawTransport {
     let rt = Box::new(RawTransport {
         id,
         thread: None,
         canceled: Arc::new(AtomicBool::new(false)),
         cpp_obj,
-        tx_cap: None, cb,
+        tx_cap: None,
+        cb,
     });
     Box::into_raw(rt)
 }
@@ -90,21 +98,15 @@ pub extern "C" fn emane_rs_raw_transport_start(
     rt.canceled.store(false, Ordering::SeqCst);
     let canceled = rt.canceled.clone();
     let cpp_obj_usize = rt.cpp_obj as usize;
-        let cb = rt.cb;
+    let cb = rt.cb;
 
     rt.thread = Some(thread::spawn(move || {
         while !canceled.load(Ordering::SeqCst) {
             match rx_cap.next_packet() {
-                Ok(packet) => {
-                    unsafe {
-                        let cpp_obj = cpp_obj_usize as *mut c_void;
-                        cb(
-                            cpp_obj,
-                            packet.data.as_ptr(),
-                            packet.data.len(),
-                        );
-                    }
-                }
+                Ok(packet) => unsafe {
+                    let cpp_obj = cpp_obj_usize as *mut c_void;
+                    cb(cpp_obj, packet.data.as_ptr(), packet.data.len());
+                },
                 Err(pcap::Error::TimeoutExpired) => {
                     // Just loop again and check `canceled`
                     continue;
@@ -122,7 +124,9 @@ pub extern "C" fn emane_rs_raw_transport_start(
 
 #[no_mangle]
 pub extern "C" fn emane_rs_raw_transport_stop(ptr: *mut RawTransport) {
-    if ptr.is_null() { return; }
+    if ptr.is_null() {
+        return;
+    }
     let rt = unsafe { &mut *ptr };
     rt.stop();
 }
@@ -143,7 +147,9 @@ pub extern "C" fn emane_rs_raw_transport_process_upstream_packet(
     buf: *const u8,
     len: usize,
 ) -> i32 {
-    if ptr.is_null() { return -1; }
+    if ptr.is_null() {
+        return -1;
+    }
     let rt = unsafe { &mut *ptr };
     if let Some(tx) = &mut rt.tx_cap {
         let slice = unsafe { std::slice::from_raw_parts(buf, len) };

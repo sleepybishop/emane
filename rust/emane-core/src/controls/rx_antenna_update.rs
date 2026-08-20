@@ -51,7 +51,9 @@ pub unsafe extern "C" fn emane_rs_controls_rx_antenna_update_set_antenna(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn emane_rs_controls_rx_antenna_update_clone(ptr: *const c_void) -> *mut c_void {
+pub unsafe extern "C" fn emane_rs_controls_rx_antenna_update_clone(
+    ptr: *const c_void,
+) -> *mut c_void {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }

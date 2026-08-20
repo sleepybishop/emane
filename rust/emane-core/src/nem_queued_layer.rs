@@ -1,10 +1,13 @@
+use libc::{
+    epoll_create1, epoll_ctl, epoll_event, epoll_wait, eventfd, EPOLLIN, EPOLLOUT, EPOLL_CTL_ADD,
+    EPOLL_CTL_DEL, EPOLL_CTL_MOD,
+};
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::os::raw::c_void;
+use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::os::unix::io::RawFd;
-use libc::{epoll_create1, epoll_ctl, epoll_wait, epoll_event, eventfd, EPOLLIN, EPOLLOUT, EPOLL_CTL_ADD, EPOLL_CTL_DEL, EPOLL_CTL_MOD};
-use std::collections::HashMap;
 
 pub struct NemQueuedLayer {
     queue: Arc<Mutex<VecDeque<Box<dyn FnOnce() + Send>>>>,
@@ -45,47 +48,45 @@ impl NemQueuedLayer {
         let epoll_fd = self.epoll_fd;
         let callbacks = self.callbacks.clone();
 
-        self.thread = Some(thread::spawn(move || {
-            unsafe {
-                let mut events: [epoll_event; 32] = std::mem::zeroed();
-                loop {
-                    let nfds = epoll_wait(epoll_fd, events.as_mut_ptr(), 32, -1);
-                    if nfds == -1 {
-                        if *libc::__errno_location() == libc::EINTR {
-                            continue;
-                        }
-                        break;
+        self.thread = Some(thread::spawn(move || unsafe {
+            let mut events: [epoll_event; 32] = std::mem::zeroed();
+            loop {
+                let nfds = epoll_wait(epoll_fd, events.as_mut_ptr(), 32, -1);
+                if nfds == -1 {
+                    if *libc::__errno_location() == libc::EINTR {
+                        continue;
                     }
+                    break;
+                }
 
-                    for i in 0..nfds {
-                        let ev = &events[i as usize];
-                        let fd = ev.u64 as RawFd;
+                for i in 0..nfds {
+                    let ev = &events[i as usize];
+                    let fd = ev.u64 as RawFd;
 
-                        if fd == event_fd {
-                            let mut val: u64 = 0;
-                            libc::read(event_fd, &mut val as *mut u64 as *mut c_void, 8);
+                    if fd == event_fd {
+                        let mut val: u64 = 0;
+                        libc::read(event_fd, &mut val as *mut u64 as *mut c_void, 8);
 
-                            let mut current_queue = VecDeque::new();
-                            {
-                                let mut q = queue.lock().unwrap();
-                                std::mem::swap(&mut current_queue, &mut q);
-                            }
+                        let mut current_queue = VecDeque::new();
+                        {
+                            let mut q = queue.lock().unwrap();
+                            std::mem::swap(&mut current_queue, &mut q);
+                        }
 
-                            if *cancel.lock().unwrap() {
-                                return;
-                            }
+                        if *cancel.lock().unwrap() {
+                            return;
+                        }
 
-                            for task in current_queue {
-                                task();
-                            }
-                        } else {
-                            let cb = {
-                                let cbs = callbacks.lock().unwrap();
-                                cbs.get(&fd).map(|(_, f)| f.clone())
-                            };
-                            if let Some(f) = cb {
-                                f(fd);
-                            }
+                        for task in current_queue {
+                            task();
+                        }
+                    } else {
+                        let cb = {
+                            let cbs = callbacks.lock().unwrap();
+                            cbs.get(&fd).map(|(_, f)| f.clone())
+                        };
+                        if let Some(f) = cb {
+                            f(fd);
                         }
                     }
                 }
@@ -114,15 +115,19 @@ impl NemQueuedLayer {
     }
 
     pub fn add_fd(&mut self, fd: RawFd, is_read: bool, cb: Arc<dyn Fn(RawFd) + Send + Sync>) {
-        let events = if is_read { EPOLLIN as u32 } else { EPOLLOUT as u32 };
+        let events = if is_read {
+            EPOLLIN as u32
+        } else {
+            EPOLLOUT as u32
+        };
         let mut callbacks = self.callbacks.lock().unwrap();
-        
+
         unsafe {
             let mut ev = epoll_event {
                 events,
                 u64: fd as u64,
             };
-            
+
             if callbacks.contains_key(&fd) {
                 epoll_ctl(self.epoll_fd, EPOLL_CTL_MOD, fd, &mut ev);
             } else {
@@ -160,7 +165,9 @@ pub extern "C" fn emane_rs_nem_queued_layer_new(id: u16) -> *mut NemQueuedLayer 
 #[no_mangle]
 pub extern "C" fn emane_rs_nem_queued_layer_free(ptr: *mut NemQueuedLayer) {
     if !ptr.is_null() {
-        unsafe { drop(Box::from_raw(ptr)); }
+        unsafe {
+            drop(Box::from_raw(ptr));
+        }
     }
 }
 
@@ -200,7 +207,11 @@ pub extern "C" fn emane_rs_nem_queued_layer_enqueue(
             (self.execute)(self.context);
         }
     }
-    let task = CTask { execute, context, destroy };
+    let task = CTask {
+        execute,
+        context,
+        destroy,
+    };
     layer.enqueue(Box::new(move || {
         task.call();
     }));
@@ -233,17 +244,22 @@ pub extern "C" fn emane_rs_nem_queued_layer_add_fd(
             (self.execute)(f, self.context);
         }
     }
-    let task = CFdTask { execute, context, destroy };
-    layer.add_fd(fd, is_read, Arc::new(move |f| {
-        task.call(f);
-    }));
+    let task = CFdTask {
+        execute,
+        context,
+        destroy,
+    };
+    layer.add_fd(
+        fd,
+        is_read,
+        Arc::new(move |f| {
+            task.call(f);
+        }),
+    );
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_nem_queued_layer_remove_fd(
-    ptr: *mut NemQueuedLayer,
-    fd: i32,
-) {
+pub extern "C" fn emane_rs_nem_queued_layer_remove_fd(ptr: *mut NemQueuedLayer, fd: i32) {
     let layer = unsafe { &mut *ptr };
     layer.remove_fd(fd);
 }

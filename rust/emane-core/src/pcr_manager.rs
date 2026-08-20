@@ -24,7 +24,8 @@ impl PCRManager {
 
     pub fn load(&mut self, uri: &str) -> Result<(), String> {
         let content = fs::read_to_string(uri).map_err(|e| format!("Failed to read file: {}", e))?;
-        let doc = roxmltree::Document::parse(&content).map_err(|e| format!("Failed to parse XML: {}", e))?;
+        let doc = roxmltree::Document::parse(&content)
+            .map_err(|e| format!("Failed to parse XML: {}", e))?;
 
         self.pcr_entry_vector.clear();
         self.por_vector.clear();
@@ -39,8 +40,10 @@ impl PCRManager {
 
                         for row in child.children() {
                             if row.has_tag_name("row") {
-                                let sinr: f32 = row.attribute("sinr").unwrap_or("0").parse().unwrap_or(0.0);
-                                let por_percent: f32 = row.attribute("por").unwrap_or("0").parse().unwrap_or(0.0);
+                                let sinr: f32 =
+                                    row.attribute("sinr").unwrap_or("0").parse().unwrap_or(0.0);
+                                let por_percent: f32 =
+                                    row.attribute("por").unwrap_or("0").parse().unwrap_or(0.0);
                                 let por = por_percent / 100.0;
 
                                 if let Some(last) = self.pcr_entry_vector.last() {
@@ -81,7 +84,8 @@ impl PCRManager {
             }
         }
 
-        self.por_vector.push(self.pcr_entry_vector.last().unwrap().por);
+        self.por_vector
+            .push(self.pcr_entry_vector.last().unwrap().por);
     }
 
     pub fn get_pcr(&self, sinr: f32, packet_len: usize) -> f32 {

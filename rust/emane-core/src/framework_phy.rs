@@ -1,5 +1,5 @@
-use std::os::raw::c_void;
 use std::collections::HashSet;
+use std::os::raw::c_void;
 
 pub struct FrameworkPhy {
     pub cpp_this: *mut c_void,
@@ -115,20 +115,27 @@ impl FrameworkPhy {
         unsafe {
             // Emulate processUpstreamPacket_i
             emane_c_framework_phy_common_layer_statistics_process_inbound(self.cpp_this, pkt);
-            
+
             let is_in_band = emane_c_framework_phy_check_in_band(self.cpp_this, common_phy_header);
-            
+
             if self.compatibility_mode == 1 {
                 emane_c_framework_phy_create_default_antenna_if_needed(self.cpp_this);
             } else {
-                let rx_processors_empty = emane_c_framework_phy_receive_processors_is_empty(self.cpp_this);
+                let rx_processors_empty =
+                    emane_c_framework_phy_receive_processors_is_empty(self.cpp_this);
                 if rx_processors_empty {
-                    emane_c_framework_phy_common_layer_statistics_process_outbound_drop(self.cpp_this, pkt, 3); // DROP_CODE_MISSING_CONTROL
+                    emane_c_framework_phy_common_layer_statistics_process_outbound_drop(
+                        self.cpp_this,
+                        pkt,
+                        3,
+                    ); // DROP_CODE_MISSING_CONTROL
                     return;
                 }
             }
 
-            if is_in_band || self.noise_mode != 0 /* NONE */ {
+            if is_in_band || self.noise_mode != 0
+            /* NONE */
+            {
                 // FFI stub for the large receiveProcessor loop and result processing
                 let dropped = emane_c_framework_phy_process_receive_processors(
                     self.cpp_this,
@@ -136,13 +143,17 @@ impl FrameworkPhy {
                     pkt,
                     is_in_band,
                 );
-                
+
                 if !dropped {
                     // It will handle sendUpstreamPacket internally in the stub
                     // or we can stub the end
                 }
             } else {
-                emane_c_framework_phy_common_layer_statistics_process_outbound_drop(self.cpp_this, pkt, 4); // DROP_CODE_OUT_OF_BAND
+                emane_c_framework_phy_common_layer_statistics_process_outbound_drop(
+                    self.cpp_this,
+                    pkt,
+                    4,
+                ); // DROP_CODE_OUT_OF_BAND
                 return;
             }
         }
@@ -153,17 +164,33 @@ extern "C" {
     fn emane_c_framework_phy_initialize_stub(registrar: *mut c_void);
     fn emane_c_framework_phy_configure_stub(update: *mut c_void);
 
-    fn emane_c_framework_phy_common_layer_statistics_process_inbound(phy: *mut c_void, pkt: *mut c_void);
-    fn emane_c_framework_phy_common_layer_statistics_process_outbound_drop(phy: *mut c_void, pkt: *mut c_void, drop_code: u32);
+    fn emane_c_framework_phy_common_layer_statistics_process_inbound(
+        phy: *mut c_void,
+        pkt: *mut c_void,
+    );
+    fn emane_c_framework_phy_common_layer_statistics_process_outbound_drop(
+        phy: *mut c_void,
+        pkt: *mut c_void,
+        drop_code: u32,
+    );
     fn emane_c_framework_phy_check_in_band(phy: *mut c_void, header: *mut c_void) -> bool;
     fn emane_c_framework_phy_create_default_antenna_if_needed(phy: *mut c_void);
     fn emane_c_framework_phy_receive_processors_is_empty(phy: *mut c_void) -> bool;
-    fn emane_c_framework_phy_process_receive_processors(phy: *mut c_void, header: *mut c_void, pkt: *mut c_void, in_band: bool) -> bool;
+    fn emane_c_framework_phy_process_receive_processors(
+        phy: *mut c_void,
+        header: *mut c_void,
+        pkt: *mut c_void,
+        in_band: bool,
+    ) -> bool;
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_framework_phy_create(cpp_this: *mut c_void) -> *mut c_void {
-    Box::into_raw(Box::new({ let mut phy = FrameworkPhy::new(); phy.cpp_this = cpp_this; phy })) as *mut c_void
+    Box::into_raw(Box::new({
+        let mut phy = FrameworkPhy::new();
+        phy.cpp_this = cpp_this;
+        phy
+    })) as *mut c_void
 }
 
 #[no_mangle]

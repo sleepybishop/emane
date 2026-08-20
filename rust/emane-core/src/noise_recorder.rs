@@ -1,7 +1,5 @@
-
-use std::collections::{BTreeMap, HashMap};
 use std::cmp;
-use std::ffi::c_void;
+use std::collections::{BTreeMap, HashMap};
 
 pub struct Wheel {
     slots: usize,
@@ -161,7 +159,9 @@ fn frequency_overlap_ratio(
     let mut u64_upper_overlap_frequency_hz = 0;
     let mut d_ratio = 0.0;
 
-    if u64_lower_frequency_hz2 < u64_upper_frequency_hz1 && u64_upper_frequency_hz2 > u64_lower_frequency_hz1 {
+    if u64_lower_frequency_hz2 < u64_upper_frequency_hz1
+        && u64_upper_frequency_hz2 > u64_lower_frequency_hz1
+    {
         if u64_lower_frequency_hz2 >= u64_lower_frequency_hz1 {
             u64_lower_overlap_frequency_hz = u64_lower_frequency_hz2;
             if u64_upper_frequency_hz2 <= u64_upper_frequency_hz1 {
@@ -169,21 +169,28 @@ fn frequency_overlap_ratio(
                 d_ratio = 1.0;
             } else {
                 u64_upper_overlap_frequency_hz = u64_upper_frequency_hz1;
-                d_ratio = (u64_upper_frequency_hz1 - u64_lower_frequency_hz2) as f64 / u64_bandwidth_hz2 as f64;
+                d_ratio = (u64_upper_frequency_hz1 - u64_lower_frequency_hz2) as f64
+                    / u64_bandwidth_hz2 as f64;
             }
         } else {
             u64_lower_overlap_frequency_hz = u64_lower_frequency_hz1;
             if u64_upper_frequency_hz2 <= u64_upper_frequency_hz1 {
                 u64_upper_overlap_frequency_hz = u64_upper_frequency_hz2;
-                d_ratio = (u64_upper_frequency_hz2 - u64_lower_frequency_hz1) as f64 / u64_bandwidth_hz2 as f64;
+                d_ratio = (u64_upper_frequency_hz2 - u64_lower_frequency_hz1) as f64
+                    / u64_bandwidth_hz2 as f64;
             } else {
                 u64_upper_overlap_frequency_hz = u64_upper_frequency_hz1;
-                d_ratio = (u64_upper_frequency_hz1 - u64_lower_frequency_hz1) as f64 / u64_bandwidth_hz2 as f64;
+                d_ratio = (u64_upper_frequency_hz1 - u64_lower_frequency_hz1) as f64
+                    / u64_bandwidth_hz2 as f64;
             }
         }
     }
 
-    (d_ratio, u64_lower_overlap_frequency_hz, u64_upper_overlap_frequency_hz)
+    (
+        d_ratio,
+        u64_lower_overlap_frequency_hz,
+        u64_upper_overlap_frequency_hz,
+    )
 }
 
 impl NoiseRecorder {
@@ -200,14 +207,16 @@ impl NoiseRecorder {
         let total_window_bins = max_duration / bin;
         let total_wheel_bins = (max_offset + max_propagation + 2 * max_duration) / bin;
         let u64_band_start_frequency_hz = u64_frequency_hz - (u64_bandwidth_hz as f64 / 2.0) as u64;
-        
+
         let total_sub_band_bins = if u64_bandwidth_bin_size_hz > 0 {
             ((u64_bandwidth_hz as f64 / u64_bandwidth_bin_size_hz as f64).ceil() as usize) + 1
         } else {
             1
         };
 
-        let u64_band_end_frequency_hz = u64_band_start_frequency_hz + (total_sub_band_bins as u64) * u64_bandwidth_bin_size_hz - 1;
+        let u64_band_end_frequency_hz = u64_band_start_frequency_hz
+            + (total_sub_band_bins as u64) * u64_bandwidth_bin_size_hz
+            - 1;
 
         Self {
             total_window_bins,
@@ -230,7 +239,12 @@ impl NoiseRecorder {
         if tp_micros == 0 {
             0
         } else {
-            tp_micros / self.bin_size_microseconds - if adjust && (tp_micros % self.bin_size_microseconds == 0) { 1 } else { 0 }
+            tp_micros / self.bin_size_microseconds
+                - if adjust && (tp_micros % self.bin_size_microseconds == 0) {
+                    1
+                } else {
+                    0
+                }
         }
     }
 
@@ -263,10 +277,14 @@ impl NoiseRecorder {
 
         if self.u64_bandwidth_bin_size_hz > 0 {
             if u64_start_frequency_hz > self.u64_band_start_frequency_hz {
-                sub_band_bin_start = ((u64_start_frequency_hz - self.u64_band_start_frequency_hz) / self.u64_bandwidth_bin_size_hz) as usize;
+                sub_band_bin_start = ((u64_start_frequency_hz - self.u64_band_start_frequency_hz)
+                    / self.u64_bandwidth_bin_size_hz) as usize;
             }
             if u64_end_frequency_hz < self.u64_band_end_frequency_hz {
-                sub_band_bin_end = self.total_sub_band_bins - 1 - ((self.u64_band_end_frequency_hz - u64_end_frequency_hz) / self.u64_bandwidth_bin_size_hz) as usize;
+                sub_band_bin_end = self.total_sub_band_bins
+                    - 1
+                    - ((self.u64_band_end_frequency_hz - u64_end_frequency_hz)
+                        / self.u64_bandwidth_bin_size_hz) as usize;
             }
 
             sub_band_bins = sub_band_bin_end - sub_band_bin_start + 1;
@@ -280,12 +298,14 @@ impl NoiseRecorder {
                 let mut is_pending = false;
 
                 for bin in sub_band_bin_start..=sub_band_bin_end {
-                    let u64_bin_start_frequency_hz = (bin as u64) * self.u64_bandwidth_bin_size_hz + self.u64_band_start_frequency_hz;
+                    let u64_bin_start_frequency_hz = (bin as u64) * self.u64_bandwidth_bin_size_hz
+                        + self.u64_band_start_frequency_hz;
 
                     let (d_overlap_ratio, _, _) = frequency_overlap_ratio(
                         u64_bin_start_frequency_hz + self.u64_bandwidth_bin_size_hz / 2,
                         self.u64_bandwidth_bin_size_hz,
-                        u64_start_frequency_hz + (u64_end_frequency_hz - u64_start_frequency_hz) / 2,
+                        u64_start_frequency_hz
+                            + (u64_end_frequency_hz - u64_start_frequency_hz) / 2,
                         u64_end_frequency_hz - u64_start_frequency_hz,
                     );
 
@@ -343,20 +363,26 @@ impl NoiseRecorder {
 
             if self.min_start_of_reception_bin > 0 && self.max_end_of_reception_bin > 0 {
                 if end_of_reception_bin < self.min_start_of_reception_bin {
-                    gap_bin_duration_count = self.min_start_of_reception_bin - end_of_reception_bin - 1;
+                    gap_bin_duration_count =
+                        self.min_start_of_reception_bin - end_of_reception_bin - 1;
                     before_min_sor_bin_duration_count = duration_bin_count;
                 } else if start_of_reception_bin > self.max_end_of_reception_bin {
-                    gap_bin_duration_count = start_of_reception_bin - self.max_end_of_reception_bin - 1;
+                    gap_bin_duration_count =
+                        start_of_reception_bin - self.max_end_of_reception_bin - 1;
                     after_max_eor_bin_duration_count = duration_bin_count;
                     start_index = self.max_end_of_reception_bin + 1;
                 } else {
                     if start_of_reception_bin < self.min_start_of_reception_bin {
-                        before_min_sor_bin_duration_count = self.min_start_of_reception_bin - start_of_reception_bin;
+                        before_min_sor_bin_duration_count =
+                            self.min_start_of_reception_bin - start_of_reception_bin;
                     }
                     if end_of_reception_bin > self.max_end_of_reception_bin {
-                        after_max_eor_bin_duration_count = end_of_reception_bin - self.max_end_of_reception_bin;
+                        after_max_eor_bin_duration_count =
+                            end_of_reception_bin - self.max_end_of_reception_bin;
                     }
-                    within_min_sor_max_eor_bin_count = duration_bin_count - before_min_sor_bin_duration_count - after_max_eor_bin_duration_count;
+                    within_min_sor_max_eor_bin_count = duration_bin_count
+                        - before_min_sor_bin_duration_count
+                        - after_max_eor_bin_duration_count;
                 }
             } else {
                 before_min_sor_bin_duration_count = duration_bin_count;
@@ -371,19 +397,20 @@ impl NoiseRecorder {
                         gap_bin_duration_count as usize,
                         0.0,
                         0,
-                        self.total_sub_band_bins
+                        self.total_sub_band_bins,
                     );
                 }
 
                 if before_min_sor_bin_duration_count > 0 || after_max_eor_bin_duration_count > 0 {
-                    let clear_count = before_min_sor_bin_duration_count + after_max_eor_bin_duration_count;
-                    
+                    let clear_count =
+                        before_min_sor_bin_duration_count + after_max_eor_bin_duration_count;
+
                     self.wheel.set(
                         (start_index) as usize % self.total_wheel_bins as usize,
                         clear_count as usize,
                         0.0,
                         0,
-                        self.total_sub_band_bins
+                        self.total_sub_band_bins,
                     );
 
                     if self.total_sub_band_bins > 1 {
@@ -391,24 +418,26 @@ impl NoiseRecorder {
                         let applies = self.bin_power_apply_map.get(&key).unwrap().clone();
                         for &(start, end, multi) in &applies {
                             let val = d_rx_power * multi;
-                            
+
                             if before_min_sor_bin_duration_count > 0 {
                                 self.wheel.add(
-                                    (start_of_reception_bin) as usize % self.total_wheel_bins as usize,
+                                    (start_of_reception_bin) as usize
+                                        % self.total_wheel_bins as usize,
                                     before_min_sor_bin_duration_count as usize,
                                     val,
                                     start,
-                                    end - start + 1
+                                    end - start + 1,
                                 );
                             }
 
                             if after_max_eor_bin_duration_count > 0 {
                                 self.wheel.add(
-                                    (self.max_end_of_reception_bin + 1) as usize % self.total_wheel_bins as usize,
+                                    (self.max_end_of_reception_bin + 1) as usize
+                                        % self.total_wheel_bins as usize,
                                     after_max_eor_bin_duration_count as usize,
                                     val,
                                     start,
-                                    end - start + 1
+                                    end - start + 1,
                                 );
                             }
                         }
@@ -419,17 +448,18 @@ impl NoiseRecorder {
                                 before_min_sor_bin_duration_count as usize,
                                 d_rx_power,
                                 sub_band_bin_start,
-                                sub_band_bins
+                                sub_band_bins,
                             );
                         }
 
                         if after_max_eor_bin_duration_count > 0 {
                             self.wheel.add(
-                                (self.max_end_of_reception_bin + 1) as usize % self.total_wheel_bins as usize,
+                                (self.max_end_of_reception_bin + 1) as usize
+                                    % self.total_wheel_bins as usize,
                                 after_max_eor_bin_duration_count as usize,
                                 d_rx_power,
                                 sub_band_bin_start,
-                                sub_band_bins
+                                sub_band_bins,
                             );
                         }
                     }
@@ -442,40 +472,46 @@ impl NoiseRecorder {
                         for &(start, end, multi) in &applies {
                             let val = d_rx_power * multi;
                             self.wheel.add(
-                                (start_index + before_min_sor_bin_duration_count) as usize % self.total_wheel_bins as usize,
+                                (start_index + before_min_sor_bin_duration_count) as usize
+                                    % self.total_wheel_bins as usize,
                                 within_min_sor_max_eor_bin_count as usize,
                                 val,
                                 start,
-                                end - start + 1
+                                end - start + 1,
                             );
                         }
                     } else {
                         self.wheel.add(
-                            (start_index + before_min_sor_bin_duration_count) as usize % self.total_wheel_bins as usize,
+                            (start_index + before_min_sor_bin_duration_count) as usize
+                                % self.total_wheel_bins as usize,
                             within_min_sor_max_eor_bin_count as usize,
                             d_rx_power,
                             sub_band_bin_start,
-                            sub_band_bins
+                            sub_band_bins,
                         );
                     }
                 }
             } else {
                 if before_min_sor_bin_duration_count > 0 {
                     self.wheel.set(
-                        (start_index + before_min_sor_bin_duration_count) as usize % self.total_wheel_bins as usize,
-                        (self.min_start_of_reception_bin - (start_of_reception_bin + before_min_sor_bin_duration_count)) as usize,
+                        (start_index + before_min_sor_bin_duration_count) as usize
+                            % self.total_wheel_bins as usize,
+                        (self.min_start_of_reception_bin
+                            - (start_of_reception_bin + before_min_sor_bin_duration_count))
+                            as usize,
                         0.0,
                         0,
-                        self.total_sub_band_bins
+                        self.total_sub_band_bins,
                     );
                 }
                 if after_max_eor_bin_duration_count > 0 {
                     self.wheel.set(
-                        (self.max_end_of_reception_bin + 1) as usize % self.total_wheel_bins as usize,
+                        (self.max_end_of_reception_bin + 1) as usize
+                            % self.total_wheel_bins as usize,
                         (start_of_reception_bin - self.max_end_of_reception_bin - 1) as usize,
                         0.0,
                         0,
-                        self.total_sub_band_bins
+                        self.total_sub_band_bins,
                     );
                 }
             }
@@ -490,7 +526,10 @@ impl NoiseRecorder {
 
         if !b_is_more {
             for &transmitter in transmitters {
-                let map = self.nem_antenna_index_eor_bin_map.entry(transmitter).or_insert_with(HashMap::new);
+                let map = self
+                    .nem_antenna_index_eor_bin_map
+                    .entry(transmitter)
+                    .or_insert_with(HashMap::new);
                 map.insert(tx_antenna_index, end_of_reception_bin);
             }
         }
@@ -500,12 +539,14 @@ impl NoiseRecorder {
 
     pub fn get(&self, now: i64, duration: i64, start_time: i64) -> (Vec<f64>, i64) {
         let now_bin = self.timepoint_to_bin(now, true);
-        let min_start_of_window_time = (now_bin - self.total_window_bins + 1) * self.bin_size_microseconds;
+        let min_start_of_window_time =
+            (now_bin - self.total_window_bins + 1) * self.bin_size_microseconds;
 
         let mut valid_start_time = start_time;
         let valid_duration = duration;
 
-        if valid_start_time == -9223372036854775808 { // TIMEPOINT_MIN conceptually
+        if valid_start_time == -9223372036854775808 {
+            // TIMEPOINT_MIN conceptually
             valid_start_time = min_start_of_window_time;
         } else if valid_start_time < min_start_of_window_time {
             panic!("window start time too far in the past");
@@ -536,26 +577,47 @@ impl NoiseRecorder {
                 let mut after_duration_count = 0;
 
                 if end_time_bin > self.max_end_of_reception_bin {
-                    after_duration_count = cmp::min(end_time_bin - self.max_end_of_reception_bin, duration_bin_count);
+                    after_duration_count = cmp::min(
+                        end_time_bin - self.max_end_of_reception_bin,
+                        duration_bin_count,
+                    );
                 }
 
                 if start_time_bin < self.min_start_of_reception_bin {
-                    before_duration_count = cmp::min(self.min_start_of_reception_bin - start_time_bin, duration_bin_count);
+                    before_duration_count = cmp::min(
+                        self.min_start_of_reception_bin - start_time_bin,
+                        duration_bin_count,
+                    );
                 }
 
-                let remainder_bin_count = duration_bin_count - (before_duration_count + after_duration_count);
+                let remainder_bin_count =
+                    duration_bin_count - (before_duration_count + after_duration_count);
 
                 let mut mid_window = Vec::new();
                 if remainder_bin_count > 0 {
-                    mid_window = self.wheel.get(((end_time_bin - after_duration_count) % self.total_wheel_bins) as usize, remainder_bin_count as usize);
+                    mid_window = self.wheel.get(
+                        ((end_time_bin - after_duration_count) % self.total_wheel_bins) as usize,
+                        remainder_bin_count as usize,
+                    );
                 }
 
                 window.reserve((duration_bin_count as usize) * self.total_sub_band_bins);
-                window.extend(vec![0.0; (before_duration_count as usize) * self.total_sub_band_bins]);
+                window.extend(vec![
+                    0.0;
+                    (before_duration_count as usize)
+                        * self.total_sub_band_bins
+                ]);
                 window.extend(mid_window);
-                window.extend(vec![0.0; (after_duration_count as usize) * self.total_sub_band_bins]);
+                window.extend(vec![
+                    0.0;
+                    (after_duration_count as usize)
+                        * self.total_sub_band_bins
+                ]);
             } else {
-                window.extend(vec![0.0; (duration_bin_count as usize) * self.total_sub_band_bins]);
+                window.extend(vec![
+                    0.0;
+                    (duration_bin_count as usize) * self.total_sub_band_bins
+                ]);
             }
         } else {
             panic!("window start time invalid");
@@ -600,7 +662,9 @@ pub extern "C" fn emane_rs_noise_recorder_new(
 #[no_mangle]
 pub extern "C" fn emane_rs_noise_recorder_free(ptr: *mut NoiseRecorder) {
     if !ptr.is_null() {
-        unsafe { let _ = Box::from_raw(ptr); }
+        unsafe {
+            let _ = Box::from_raw(ptr);
+        }
     }
 }
 
@@ -622,10 +686,12 @@ pub extern "C" fn emane_rs_noise_recorder_update(
     out_sor: *mut i64,
     out_eor: *mut i64,
 ) {
-    if ptr.is_null() { return; }
+    if ptr.is_null() {
+        return;
+    }
     let recorder = unsafe { &mut *ptr };
     let transmitters = unsafe { std::slice::from_raw_parts(transmitters_ptr, transmitters_len) };
-    
+
     let (sor, eor) = recorder.update(
         now,
         tx_time,
@@ -640,10 +706,14 @@ pub extern "C" fn emane_rs_noise_recorder_update(
         b_is_more,
     );
     if !out_sor.is_null() {
-        unsafe { *out_sor = sor; }
+        unsafe {
+            *out_sor = sor;
+        }
     }
     if !out_eor.is_null() {
-        unsafe { *out_eor = eor; }
+        unsafe {
+            *out_eor = eor;
+        }
     }
 }
 
@@ -662,7 +732,11 @@ pub extern "C" fn emane_rs_noise_recorder_get(
     start_time: i64,
 ) -> EmaneRsNoiseWindowResult {
     if ptr.is_null() {
-        return EmaneRsNoiseWindowResult { data: std::ptr::null_mut(), length: 0, start_of_window_time: 0 };
+        return EmaneRsNoiseWindowResult {
+            data: std::ptr::null_mut(),
+            length: 0,
+            start_of_window_time: 0,
+        };
     }
     let recorder = unsafe { &*ptr };
     let (mut vec, time) = recorder.get(now, duration, start_time);
@@ -687,16 +761,27 @@ pub extern "C" fn emane_rs_noise_recorder_free_window(ptr: *mut f64, len: usize)
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_noise_recorder_get_sub_band_bin_count(ptr: *const NoiseRecorder) -> usize {
-    if ptr.is_null() { return 0; }
+pub extern "C" fn emane_rs_noise_recorder_get_sub_band_bin_count(
+    ptr: *const NoiseRecorder,
+) -> usize {
+    if ptr.is_null() {
+        return 0;
+    }
     let recorder = unsafe { &*ptr };
     recorder.get_sub_band_bin_count()
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_noise_recorder_dump(ptr: *const NoiseRecorder, out_len: *mut usize) -> *mut f64 {
+pub extern "C" fn emane_rs_noise_recorder_dump(
+    ptr: *const NoiseRecorder,
+    out_len: *mut usize,
+) -> *mut f64 {
     if ptr.is_null() {
-        if !out_len.is_null() { unsafe { *out_len = 0; } }
+        if !out_len.is_null() {
+            unsafe {
+                *out_len = 0;
+            }
+        }
         return std::ptr::null_mut();
     }
     let recorder = unsafe { &*ptr };
@@ -704,7 +789,9 @@ pub extern "C" fn emane_rs_noise_recorder_dump(ptr: *const NoiseRecorder, out_le
     vec.shrink_to_fit();
     let length = vec.len();
     if !out_len.is_null() {
-        unsafe { *out_len = length; }
+        unsafe {
+            *out_len = length;
+        }
     }
     let data = vec.as_mut_ptr();
     std::mem::forget(vec);

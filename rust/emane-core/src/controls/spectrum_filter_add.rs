@@ -143,4 +143,3 @@ pub unsafe extern "C" fn emane_spectrum_filter_add_control_message_get_filter_ma
 ) -> *const c_void {
     (*msg).filter_match_criterion
 }
-

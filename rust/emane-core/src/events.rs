@@ -1,6 +1,5 @@
 use crate::protobufs::emane_message;
 use prost::Message;
-use std::os::raw::c_void;
 use std::slice;
 
 #[repr(C)]
@@ -17,18 +16,19 @@ pub extern "C" fn emane_rs_pathloss_event_serialize(
     out_len: *mut usize,
 ) -> *mut u8 {
     let mut msg = emane_message::PathlossEvent::default();
-    
+
     if num_pathlosses > 0 && !pathlosses.is_null() {
         let slice = unsafe { slice::from_raw_parts(pathlosses, num_pathlosses) };
         for p in slice {
-            msg.pathlosses.push(emane_message::pathloss_event::Pathloss {
-                nem_id: p.nem_id,
-                forward_pathlossd_b: p.forward_pathloss_db,
-                reverse_pathlossd_b: p.reverse_pathloss_db,
-            });
+            msg.pathlosses
+                .push(emane_message::pathloss_event::Pathloss {
+                    nem_id: p.nem_id,
+                    forward_pathlossd_b: p.forward_pathloss_db,
+                    reverse_pathlossd_b: p.reverse_pathloss_db,
+                });
         }
     }
-    
+
     let mut buf = Vec::with_capacity(msg.encoded_len());
     if msg.encode(&mut buf).is_ok() {
         let mut boxed = buf.into_boxed_slice();
@@ -61,7 +61,7 @@ pub extern "C" fn emane_rs_pathloss_event_deserialize(
     if buf.is_null() || len == 0 {
         return false;
     }
-    
+
     let slice = unsafe { slice::from_raw_parts(buf, len) };
     if let Ok(msg) = emane_message::PathlossEvent::decode(slice) {
         let mut vec = Vec::with_capacity(msg.pathlosses.len());
@@ -72,9 +72,9 @@ pub extern "C" fn emane_rs_pathloss_event_deserialize(
                 reverse_pathloss_db: p.reverse_pathlossd_b,
             });
         }
-        
+
         let mut boxed = vec.into_boxed_slice();
-        unsafe { 
+        unsafe {
             *out_num = boxed.len();
             *out_pathlosses = boxed.as_mut_ptr();
         }
@@ -109,19 +109,20 @@ pub extern "C" fn emane_rs_antennaprofile_event_serialize(
     out_len: *mut usize,
 ) -> *mut u8 {
     let mut msg = emane_message::AntennaProfileEvent::default();
-    
+
     if num_items > 0 && !items.is_null() {
         let slice = unsafe { slice::from_raw_parts(items, num_items) };
         for p in slice {
-            msg.profiles.push(emane_message::antenna_profile_event::Profile {
-                nem_id: p.nem_id,
-                profile_id: p.profile_id,
-                antenna_azimuth_degrees: p.antenna_azimuth_degrees,
-                antenna_elevation_degrees: p.antenna_elevation_degrees,
-            });
+            msg.profiles
+                .push(emane_message::antenna_profile_event::Profile {
+                    nem_id: p.nem_id,
+                    profile_id: p.profile_id,
+                    antenna_azimuth_degrees: p.antenna_azimuth_degrees,
+                    antenna_elevation_degrees: p.antenna_elevation_degrees,
+                });
         }
     }
-    
+
     let mut buf = Vec::with_capacity(msg.encoded_len());
     if msg.encode(&mut buf).is_ok() {
         let mut boxed = buf.into_boxed_slice();
@@ -153,7 +154,7 @@ pub extern "C" fn emane_rs_antennaprofile_event_deserialize(
     if buf.is_null() || len == 0 {
         return false;
     }
-    
+
     let slice = unsafe { slice::from_raw_parts(buf, len) };
     if let Ok(msg) = emane_message::AntennaProfileEvent::decode(slice) {
         let mut vec = Vec::with_capacity(msg.profiles.len());
@@ -165,9 +166,9 @@ pub extern "C" fn emane_rs_antennaprofile_event_deserialize(
                 antenna_elevation_degrees: p.antenna_elevation_degrees,
             });
         }
-        
+
         let mut boxed = vec.into_boxed_slice();
-        unsafe { 
+        unsafe {
             *out_num = boxed.len();
             *out_items = boxed.as_mut_ptr();
         }
@@ -179,7 +180,10 @@ pub extern "C" fn emane_rs_antennaprofile_event_deserialize(
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_antennaprofile_event_free_deserialize(ptr: *mut EmaneRsAntennaProfile, len: usize) {
+pub extern "C" fn emane_rs_antennaprofile_event_free_deserialize(
+    ptr: *mut EmaneRsAntennaProfile,
+    len: usize,
+) {
     if !ptr.is_null() {
         unsafe {
             drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)));
@@ -205,22 +209,23 @@ pub extern "C" fn emane_rs_commeffect_event_serialize(
     out_len: *mut usize,
 ) -> *mut u8 {
     let mut msg = emane_message::CommEffectEvent::default();
-    
+
     if num_items > 0 && !items.is_null() {
         let slice = unsafe { slice::from_raw_parts(items, num_items) };
         for p in slice {
-            msg.comm_effects.push(emane_message::comm_effect_event::CommEffect {
-                nem_id: p.nem_id,
-                latency_seconds: p.latency_seconds,
-                jitter_seconds: p.jitter_seconds,
-                probability_loss: p.probability_loss,
-                probability_duplicate: p.probability_duplicate,
-                unicast_bit_ratebps: p.unicast_bit_rate_bps,
-                broadcast_bit_ratebps: p.broadcast_bit_rate_bps,
-            });
+            msg.comm_effects
+                .push(emane_message::comm_effect_event::CommEffect {
+                    nem_id: p.nem_id,
+                    latency_seconds: p.latency_seconds,
+                    jitter_seconds: p.jitter_seconds,
+                    probability_loss: p.probability_loss,
+                    probability_duplicate: p.probability_duplicate,
+                    unicast_bit_ratebps: p.unicast_bit_rate_bps,
+                    broadcast_bit_ratebps: p.broadcast_bit_rate_bps,
+                });
         }
     }
-    
+
     let mut buf = Vec::with_capacity(msg.encoded_len());
     if msg.encode(&mut buf).is_ok() {
         let mut boxed = buf.into_boxed_slice();
@@ -252,7 +257,7 @@ pub extern "C" fn emane_rs_commeffect_event_deserialize(
     if buf.is_null() || len == 0 {
         return false;
     }
-    
+
     let slice = unsafe { slice::from_raw_parts(buf, len) };
     if let Ok(msg) = emane_message::CommEffectEvent::decode(slice) {
         let mut vec = Vec::with_capacity(msg.comm_effects.len());
@@ -267,9 +272,9 @@ pub extern "C" fn emane_rs_commeffect_event_deserialize(
                 broadcast_bit_rate_bps: p.broadcast_bit_ratebps,
             });
         }
-        
+
         let mut boxed = vec.into_boxed_slice();
-        unsafe { 
+        unsafe {
             *out_num = boxed.len();
             *out_items = boxed.as_mut_ptr();
         }
@@ -281,7 +286,10 @@ pub extern "C" fn emane_rs_commeffect_event_deserialize(
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_commeffect_event_free_deserialize(ptr: *mut EmaneRsCommEffect, len: usize) {
+pub extern "C" fn emane_rs_commeffect_event_free_deserialize(
+    ptr: *mut EmaneRsCommEffect,
+    len: usize,
+) {
     if !ptr.is_null() {
         unsafe {
             drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)));
@@ -302,17 +310,18 @@ pub extern "C" fn emane_rs_fadingselection_event_serialize(
     out_len: *mut usize,
 ) -> *mut u8 {
     let mut msg = emane_message::FadingSelectionEvent::default();
-    
+
     if num_items > 0 && !items.is_null() {
         let slice = unsafe { slice::from_raw_parts(items, num_items) };
         for p in slice {
-            msg.entries.push(emane_message::fading_selection_event::Entry {
-                nem_id: p.nem_id,
-                model: p.model,
-            });
+            msg.entries
+                .push(emane_message::fading_selection_event::Entry {
+                    nem_id: p.nem_id,
+                    model: p.model,
+                });
         }
     }
-    
+
     let mut buf = Vec::with_capacity(msg.encoded_len());
     if msg.encode(&mut buf).is_ok() {
         let mut boxed = buf.into_boxed_slice();
@@ -344,7 +353,7 @@ pub extern "C" fn emane_rs_fadingselection_event_deserialize(
     if buf.is_null() || len == 0 {
         return false;
     }
-    
+
     let slice = unsafe { slice::from_raw_parts(buf, len) };
     if let Ok(msg) = emane_message::FadingSelectionEvent::decode(slice) {
         let mut vec = Vec::with_capacity(msg.entries.len());
@@ -354,9 +363,9 @@ pub extern "C" fn emane_rs_fadingselection_event_deserialize(
                 model: p.model,
             });
         }
-        
+
         let mut boxed = vec.into_boxed_slice();
-        unsafe { 
+        unsafe {
             *out_num = boxed.len();
             *out_items = boxed.as_mut_ptr();
         }
@@ -368,7 +377,10 @@ pub extern "C" fn emane_rs_fadingselection_event_deserialize(
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_fadingselection_event_free_deserialize(ptr: *mut EmaneRsFadingSelection, len: usize) {
+pub extern "C" fn emane_rs_fadingselection_event_free_deserialize(
+    ptr: *mut EmaneRsFadingSelection,
+    len: usize,
+) {
     if !ptr.is_null() {
         unsafe {
             drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)));
@@ -396,7 +408,7 @@ pub extern "C" fn emane_rs_pathlossex_event_serialize(
     out_len: *mut usize,
 ) -> *mut u8 {
     let mut msg = emane_message::PathlossExEvent::default();
-    
+
     if num_items > 0 && !items.is_null() {
         let slice = unsafe { std::slice::from_raw_parts(items, num_items) };
         for p in slice {
@@ -407,16 +419,18 @@ pub extern "C" fn emane_rs_pathlossex_event_serialize(
             if p.num_entries > 0 && !p.entries.is_null() {
                 let entry_slice = unsafe { std::slice::from_raw_parts(p.entries, p.num_entries) };
                 for e in entry_slice {
-                    pathloss.entries.push(emane_message::pathloss_ex_event::pathloss::Entry {
-                        frequency_hz: e.frequency_hz,
-                        pathlossd_b: e.pathloss_db,
-                    });
+                    pathloss
+                        .entries
+                        .push(emane_message::pathloss_ex_event::pathloss::Entry {
+                            frequency_hz: e.frequency_hz,
+                            pathlossd_b: e.pathloss_db,
+                        });
                 }
             }
             msg.pathlosses.push(pathloss);
         }
     }
-    
+
     let mut buf = Vec::with_capacity(prost::Message::encoded_len(&msg));
     if prost::Message::encode(&msg, &mut buf).is_ok() {
         let mut boxed = buf.into_boxed_slice();
@@ -454,7 +468,7 @@ pub extern "C" fn emane_rs_pathlossex_event_deserialize(
     if buf.is_null() || len == 0 {
         return false;
     }
-    
+
     let slice = unsafe { std::slice::from_raw_parts(buf, len) };
     if let Ok(msg) = <emane_message::PathlossExEvent as prost::Message>::decode(slice) {
         let mut vec = Vec::with_capacity(msg.pathlosses.len());
@@ -470,16 +484,16 @@ pub extern "C" fn emane_rs_pathlossex_event_deserialize(
             let entries_ptr = entries_boxed.as_mut_ptr();
             let entries_len = entries_boxed.len();
             std::mem::forget(entries_boxed);
-            
+
             vec.push(EmaneRsPathlossEx {
                 nem_id: p.nem_id,
                 entries: entries_ptr,
                 num_entries: entries_len,
             });
         }
-        
+
         let mut boxed = vec.into_boxed_slice();
-        unsafe { 
+        unsafe {
             *out_num = boxed.len();
             *out_items = boxed.as_mut_ptr();
         }
@@ -491,13 +505,19 @@ pub extern "C" fn emane_rs_pathlossex_event_deserialize(
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_pathlossex_event_free_deserialize(ptr: *mut EmaneRsPathlossEx, len: usize) {
+pub extern "C" fn emane_rs_pathlossex_event_free_deserialize(
+    ptr: *mut EmaneRsPathlossEx,
+    len: usize,
+) {
     if !ptr.is_null() {
         let slice = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
         for p in slice.iter() {
             if !p.entries.is_null() && p.num_entries > 0 {
                 unsafe {
-                    drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(p.entries as *mut EmaneRsPathlossExEntry, p.num_entries)));
+                    drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                        p.entries as *mut EmaneRsPathlossExEntry,
+                        p.num_entries,
+                    )));
                 }
             }
         }
@@ -545,11 +565,11 @@ pub extern "C" fn emane_rs_location_event_serialize(
     out_len: *mut usize,
 ) -> *mut u8 {
     let mut msg = emane_message::LocationEvent::default();
-    
+
     if num_items > 0 && !items.is_null() {
         let slice = unsafe { std::slice::from_raw_parts(items, num_items) };
         for p in slice {
-            let mut loc = emane_message::location_event::Location {
+            let loc = emane_message::location_event::Location {
                 nem_id: p.nem_id,
                 position: emane_message::location_event::location::Position {
                     latitude_degrees: p.position.latitude_degrees,
@@ -578,7 +598,7 @@ pub extern "C" fn emane_rs_location_event_serialize(
             msg.locations.push(loc);
         }
     }
-    
+
     let mut buf = Vec::with_capacity(prost::Message::encoded_len(&msg));
     if prost::Message::encode(&msg, &mut buf).is_ok() {
         let mut boxed = buf.into_boxed_slice();
@@ -610,21 +630,21 @@ pub extern "C" fn emane_rs_location_event_deserialize(
     if buf.is_null() || len == 0 {
         return false;
     }
-    
+
     let slice = unsafe { std::slice::from_raw_parts(buf, len) };
     if let Ok(msg) = <emane_message::LocationEvent as prost::Message>::decode(slice) {
         let mut vec = Vec::with_capacity(msg.locations.len());
         for p in msg.locations {
-             // required field, so we can access directly if the proto had it required (prost generated struct has it as T not Option<T> for required in proto2)
+            // required field, so we can access directly if the proto had it required (prost generated struct has it as T not Option<T> for required in proto2)
             // Wait, in prost, proto2 required is generated just like proto3 fields without Option unless specified. Actually, proto2 required generates `pub position: ::prost::alloc::boxed::Box<Position>` or something, or just `pub position: Position` if not boxed. Let's use `p.position` assuming it is generated as `pub position: ...`
             // Wait, for required message fields, prost generates `pub position: MessageType` or `Option<MessageType>`. Actually for message fields it always generates `Option<MessageType>`. We need to handle it.
             // Let's assume it's `Option<Position>`. If it's `Option<Position>`, we need to check if it's `Some`. If `None`, we can't deserialize correctly but proto2 guarantees it if parsed.
             // Wait, looking at `Position`, if it's `Option`, `p.position.unwrap_or_default()` works. Let's use `unwrap_or_default()`.
             // Wait, I don't know if prost generates it as Option. Yes, prost ALWAYS generates `Option<T>` for nested messages, regardless of `required` or `optional` in proto2.
-            
+
             // Wait, if it generates `T` then `p.position` works. Let's just do `p.position` first, and if compilation fails we fix it.
             // Actually I'll use a match or `if let`.
-            
+
             vec.push(EmaneRsLocation {
                 nem_id: p.nem_id,
                 position: if let Some(ref pos) = Some(p.position) {
@@ -634,7 +654,11 @@ pub extern "C" fn emane_rs_location_event_deserialize(
                         altitude_meters: pos.altitude_meters,
                     }
                 } else {
-                    EmaneRsPosition { latitude_degrees: 0.0, longitude_degrees: 0.0, altitude_meters: 0.0 }
+                    EmaneRsPosition {
+                        latitude_degrees: 0.0,
+                        longitude_degrees: 0.0,
+                        altitude_meters: 0.0,
+                    }
                 },
                 has_velocity: p.velocity.is_some(),
                 velocity: if let Some(ref vel) = p.velocity {
@@ -644,7 +668,11 @@ pub extern "C" fn emane_rs_location_event_deserialize(
                         magnitude_meters_per_second: vel.magnitude_meters_per_second,
                     }
                 } else {
-                    EmaneRsVelocity { azimuth_degrees: 0.0, elevation_degrees: 0.0, magnitude_meters_per_second: 0.0 }
+                    EmaneRsVelocity {
+                        azimuth_degrees: 0.0,
+                        elevation_degrees: 0.0,
+                        magnitude_meters_per_second: 0.0,
+                    }
                 },
                 has_orientation: p.orientation.is_some(),
                 orientation: if let Some(ref ori) = p.orientation {
@@ -654,13 +682,17 @@ pub extern "C" fn emane_rs_location_event_deserialize(
                         yaw_degrees: ori.yaw_degrees,
                     }
                 } else {
-                    EmaneRsOrientation { roll_degrees: 0.0, pitch_degrees: 0.0, yaw_degrees: 0.0 }
+                    EmaneRsOrientation {
+                        roll_degrees: 0.0,
+                        pitch_degrees: 0.0,
+                        yaw_degrees: 0.0,
+                    }
                 },
             });
         }
-        
+
         let mut boxed = vec.into_boxed_slice();
-        unsafe { 
+        unsafe {
             *out_num = boxed.len();
             *out_items = boxed.as_mut_ptr();
         }
@@ -759,7 +791,7 @@ pub extern "C" fn emane_rs_tdmaschedule_event_deserialize(
     if buf.is_null() || len == 0 {
         return false;
     }
-    
+
     let slice = unsafe { std::slice::from_raw_parts(buf, len) };
     if let Ok(msg) = <emane_message::TdmaScheduleEvent as prost::Message>::decode(slice) {
         let mut frames_vec = Vec::with_capacity(msg.frames.len());
@@ -780,14 +812,14 @@ pub extern "C" fn emane_rs_tdmaschedule_event_deserialize(
                     has_destination: tx_msg.destination.is_some(),
                     destination: tx_msg.destination.unwrap_or(0),
                 };
-                
+
                 let has_rx = s.rx.is_some();
                 let rx_msg = s.rx.unwrap_or_default();
                 let rx = EmaneRsTdmaSlotRx {
                     has_frequency_hz: rx_msg.frequency_hz.is_some(),
                     frequency_hz: rx_msg.frequency_hz.unwrap_or(0),
                 };
-                
+
                 slots_vec.push(EmaneRsTdmaSlot {
                     index: s.index,
                     type_: s.r#type,
@@ -797,12 +829,12 @@ pub extern "C" fn emane_rs_tdmaschedule_event_deserialize(
                     rx,
                 });
             }
-            
+
             let mut slots_boxed = slots_vec.into_boxed_slice();
             let slots_ptr = slots_boxed.as_mut_ptr();
             let num_slots = slots_boxed.len();
             std::mem::forget(slots_boxed);
-            
+
             frames_vec.push(EmaneRsTdmaFrame {
                 index: f.index,
                 has_frequency_hz: f.frequency_hz.is_some(),
@@ -817,12 +849,12 @@ pub extern "C" fn emane_rs_tdmaschedule_event_deserialize(
                 num_slots,
             });
         }
-        
+
         let mut frames_boxed = frames_vec.into_boxed_slice();
         let frames_ptr = frames_boxed.as_mut_ptr();
         let num_frames = frames_boxed.len();
         std::mem::forget(frames_boxed);
-        
+
         let has_structure = msg.structure.is_some();
         let struct_msg = msg.structure.unwrap_or_default();
         let structure = EmaneRsTdmaStructure {
@@ -832,7 +864,7 @@ pub extern "C" fn emane_rs_tdmaschedule_event_deserialize(
             slot_overhead_microseconds: struct_msg.slot_overhead_microseconds,
             bandwidth_hz: struct_msg.bandwidth_hz,
         };
-        
+
         let schedule = Box::new(EmaneRsTdmaSchedule {
             frames: frames_ptr,
             num_frames,
@@ -847,7 +879,7 @@ pub extern "C" fn emane_rs_tdmaschedule_event_deserialize(
             has_power_dbm: msg.powerd_bm.is_some(),
             power_dbm: msg.powerd_bm.unwrap_or(0.0),
         });
-        
+
         unsafe { *out_msg = Box::into_raw(schedule) };
         true
     } else {
@@ -860,16 +892,23 @@ pub extern "C" fn emane_rs_tdmaschedule_event_free_deserialize(ptr: *mut EmaneRs
     if !ptr.is_null() {
         let schedule = unsafe { Box::from_raw(ptr) };
         if !schedule.frames.is_null() && schedule.num_frames > 0 {
-            let frames = unsafe { std::slice::from_raw_parts_mut(schedule.frames, schedule.num_frames) };
+            let frames =
+                unsafe { std::slice::from_raw_parts_mut(schedule.frames, schedule.num_frames) };
             for f in frames {
                 if !f.slots.is_null() && f.num_slots > 0 {
                     unsafe {
-                        drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(f.slots, f.num_slots)));
+                        drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                            f.slots,
+                            f.num_slots,
+                        )));
                     }
                 }
             }
             unsafe {
-                drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(schedule.frames, schedule.num_frames)));
+                drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                    schedule.frames,
+                    schedule.num_frames,
+                )));
             }
         }
     }

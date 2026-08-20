@@ -86,7 +86,10 @@ pub extern "C" fn bentpipe_queue_manager_add_queue(m: *mut QueueManager, transpo
 }
 
 #[no_mangle]
-pub extern "C" fn bentpipe_queue_manager_remove_queue(m: *mut QueueManager, transponder_index: u16) {
+pub extern "C" fn bentpipe_queue_manager_remove_queue(
+    m: *mut QueueManager,
+    transponder_index: u16,
+) {
     let m = unsafe { &mut *m };
     m.queues.remove(&transponder_index);
 }
@@ -102,9 +105,15 @@ pub extern "C" fn bentpipe_queue_manager_enqueue(
     if let Some(q) = m.queues.get_mut(&transponder_index) {
         let mut dropped_pkt = std::ptr::null_mut();
         let dropped = q.enqueue(pkt_ptr, length, &mut dropped_pkt);
-        EnqueueResult { dropped_pkt, dropped }
+        EnqueueResult {
+            dropped_pkt,
+            dropped,
+        }
     } else {
-        EnqueueResult { dropped_pkt: std::ptr::null_mut(), dropped: false }
+        EnqueueResult {
+            dropped_pkt: std::ptr::null_mut(),
+            dropped: false,
+        }
     }
 }
 
@@ -118,13 +127,13 @@ pub extern "C" fn bentpipe_queue_manager_dequeue(
     let m = unsafe { &mut *m };
     let mut actions = Vec::new();
     let mut total_length = 0;
-    
+
     if let Some(q) = m.queues.get_mut(&transponder_index) {
         let (mut q_actions, q_len) = q.dequeue_impl(requested_bytes, true, transponder_index);
         total_length += q_len;
         actions.append(&mut q_actions);
     }
-    
+
     actions.shrink_to_fit();
     unsafe {
         (*res).actions = actions.as_mut_ptr();

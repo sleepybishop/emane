@@ -26,7 +26,7 @@ impl TransportManager {
     pub fn stop(&self) {
         println!("TransportManager stopped");
     }
-    
+
     pub fn post_start(&self) {
         println!("TransportManager post_start");
     }
@@ -40,9 +40,11 @@ pub struct TransportDirector {
 
 impl TransportDirector {
     pub fn new(filename: String) -> Self {
-        Self { config: TransportConfig::new(filename) }
+        Self {
+            config: TransportConfig::new(filename),
+        }
     }
-    
+
     pub fn construct(&self) -> TransportManager {
         TransportManager::new()
     }
@@ -72,8 +74,11 @@ fn usage(app_name: &str) {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let app_name = args.get(0).cloned().unwrap_or_else(|| "emanetransportd".to_string());
-    
+    let app_name = args
+        .get(0)
+        .cloned()
+        .unwrap_or_else(|| "emanetransportd".to_string());
+
     let mut config_url = None;
     let mut i = 1;
     while i < args.len() {
@@ -84,12 +89,24 @@ fn main() {
         } else if arg == "-v" || arg == "--version" {
             println!("0.1.0"); // Dummy version
             process::exit(0);
-        } else if arg == "-d" || arg == "--daemonize" || arg == "-r" || arg == "--realtime" || arg == "--syslog" {
+        } else if arg == "-d"
+            || arg == "--daemonize"
+            || arg == "-r"
+            || arg == "--realtime"
+            || arg == "--syslog"
+        {
             // Flags without arguments
         } else if arg.starts_with("-") {
             // Options with arguments
-            if arg == "-f" || arg == "--logfile" || arg == "-l" || arg == "--loglevel" 
-                || arg == "--pidfile" || arg == "-p" || arg == "--priority" || arg == "--uuidfile" {
+            if arg == "-f"
+                || arg == "--logfile"
+                || arg == "-l"
+                || arg == "--loglevel"
+                || arg == "--pidfile"
+                || arg == "-p"
+                || arg == "--priority"
+                || arg == "--uuidfile"
+            {
                 i += 1; // skip argument value
             } else {
                 eprintln!("unknown option {}", arg);
@@ -105,7 +122,7 @@ fn main() {
         }
         i += 1;
     }
-    
+
     let config_url = match config_url {
         Some(url) => url,
         None => {
@@ -113,14 +130,14 @@ fn main() {
             process::exit(1);
         }
     };
-    
+
     let director = TransportDirector::new(config_url);
     let manager = director.construct();
-    
+
     manager.start();
     manager.post_start();
-    
+
     // Typically wait here for signals before stopping
-    
+
     manager.stop();
 }

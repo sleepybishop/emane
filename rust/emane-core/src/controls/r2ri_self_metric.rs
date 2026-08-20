@@ -20,7 +20,9 @@ pub extern "C" fn emane_rs_controls_r2ri_self_metric_create(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn emane_rs_controls_r2ri_self_metric_clone(ptr: *const core::ffi::c_void) -> *mut core::ffi::c_void {
+pub unsafe extern "C" fn emane_rs_controls_r2ri_self_metric_clone(
+    ptr: *const core::ffi::c_void,
+) -> *mut core::ffi::c_void {
     let msg = &*(ptr as *const R2RISelfMetricControlMessage);
     let cloned = Box::new(msg.clone());
     Box::into_raw(cloned) as *mut core::ffi::c_void

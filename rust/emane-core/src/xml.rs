@@ -1,8 +1,8 @@
 use roxmltree::{Document, Node};
 use std::ffi::{CStr, CString};
+use std::fs;
 use std::os::raw::c_char;
 use std::ptr;
-use std::fs;
 
 #[repr(C)]
 pub struct EmaneXmlAttr {
@@ -27,19 +27,29 @@ pub struct EmaneXmlDoc {
 }
 
 unsafe fn free_node(node: *mut EmaneXmlNode) {
-    if node.is_null() { return; }
+    if node.is_null() {
+        return;
+    }
     let n = Box::from_raw(node);
-    if !n.name.is_null() { drop(CString::from_raw(n.name)); }
-    if !n.content.is_null() { drop(CString::from_raw(n.content)); }
-    
+    if !n.name.is_null() {
+        drop(CString::from_raw(n.name));
+    }
+    if !n.content.is_null() {
+        drop(CString::from_raw(n.content));
+    }
+
     let mut attr = n.attrs;
     while !attr.is_null() {
         let a = Box::from_raw(attr);
-        if !a.name.is_null() { drop(CString::from_raw(a.name)); }
-        if !a.value.is_null() { drop(CString::from_raw(a.value)); }
+        if !a.name.is_null() {
+            drop(CString::from_raw(a.name));
+        }
+        if !a.value.is_null() {
+            drop(CString::from_raw(a.value));
+        }
         attr = a.next;
     }
-    
+
     let mut child = n.children;
     while !child.is_null() {
         let next = (*child).next;
@@ -54,7 +64,7 @@ fn build_node(node: Node) -> *mut EmaneXmlNode {
     } else {
         ptr::null_mut()
     };
-    
+
     let content = if let Some(t) = node.text() {
         CString::new(t).unwrap().into_raw()
     } else {
@@ -72,7 +82,9 @@ fn build_node(node: Node) -> *mut EmaneXmlNode {
         if first_attr.is_null() {
             first_attr = a;
         } else {
-            unsafe { (*last_attr).next = a; }
+            unsafe {
+                (*last_attr).next = a;
+            }
         }
         last_attr = a;
     }
@@ -85,7 +97,9 @@ fn build_node(node: Node) -> *mut EmaneXmlNode {
             if first_child.is_null() {
                 first_child = c;
             } else {
-                unsafe { (*last_child).next = c; }
+                unsafe {
+                    (*last_child).next = c;
+                }
             }
             last_child = c;
         }
@@ -103,9 +117,11 @@ fn build_node(node: Node) -> *mut EmaneXmlNode {
 
 #[no_mangle]
 pub extern "C" fn emane_rs_xml_parse(uri: *const c_char) -> *mut EmaneXmlDoc {
-    if uri.is_null() { return ptr::null_mut(); }
+    if uri.is_null() {
+        return ptr::null_mut();
+    }
     let path = unsafe { CStr::from_ptr(uri).to_string_lossy().into_owned() };
-    
+
     let xml_text = match fs::read_to_string(&path) {
         Ok(t) => t,
         Err(_) => return ptr::null_mut(),
@@ -134,8 +150,13 @@ pub extern "C" fn emane_rs_xml_doc_free(doc: *mut EmaneXmlDoc) {
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_xml_get_prop(node: *mut EmaneXmlNode, name: *const c_char) -> *mut c_char {
-    if node.is_null() || name.is_null() { return ptr::null_mut(); }
+pub extern "C" fn emane_rs_xml_get_prop(
+    node: *mut EmaneXmlNode,
+    name: *const c_char,
+) -> *mut c_char {
+    if node.is_null() || name.is_null() {
+        return ptr::null_mut();
+    }
     let n = unsafe { CStr::from_ptr(name) };
     let mut attr = unsafe { (*node).attrs };
     while !attr.is_null() {
@@ -153,6 +174,8 @@ pub extern "C" fn emane_rs_xml_get_prop(node: *mut EmaneXmlNode, name: *const c_
 #[no_mangle]
 pub extern "C" fn emane_rs_xml_free_prop(prop: *mut c_char) {
     if !prop.is_null() {
-        unsafe { drop(CString::from_raw(prop)); }
+        unsafe {
+            drop(CString::from_raw(prop));
+        }
     }
 }

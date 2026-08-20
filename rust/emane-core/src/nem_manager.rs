@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::os::raw::{c_char, c_void};
 use std::ffi::{CStr, CString};
+use std::os::raw::{c_char, c_void};
 
 // C callbacks
 extern "C" {
@@ -17,7 +17,7 @@ extern "C" {
 pub struct NemManager {
     uuid: [u8; 16],
     nems: HashMap<u16, *mut c_void>,
-    
+
     ota_manager_group_addr: String,
     ota_manager_group_device: String,
     ota_manager_ttl: u8,
@@ -26,13 +26,13 @@ pub struct NemManager {
     ota_manager_part_timeout_threshold: u16,
     ota_manager_loopback: bool,
     ota_manager_channel_enable: bool,
-    
+
     event_service_group_addr: String,
     event_service_device: String,
     event_service_ttl: u8,
-    
+
     control_port_addr: String,
-    
+
     antenna_profile_manifest_uri: String,
     spectral_mask_manifest_uri: String,
 }
@@ -50,13 +50,13 @@ impl NemManager {
             ota_manager_part_timeout_threshold: 5,
             ota_manager_loopback: false,
             ota_manager_channel_enable: true,
-            
+
             event_service_group_addr: String::new(),
             event_service_device: String::new(),
             event_service_ttl: 1,
-            
+
             control_port_addr: "0.0.0.0:47000".to_string(),
-            
+
             antenna_profile_manifest_uri: String::new(),
             spectral_mask_manifest_uri: String::new(),
         }
@@ -89,8 +89,14 @@ pub extern "C" fn emane_rs_nem_manager_destroy_manager(manager_ptr: *mut c_void)
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_nem_manager_add(manager_ptr: *mut c_void, nem_id: u16, nem_ptr: *mut c_void) {
-    if manager_ptr.is_null() { return; }
+pub extern "C" fn emane_rs_nem_manager_add(
+    manager_ptr: *mut c_void,
+    nem_id: u16,
+    nem_ptr: *mut c_void,
+) {
+    if manager_ptr.is_null() {
+        return;
+    }
     let manager = unsafe { &mut *(manager_ptr as *mut NemManager) };
     manager.add(nem_id, nem_ptr);
 }
@@ -102,11 +108,13 @@ pub extern "C" fn emane_rs_nem_manager_set_config_str(
     key: *const c_char,
     value: *const c_char,
 ) {
-    if manager_ptr.is_null() || key.is_null() || value.is_null() { return; }
+    if manager_ptr.is_null() || key.is_null() || value.is_null() {
+        return;
+    }
     let manager = unsafe { &mut *(manager_ptr as *mut NemManager) };
     let k = unsafe { CStr::from_ptr(key).to_string_lossy().into_owned() };
     let v = unsafe { CStr::from_ptr(value).to_string_lossy().into_owned() };
-    
+
     match k.as_str() {
         "otamanagergroup" => manager.ota_manager_group_addr = v,
         "otamanagerdevice" => manager.ota_manager_group_device = v,
@@ -125,10 +133,12 @@ pub extern "C" fn emane_rs_nem_manager_set_config_u8(
     key: *const c_char,
     value: u8,
 ) {
-    if manager_ptr.is_null() || key.is_null() { return; }
+    if manager_ptr.is_null() || key.is_null() {
+        return;
+    }
     let manager = unsafe { &mut *(manager_ptr as *mut NemManager) };
     let k = unsafe { CStr::from_ptr(key).to_string_lossy().into_owned() };
-    
+
     match k.as_str() {
         "otamanagerttl" => manager.ota_manager_ttl = value,
         "eventservicettl" => manager.event_service_ttl = value,
@@ -142,10 +152,12 @@ pub extern "C" fn emane_rs_nem_manager_set_config_u16(
     key: *const c_char,
     value: u16,
 ) {
-    if manager_ptr.is_null() || key.is_null() { return; }
+    if manager_ptr.is_null() || key.is_null() {
+        return;
+    }
     let manager = unsafe { &mut *(manager_ptr as *mut NemManager) };
     let k = unsafe { CStr::from_ptr(key).to_string_lossy().into_owned() };
-    
+
     match k.as_str() {
         "otamanagerpartcheckthreshold" => manager.ota_manager_part_check_threshold = value,
         "otamanagerparttimeoutthreshold" => manager.ota_manager_part_timeout_threshold = value,
@@ -159,10 +171,12 @@ pub extern "C" fn emane_rs_nem_manager_set_config_u32(
     key: *const c_char,
     value: u32,
 ) {
-    if manager_ptr.is_null() || key.is_null() { return; }
+    if manager_ptr.is_null() || key.is_null() {
+        return;
+    }
     let manager = unsafe { &mut *(manager_ptr as *mut NemManager) };
     let k = unsafe { CStr::from_ptr(key).to_string_lossy().into_owned() };
-    
+
     match k.as_str() {
         "otamanagermtu" => manager.ota_manager_mtu = value,
         _ => {}
@@ -175,10 +189,12 @@ pub extern "C" fn emane_rs_nem_manager_set_config_bool(
     key: *const c_char,
     value: bool,
 ) {
-    if manager_ptr.is_null() || key.is_null() { return; }
+    if manager_ptr.is_null() || key.is_null() {
+        return;
+    }
     let manager = unsafe { &mut *(manager_ptr as *mut NemManager) };
     let k = unsafe { CStr::from_ptr(key).to_string_lossy().into_owned() };
-    
+
     match k.as_str() {
         "otamanagerloopback" => manager.ota_manager_loopback = value,
         "otamanagerchannelenable" => manager.ota_manager_channel_enable = value,
@@ -188,25 +204,33 @@ pub extern "C" fn emane_rs_nem_manager_set_config_bool(
 
 #[no_mangle]
 pub extern "C" fn emane_rs_nem_manager_apply_config(manager_ptr: *mut c_void) {
-    if manager_ptr.is_null() { return; }
+    if manager_ptr.is_null() {
+        return;
+    }
     let manager = unsafe { &mut *(manager_ptr as *mut NemManager) };
-    
+
     if !manager.antenna_profile_manifest_uri.is_empty() {
         let uri = CString::new(manager.antenna_profile_manifest_uri.clone()).unwrap();
-        unsafe { emane_c_load_antenna_profile(uri.as_ptr()); }
+        unsafe {
+            emane_c_load_antenna_profile(uri.as_ptr());
+        }
     }
-    
+
     if !manager.spectral_mask_manifest_uri.is_empty() {
         let uri = CString::new(manager.spectral_mask_manifest_uri.clone()).unwrap();
-        unsafe { emane_c_load_spectral_mask(uri.as_ptr()); }
+        unsafe {
+            emane_c_load_spectral_mask(uri.as_ptr());
+        }
     }
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_nem_manager_start(manager_ptr: *mut c_void) {
-    if manager_ptr.is_null() { return; }
+    if manager_ptr.is_null() {
+        return;
+    }
     let manager = unsafe { &mut *(manager_ptr as *mut NemManager) };
-    
+
     if manager.ota_manager_channel_enable {
         let addr = CString::new(manager.ota_manager_group_addr.clone()).unwrap();
         let dev = CString::new(manager.ota_manager_group_device.clone()).unwrap();
@@ -223,7 +247,7 @@ pub extern "C" fn emane_rs_nem_manager_start(manager_ptr: *mut c_void) {
             );
         }
     }
-    
+
     let evt_addr = CString::new(manager.event_service_group_addr.clone()).unwrap();
     let evt_dev = CString::new(manager.event_service_device.clone()).unwrap();
     unsafe {
@@ -235,44 +259,60 @@ pub extern "C" fn emane_rs_nem_manager_start(manager_ptr: *mut c_void) {
             manager.uuid.as_ptr(),
         );
     }
-    
+
     let cp_addr = CString::new(manager.control_port_addr.clone()).unwrap();
     unsafe {
         emane_c_control_port_open(cp_addr.as_ptr());
     }
-    
+
     for (_, nem_ptr) in &manager.nems {
-        unsafe { emane_c_nem_start(*nem_ptr); }
+        unsafe {
+            emane_c_nem_start(*nem_ptr);
+        }
     }
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_nem_manager_post_start(manager_ptr: *mut c_void) {
-    if manager_ptr.is_null() { return; }
+    if manager_ptr.is_null() {
+        return;
+    }
     let manager = unsafe { &mut *(manager_ptr as *mut NemManager) };
     for (_, nem_ptr) in &manager.nems {
-        unsafe { emane_c_nem_post_start(*nem_ptr); }
+        unsafe {
+            emane_c_nem_post_start(*nem_ptr);
+        }
     }
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_nem_manager_stop(manager_ptr: *mut c_void) {
-    if manager_ptr.is_null() { return; }
+    if manager_ptr.is_null() {
+        return;
+    }
     let manager = unsafe { &mut *(manager_ptr as *mut NemManager) };
-    
-    unsafe { emane_c_control_port_close(); }
-    
+
+    unsafe {
+        emane_c_control_port_close();
+    }
+
     for (_, nem_ptr) in &manager.nems {
-        unsafe { emane_c_nem_stop(*nem_ptr); }
+        unsafe {
+            emane_c_nem_stop(*nem_ptr);
+        }
     }
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_nem_manager_destroy(manager_ptr: *mut c_void) {
-    if manager_ptr.is_null() { return; }
+    if manager_ptr.is_null() {
+        return;
+    }
     let manager = unsafe { &mut *(manager_ptr as *mut NemManager) };
-    
+
     for (_, nem_ptr) in &manager.nems {
-        unsafe { emane_c_nem_destroy(*nem_ptr); }
+        unsafe {
+            emane_c_nem_destroy(*nem_ptr);
+        }
     }
 }

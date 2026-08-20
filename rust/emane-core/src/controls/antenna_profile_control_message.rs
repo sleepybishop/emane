@@ -22,9 +22,7 @@ pub extern "C" fn emane_rs_controls_antenna_profile_create(
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_controls_antenna_profile_clone(
-    ptr: *const c_void,
-) -> *mut c_void {
+pub extern "C" fn emane_rs_controls_antenna_profile_clone(ptr: *const c_void) -> *mut c_void {
     let msg = unsafe { &*(ptr as *const AntennaProfileControlMessageRs) };
     let cloned = Box::new(msg.clone());
     Box::into_raw(cloned) as *mut c_void

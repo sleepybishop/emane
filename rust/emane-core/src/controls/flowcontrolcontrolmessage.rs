@@ -10,7 +10,9 @@ pub extern "C" fn emane_rs_controls_flow_control_create(tokens: u16) -> *mut cor
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn emane_rs_controls_flow_control_clone(ptr: *const core::ffi::c_void) -> *mut core::ffi::c_void {
+pub unsafe extern "C" fn emane_rs_controls_flow_control_clone(
+    ptr: *const core::ffi::c_void,
+) -> *mut core::ffi::c_void {
     let msg = &*(ptr as *const FlowControlControlMessage);
     let cloned = Box::new(msg.clone());
     Box::into_raw(cloned) as *mut core::ffi::c_void

@@ -3,7 +3,11 @@ use std::os::raw::c_void;
 
 extern "C" {
     fn emane_c_framework_phy_downstream_stub_process_inbound(phy: *mut c_void, pkt: *mut c_void);
-    fn emane_c_framework_phy_downstream_stub_process_outbound(phy: *mut c_void, pkt: *mut c_void, duration: u64);
+    fn emane_c_framework_phy_downstream_stub_process_outbound(
+        phy: *mut c_void,
+        pkt: *mut c_void,
+        duration: u64,
+    );
     fn emane_c_framework_phy_downstream_stub_send_downstream_packet(
         phy: *mut c_void,
         header: *mut c_void,
@@ -21,7 +25,10 @@ extern "C" {
         filter_data: *mut c_void,
     );
     fn emane_c_framework_phy_downstream_stub_get_control_messages_len(msgs: *mut c_void) -> usize;
-    fn emane_c_framework_phy_downstream_stub_get_control_message(msgs: *mut c_void, index: usize) -> *mut c_void;
+    fn emane_c_framework_phy_downstream_stub_get_control_message(
+        msgs: *mut c_void,
+        index: usize,
+    ) -> *mut c_void;
     fn emane_c_framework_phy_downstream_stub_get_control_message_id(msg: *mut c_void) -> u16;
 }
 
@@ -112,7 +119,7 @@ pub fn process_downstream_packet(phy: &mut FrameworkPhy, pkt: *mut c_void, msgs:
 
     let downstream_control_messages: *mut c_void = std::ptr::null_mut();
     // if !ota_transmitters.is_empty() -> create OTATransmitterControlMessage
-    
+
     unsafe {
         emane_c_framework_phy_downstream_stub_process_outbound(phy.cpp_this, pkt, 0);
         emane_c_framework_phy_downstream_stub_send_downstream_packet(

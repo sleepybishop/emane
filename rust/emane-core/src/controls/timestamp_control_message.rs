@@ -5,8 +5,12 @@ pub struct TimeStampControlMessageImpl {
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_timestamp_control_message_create(time_stamp_microsec: u64) -> *mut c_void {
-    let msg = Box::new(TimeStampControlMessageImpl { time_stamp_microsec });
+pub extern "C" fn emane_rs_timestamp_control_message_create(
+    time_stamp_microsec: u64,
+) -> *mut c_void {
+    let msg = Box::new(TimeStampControlMessageImpl {
+        time_stamp_microsec,
+    });
     Box::into_raw(msg) as *mut c_void
 }
 
@@ -34,6 +38,8 @@ pub extern "C" fn emane_rs_timestamp_control_message_get_time_stamp(ptr: *const 
 #[no_mangle]
 pub extern "C" fn emane_rs_timestamp_control_message_free(ptr: *mut c_void) {
     if !ptr.is_null() {
-        unsafe { drop(Box::from_raw(ptr as *mut TimeStampControlMessageImpl)); }
+        unsafe {
+            drop(Box::from_raw(ptr as *mut TimeStampControlMessageImpl));
+        }
     }
 }

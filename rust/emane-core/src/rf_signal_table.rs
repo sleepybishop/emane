@@ -144,7 +144,9 @@ pub extern "C" fn emane_rs_rf_signal_table_new(nem_id: u16) -> *mut RFSignalTabl
 #[no_mangle]
 pub extern "C" fn emane_rs_rf_signal_table_free(ptr: *mut RFSignalTable) {
     if !ptr.is_null() {
-        unsafe { drop(Box::from_raw(ptr)); }
+        unsafe {
+            drop(Box::from_raw(ptr));
+        }
     }
 }
 
@@ -176,17 +178,25 @@ pub extern "C" fn emane_rs_rf_signal_table_update(
     if table.average_all_antennas {
         adj_antenna = std::u16::MAX;
     }
-    
+
     let mut adj_freq = frequency_hz;
     if table.average_all_frequencies {
         adj_freq = std::u64::MAX;
     }
-    
+
     let key = format!("{}:{}:{}", src, adj_antenna, adj_freq);
     let is_new = !table.rf_receive_metric_cache.contains_key(&key);
-    
-    table.update(src, rx_antenna_id, frequency_hz, rx_power_dbm, sinr_db, noise_floor_db, receiver_sensitivity_db);
-    
+
+    table.update(
+        src,
+        rx_antenna_id,
+        frequency_hz,
+        rx_power_dbm,
+        sinr_db,
+        noise_floor_db,
+        receiver_sensitivity_db,
+    );
+
     let entry = table.rf_receive_metric_cache.get(&key).unwrap();
     let num_samples = entry.num_samples;
     let n = num_samples as f64;
@@ -194,7 +204,7 @@ pub extern "C" fn emane_rs_rf_signal_table_update(
     let avg_noise_floor = entry.noise_floor_accum_db / n;
     let avg_sinr = entry.sinr_accum_db / n;
     let avg_inr = entry.inr_accum_db / n;
-    
+
     unsafe {
         (*out_result).is_new = is_new;
         (*out_result).key = CString::new(key).unwrap().into_raw();
@@ -212,7 +222,9 @@ pub extern "C" fn emane_rs_rf_signal_table_update(
 #[no_mangle]
 pub extern "C" fn emane_rs_rf_signal_table_free_string(ptr: *mut c_char) {
     if !ptr.is_null() {
-        unsafe { drop(CString::from_raw(ptr)); }
+        unsafe {
+            drop(CString::from_raw(ptr));
+        }
     }
 }
 
@@ -227,9 +239,9 @@ pub extern "C" fn emane_rs_rf_signal_table_reset(
     if table.average_all_antennas {
         adj_antenna = std::u16::MAX;
     }
-    
+
     let mut keys_to_delete = Vec::new();
-    
+
     if let Some(set) = table.antenna_tracker.remove(&adj_antenna) {
         for (src, freq) in set {
             let key = format!("{}:{}:{}", src, adj_antenna, freq);
@@ -238,8 +250,10 @@ pub extern "C" fn emane_rs_rf_signal_table_reset(
             }
         }
     }
-    
-    unsafe { *out_keys_len = keys_to_delete.len(); }
+
+    unsafe {
+        *out_keys_len = keys_to_delete.len();
+    }
     let mut boxed_slice = keys_to_delete.into_boxed_slice();
     let res = boxed_slice.as_mut_ptr();
     std::mem::forget(boxed_slice);
@@ -247,14 +261,15 @@ pub extern "C" fn emane_rs_rf_signal_table_reset(
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_rf_signal_table_free_keys(
-    keys_ptr: *mut *mut c_char,
-    len: usize,
-) {
-    if keys_ptr.is_null() { return; }
+pub extern "C" fn emane_rs_rf_signal_table_free_keys(keys_ptr: *mut *mut c_char, len: usize) {
+    if keys_ptr.is_null() {
+        return;
+    }
     let keys = unsafe { Vec::from_raw_parts(keys_ptr, len, len) };
     for k in keys {
-        unsafe { drop(CString::from_raw(k)); }
+        unsafe {
+            drop(CString::from_raw(k));
+        }
     }
 }
 

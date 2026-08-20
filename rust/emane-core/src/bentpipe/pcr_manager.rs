@@ -1,8 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
+use std::ffi::CStr;
 use std::fs;
 use std::os::raw::{c_char, c_void};
-use std::ffi::CStr;
-use std::ptr;
 
 pub struct PCRManager {
     modifier_length_bytes: usize,
@@ -24,8 +23,10 @@ impl PCRManager {
     }
 
     pub fn load(&mut self, file_name: &str) -> Result<(), String> {
-        let content = fs::read_to_string(file_name).map_err(|e| format!("Failed to read file: {}", e))?;
-        let doc = roxmltree::Document::parse(&content).map_err(|e| format!("Failed to parse XML: {}", e))?;
+        let content =
+            fs::read_to_string(file_name).map_err(|e| format!("Failed to read file: {}", e))?;
+        let doc = roxmltree::Document::parse(&content)
+            .map_err(|e| format!("Failed to parse XML: {}", e))?;
 
         let root = doc.root_element();
         if root.tag_name().name() != "bentpipe-model-pcr" {
@@ -47,14 +48,22 @@ impl PCRManager {
             let mut max_scaled_sinr = i32::MIN;
 
             for entry_node in curve_node.children().filter(|n| n.has_tag_name("entry")) {
-                let sinr_str = entry_node.attribute("sinr").ok_or("Missing sinr attribute")?;
+                let sinr_str = entry_node
+                    .attribute("sinr")
+                    .ok_or("Missing sinr attribute")?;
                 let por_str = entry_node.attribute("por").ok_or("Missing por attribute")?;
 
                 let scaled_sinr = scale_float_to_integer(sinr_str)?;
-                let por: f32 = por_str.parse::<f32>().map_err(|_| "Invalid por attribute")? / 100.0;
+                let por: f32 = por_str
+                    .parse::<f32>()
+                    .map_err(|_| "Invalid por attribute")?
+                    / 100.0;
 
                 if curve.insert(scaled_sinr, por).is_some() {
-                    return Err(format!("duplicate PCR SINR value for index: {} sinr: {} in {}", index, sinr_str, file_name));
+                    return Err(format!(
+                        "duplicate PCR SINR value for index: {} sinr: {} in {}",
+                        index, sinr_str, file_name
+                    ));
                 }
 
                 min_scaled_sinr = min_scaled_sinr.min(scaled_sinr);
@@ -77,11 +86,18 @@ impl PCRManager {
                 curve.insert(k, v);
             }
 
-            if self.curve_table.insert(index, CurveEntry {
-                min_scaled_sinr,
-                max_scaled_sinr,
-                curve,
-            }).is_some() {
+            if self
+                .curve_table
+                .insert(
+                    index,
+                    CurveEntry {
+                        min_scaled_sinr,
+                        max_scaled_sinr,
+                        curve,
+                    },
+                )
+                .is_some()
+            {
                 return Err(format!("duplicate PCR curve: {} in {}", index, file_name));
             }
         }
@@ -105,7 +121,8 @@ impl PCRManager {
         if let Some(&por) = entry.curve.get(&scaled_sinr) {
             let mut result_por = por;
             if self.modifier_length_bytes > 0 {
-                result_por = result_por.powf(packet_length_bytes as f32 / self.modifier_length_bytes as f32);
+                result_por =
+                    result_por.powf(packet_length_bytes as f32 / self.modifier_length_bytes as f32);
             }
             return Some(result_por);
         }
@@ -130,10 +147,12 @@ fn scale_float_to_integer(value: &str) -> Result<i32, String> {
     } else {
         tmp.push_str(&"0".repeat(scale_factor));
     }
-    
+
     // Equivalent of strtol truncation in C++
     let val_str = tmp.split('.').next().unwrap_or(&tmp);
-    val_str.parse::<i32>().map_err(|_| format!("Invalid sinr value: {}", value))
+    val_str
+        .parse::<i32>()
+        .map_err(|_| format!("Invalid sinr value: {}", value))
 }
 
 #[no_mangle]
@@ -152,14 +171,17 @@ pub extern "C" fn rust_bentpipe_pcr_manager_free(ptr: *mut c_void) {
 }
 
 #[no_mangle]
-pub extern "C" fn rust_bentpipe_pcr_manager_load(ptr: *mut c_void, filename: *const c_char) -> bool {
+pub extern "C" fn rust_bentpipe_pcr_manager_load(
+    ptr: *mut c_void,
+    filename: *const c_char,
+) -> bool {
     if ptr.is_null() || filename.is_null() {
         return false;
     }
-    
+
     let manager = unsafe { &mut *(ptr as *mut PCRManager) };
     let filename_str = unsafe { CStr::from_ptr(filename).to_string_lossy() };
-    
+
     match manager.load(&filename_str) {
         Ok(_) => true,
         Err(e) => {
@@ -180,7 +202,7 @@ pub extern "C" fn rust_bentpipe_pcr_manager_get_por(
     if ptr.is_null() || out_por.is_null() {
         return false;
     }
-    
+
     let manager = unsafe { &*(ptr as *mut PCRManager) };
     if let Some(por) = manager.get_por(index, sinr, packet_length_bytes) {
         unsafe { *out_por = por };
@@ -199,10 +221,10 @@ pub extern "C" fn rust_bentpipe_pcr_manager_get_indices(
     if ptr.is_null() || out_indices.is_null() {
         return 0;
     }
-    
+
     let manager = unsafe { &*(ptr as *mut PCRManager) };
     let mut count = 0;
-    
+
     for (&index, _) in &manager.curve_table {
         if count >= max_indices {
             break;
@@ -212,6 +234,6 @@ pub extern "C" fn rust_bentpipe_pcr_manager_get_indices(
         }
         count += 1;
     }
-    
+
     count
 }

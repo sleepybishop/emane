@@ -18,12 +18,12 @@ pub unsafe extern "C" fn emane_controls_serialized_create(
     } else {
         &[]
     };
-    
+
     let msg = Box::new(SerializedControlMessage {
         serialized_id: id,
         serialization: slice.to_vec(),
     });
-    
+
     Box::into_raw(msg)
 }
 

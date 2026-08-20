@@ -1,7 +1,5 @@
-use libc::{c_int, c_char, ifreq, ioctl, IFF_TAP, IFF_NO_PI, IFF_UP, IFF_NOARP, sockaddr_in};
-use std::ffi::CStr;
+use libc::{ifreq, IFF_NOARP, IFF_NO_PI, IFF_TAP, IFF_UP};
 use std::os::unix::io::RawFd;
-use std::ptr;
 
 // TUNSETIFF is 0x400454ca on Linux
 const TUNSETIFF: u64 = 0x400454ca;
@@ -38,18 +36,25 @@ impl TunTap {
 
         if unsafe { libc::ioctl(fd, TUNSETIFF, &ifr) } < 0 {
             let err = std::io::Error::last_os_error();
-            unsafe { libc::close(fd); }
+            unsafe {
+                libc::close(fd);
+            }
             return Err(err);
         }
 
         let ctrl_sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
         if unsafe { libc::ioctl(ctrl_sock, SIOCGIFINDEX, &ifr) } < 0 {
             let err = std::io::Error::last_os_error();
-            unsafe { libc::close(ctrl_sock); libc::close(fd); }
+            unsafe {
+                libc::close(ctrl_sock);
+                libc::close(fd);
+            }
             return Err(err);
         }
         let index = unsafe { ifr.ifr_ifru.ifru_ifindex };
-        unsafe { libc::close(ctrl_sock); }
+        unsafe {
+            libc::close(ctrl_sock);
+        }
 
         Ok(Self {
             fd,
@@ -80,10 +85,14 @@ impl TunTap {
         }
         if unsafe { libc::ioctl(ctrl_sock, SIOCGIFFLAGS, &ifr) } < 0 {
             let err = std::io::Error::last_os_error();
-            unsafe { libc::close(ctrl_sock); }
+            unsafe {
+                libc::close(ctrl_sock);
+            }
             return Err(err);
         }
-        unsafe { libc::close(ctrl_sock); }
+        unsafe {
+            libc::close(ctrl_sock);
+        }
         Ok(unsafe { ifr.ifr_ifru.ifru_flags } as i32)
     }
 
@@ -108,10 +117,14 @@ impl TunTap {
 
         if unsafe { libc::ioctl(ctrl_sock, SIOCSIFFLAGS, &ifr) } < 0 {
             let err = std::io::Error::last_os_error();
-            unsafe { libc::close(ctrl_sock); }
+            unsafe {
+                libc::close(ctrl_sock);
+            }
             return Err(err);
         }
-        unsafe { libc::close(ctrl_sock); }
+        unsafe {
+            libc::close(ctrl_sock);
+        }
         Ok(())
     }
 
@@ -141,22 +154,31 @@ impl TunTap {
         let ctrl_sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
         if unsafe { libc::ioctl(ctrl_sock, SIOCSIFHWADDR, &ifr) } < 0 {
             let err = std::io::Error::last_os_error();
-            unsafe { libc::close(ctrl_sock); }
+            unsafe {
+                libc::close(ctrl_sock);
+            }
             return Err(err);
         }
-        unsafe { libc::close(ctrl_sock); }
+        unsafe {
+            libc::close(ctrl_sock);
+        }
         Ok(())
     }
 }
 
 impl Drop for TunTap {
     fn drop(&mut self) {
-        unsafe { libc::close(self.fd); }
+        unsafe {
+            libc::close(self.fd);
+        }
     }
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_tuntap_new_ffi(path: *const libc::c_char, name: *const libc::c_char) -> *mut TunTap {
+pub extern "C" fn emane_rs_tuntap_new_ffi(
+    path: *const libc::c_char,
+    name: *const libc::c_char,
+) -> *mut TunTap {
     let p = unsafe { std::ffi::CStr::from_ptr(path).to_str().unwrap_or("") };
     let n = unsafe { std::ffi::CStr::from_ptr(name).to_str().unwrap_or("") };
     match TunTap::new(p, n) {
@@ -168,7 +190,9 @@ pub extern "C" fn emane_rs_tuntap_new_ffi(path: *const libc::c_char, name: *cons
 #[no_mangle]
 pub extern "C" fn emane_rs_tuntap_free_ffi(ptr: *mut TunTap) {
     if !ptr.is_null() {
-        unsafe { let _ = Box::from_raw(ptr); }
+        unsafe {
+            let _ = Box::from_raw(ptr);
+        }
     }
 }
 
@@ -206,13 +230,21 @@ pub extern "C" fn emane_rs_tuntap_set_ethaddr_ffi(ptr: *mut TunTap, id: u16) -> 
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_tuntap_readv_ffi(ptr: *mut TunTap, iov: *mut libc::iovec, iov_len: libc::size_t) -> libc::c_int {
+pub extern "C" fn emane_rs_tuntap_readv_ffi(
+    ptr: *mut TunTap,
+    iov: *mut libc::iovec,
+    iov_len: libc::size_t,
+) -> libc::c_int {
     let tt = unsafe { &*ptr };
     unsafe { libc::readv(tt.fd, iov, iov_len as libc::c_int) as libc::c_int }
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_tuntap_writev_ffi(ptr: *mut TunTap, iov: *const libc::iovec, iov_len: libc::size_t) -> libc::c_int {
+pub extern "C" fn emane_rs_tuntap_writev_ffi(
+    ptr: *mut TunTap,
+    iov: *const libc::iovec,
+    iov_len: libc::size_t,
+) -> libc::c_int {
     let tt = unsafe { &*ptr };
     unsafe { libc::writev(tt.fd, iov, iov_len as libc::c_int) as libc::c_int }
 }

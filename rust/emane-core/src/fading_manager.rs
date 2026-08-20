@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 // C++ fading selection event models
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -25,14 +23,19 @@ pub extern "C" fn emane_rs_fadingmanager_new(nem_id: u16) -> *mut FadingManager 
 #[no_mangle]
 pub extern "C" fn emane_rs_fadingmanager_free(ptr: *mut FadingManager) {
     if !ptr.is_null() {
-        unsafe { drop(Box::from_raw(ptr)); }
+        unsafe {
+            drop(Box::from_raw(ptr));
+        }
     }
 }
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
 #[no_mangle]
-pub extern "C" fn emane_rs_fadingmanager_update_config(ptr: *mut FadingManager, s_type: *const c_char) {
+pub extern "C" fn emane_rs_fadingmanager_update_config(
+    ptr: *mut FadingManager,
+    s_type: *const c_char,
+) {
     if let Some(mgr) = unsafe { ptr.as_mut() } {
         if !s_type.is_null() {
             if let Ok(s) = unsafe { CStr::from_ptr(s_type) }.to_str() {
@@ -43,7 +46,11 @@ pub extern "C" fn emane_rs_fadingmanager_update_config(ptr: *mut FadingManager, 
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_fadingmanager_update_selection(ptr: *mut FadingManager, nem_id: u16, model: u32) {
+pub extern "C" fn emane_rs_fadingmanager_update_selection(
+    _ptr: *mut FadingManager,
+    _nem_id: u16,
+    _model: u32,
+) {
     // update logic
 }
 
@@ -59,11 +66,15 @@ pub extern "C" fn emane_rs_fadingalgorithmstore_new() -> *mut FadingAlgorithmSto
 #[no_mangle]
 pub extern "C" fn emane_rs_fadingalgorithmstore_free(ptr: *mut FadingAlgorithmStore) {
     if !ptr.is_null() {
-        unsafe { drop(Box::from_raw(ptr)); }
+        unsafe {
+            drop(Box::from_raw(ptr));
+        }
     }
 }
 
 #[no_mangle]
-pub extern "C" fn emane_rs_fadingmanager_create_store(ptr: *mut FadingManager) -> *mut FadingAlgorithmStore {
+pub extern "C" fn emane_rs_fadingmanager_create_store(
+    _ptr: *mut FadingManager,
+) -> *mut FadingAlgorithmStore {
     emane_rs_fadingalgorithmstore_new()
 }

@@ -1,4 +1,3 @@
-
 use std::collections::{BTreeMap, HashMap};
 
 pub struct MetaInfo {
@@ -59,16 +58,30 @@ impl TdmaQueue {
             let drop_key = drop_key.unwrap_or_else(|| *self.queue.keys().next().unwrap());
 
             let (entry, meta) = self.queue.remove(&drop_key).unwrap();
-            self.dest_queue.get_mut(&entry.dest).unwrap().remove(&drop_key);
+            self.dest_queue
+                .get_mut(&entry.dest)
+                .unwrap()
+                .remove(&drop_key);
             self.current_bytes -= entry.length - meta.offset;
             unsafe { *dropped_pkt = entry.pkt_ptr };
             dropped = true;
         }
 
-        let entry = PacketEntry { pkt_ptr, dest, length, priority };
-        let meta = MetaInfo { index: 0, offset: 0 };
+        let entry = PacketEntry {
+            pkt_ptr,
+            dest,
+            length,
+            priority,
+        };
+        let meta = MetaInfo {
+            index: 0,
+            offset: 0,
+        };
         self.queue.insert(self.counter, (entry, meta));
-        self.dest_queue.entry(dest).or_default().insert(self.counter, ());
+        self.dest_queue
+            .entry(dest)
+            .or_default()
+            .insert(self.counter, ());
         self.current_bytes += length;
         self.counter += 1;
 
@@ -165,7 +178,12 @@ impl TdmaQueue {
                             pkt_ptr: entry.pkt_ptr,
                             dest: entry.dest,
                             priority: entry.priority,
-                            seq: 0, fragment_index: 0, fragment_offset: 0, fragment_size: 0, is_control: false, more_fragments: false
+                            seq: 0,
+                            fragment_index: 0,
+                            fragment_offset: 0,
+                            fragment_size: 0,
+                            is_control: false,
+                            more_fragments: false,
                         };
                         actions.push(act);
 
@@ -228,7 +246,10 @@ pub extern "C" fn tdma_queue_enqueue(
     let q = unsafe { &mut *q };
     let mut dropped_pkt = std::ptr::null_mut();
     let dropped = q.enqueue(pkt_ptr, dest, length, priority, &mut dropped_pkt);
-    EnqueueResult { dropped_pkt, dropped }
+    EnqueueResult {
+        dropped_pkt,
+        dropped,
+    }
 }
 
 #[repr(C)]
@@ -346,7 +367,7 @@ pub extern "C" fn basic_queue_manager_set_config(
     m.fragmentation_enable = fragmentation_enable;
     m.strict_dequeue_enable = strict_dequeue_enable;
     m.aggregation_slot_threshold = aggregation_slot_threshold;
-    
+
     for i in 0..4 {
         m.queues[i].queue_depth = queue_depth;
         m.queues[i].fragment = fragmentation_enable;
@@ -373,9 +394,15 @@ pub extern "C" fn basic_queue_manager_enqueue(
         let q = &mut m.queues[u8_queue_index as usize];
         let mut dropped_pkt = std::ptr::null_mut();
         let dropped = q.enqueue(pkt_ptr, dest, length, priority, &mut dropped_pkt);
-        EnqueueResult { dropped_pkt, dropped }
+        EnqueueResult {
+            dropped_pkt,
+            dropped,
+        }
     } else {
-        EnqueueResult { dropped_pkt: std::ptr::null_mut(), dropped: false }
+        EnqueueResult {
+            dropped_pkt: std::ptr::null_mut(),
+            dropped: false,
+        }
     }
 }
 
@@ -390,19 +417,32 @@ pub extern "C" fn basic_queue_manager_dequeue(
     let m = unsafe { &mut *m };
     let mut actions = Vec::new();
     let mut total_length = 0;
-    
+
     if (u8_queue_index as usize) < 5 {
-        let (mut q_actions, q_len) = m.queues[u8_queue_index as usize].dequeue_impl(requested_bytes, destination, true, u8_queue_index);
+        let (mut q_actions, q_len) = m.queues[u8_queue_index as usize].dequeue_impl(
+            requested_bytes,
+            destination,
+            true,
+            u8_queue_index,
+        );
         total_length += q_len;
         actions.append(&mut q_actions);
-        
+
         let threshold = (requested_bytes as f64 * m.aggregation_slot_threshold / 100.0) as usize;
-        
+
         if !m.strict_dequeue_enable {
             let mut i = 5;
-            while (total_length == 0 || (total_length > 0 && m.aggregation_enable)) && total_length <= threshold && i > 0 {
+            while (total_length == 0 || (total_length > 0 && m.aggregation_enable))
+                && total_length <= threshold
+                && i > 0
+            {
                 if (i - 1) != u8_queue_index {
-                    let (mut o_actions, o_len) = m.queues[(i - 1) as usize].dequeue_impl(requested_bytes - total_length, destination, false, i - 1);
+                    let (mut o_actions, o_len) = m.queues[(i - 1) as usize].dequeue_impl(
+                        requested_bytes - total_length,
+                        destination,
+                        false,
+                        i - 1,
+                    );
                     if o_len > 0 {
                         total_length += o_len;
                         actions.append(&mut o_actions);
@@ -412,7 +452,7 @@ pub extern "C" fn basic_queue_manager_dequeue(
             }
         }
     }
-    
+
     actions.shrink_to_fit();
     unsafe {
         (*res).actions = actions.as_mut_ptr();

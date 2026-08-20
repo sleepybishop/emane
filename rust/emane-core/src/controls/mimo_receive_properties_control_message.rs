@@ -1,4 +1,3 @@
-
 use std::os::raw::c_void;
 
 #[derive(Clone)]
@@ -99,7 +98,9 @@ pub extern "C" fn emane_rs_controls_mimo_rx_props_clone(ptr: *const c_void) -> *
 #[no_mangle]
 pub extern "C" fn emane_rs_controls_mimo_rx_props_destroy(ptr: *mut c_void) {
     if !ptr.is_null() {
-        unsafe { let _ = Box::from_raw(ptr as *mut MimoReceivePropertiesControlMessageRs); }
+        unsafe {
+            let _ = Box::from_raw(ptr as *mut MimoReceivePropertiesControlMessageRs);
+        }
     }
 }
 
