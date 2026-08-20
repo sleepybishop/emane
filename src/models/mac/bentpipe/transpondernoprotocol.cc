@@ -30,8 +30,18 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+
 #include "transpondernoprotocol.h"
 #include "transponderuser.h"
+
+extern "C" {
+  void* rust_bentpipe_tnp_new();
+  void rust_bentpipe_tnp_free(void*);
+  void rust_bentpipe_tnp_start(void*);
+  void rust_bentpipe_tnp_stop(void*);
+  bool rust_bentpipe_tnp_is_tx_opp(void*, uint64_t now_us);
+  void rust_bentpipe_tnp_prepare_tx(void*, uint64_t now_us, size_t len, uint64_t rate, uint64_t* out_duration, uint64_t* out_idx);
+}
 
 EMANE::Models::BentPipe::TransponderNoProtocol::TransponderNoProtocol(NEMId id,
                                                                       PlatformServiceProvider * pPlatformService,
@@ -39,25 +49,27 @@ EMANE::Models::BentPipe::TransponderNoProtocol::TransponderNoProtocol(NEMId id,
                                                                       const TransponderConfiguration & transponderConfiguration):
   Transponder{id,pPlatformService,pTransponderUser,transponderConfiguration},
   eot_{},
-  u64TxOpportunityIndex_{}{}
+  u64TxOpportunityIndex_{},
+  rust_obj_{rust_bentpipe_tnp_new()} {}
 
-void EMANE::Models::BentPipe::TransponderNoProtocol::start()
-{
-
+EMANE::Models::BentPipe::TransponderNoProtocol::~TransponderNoProtocol() {
+  if (rust_obj_) rust_bentpipe_tnp_free(rust_obj_);
 }
 
-void EMANE::Models::BentPipe::TransponderNoProtocol::stop()
-{
-
+void EMANE::Models::BentPipe::TransponderNoProtocol::start() {
+  rust_bentpipe_tnp_start(rust_obj_);
 }
 
-bool EMANE::Models::BentPipe::TransponderNoProtocol::isTransmitOpportunity(const TimePoint & now)
-{
-  return now >= eot_;
+void EMANE::Models::BentPipe::TransponderNoProtocol::stop() {
+  rust_bentpipe_tnp_stop(rust_obj_);
 }
 
-size_t EMANE::Models::BentPipe::TransponderNoProtocol::getMTUBytes() const
-{
+bool EMANE::Models::BentPipe::TransponderNoProtocol::isTransmitOpportunity(const TimePoint & now) {
+  uint64_t now_us = std::chrono::duration_cast<Microseconds>(now.time_since_epoch()).count();
+  return rust_bentpipe_tnp_is_tx_opp(rust_obj_, now_us);
+}
+
+size_t EMANE::Models::BentPipe::TransponderNoProtocol::getMTUBytes() const {
   return configuration_.getTransmitMTUBytes();
 }
 
@@ -66,10 +78,13 @@ EMANE::Models::BentPipe::TransponderNoProtocol::prepareTransmission(const TimePo
                                                                     size_t lengthBytes,
                                                                     MessageComponents && components)
 {
-  Microseconds durationMicroseconds{std::chrono::duration_cast<Microseconds>(DoubleSeconds{(lengthBytes * 8.0) / configuration_.getTransmitDataRatebps()})};
-
-  ++u64TxOpportunityIndex_;
-
+  uint64_t now_us = std::chrono::duration_cast<Microseconds>(now.time_since_epoch()).count();
+  uint64_t out_dur = 0;
+  uint64_t out_idx = 0;
+  rust_bentpipe_tnp_prepare_tx(rust_obj_, now_us, lengthBytes, configuration_.getTransmitDataRatebps(), &out_dur, &out_idx);
+  
+  u64TxOpportunityIndex_ = out_idx;
+  Microseconds durationMicroseconds{out_dur};
   eot_ = now + durationMicroseconds;
 
   // set a timer for the next tx opporunity
@@ -89,7 +104,6 @@ void EMANE::Models::BentPipe::TransponderNoProtocol::processTxOpportunity(std::u
 {
   if(u64TxOpportunityIndex == u64TxOpportunityIndex_)
     {
-      // signal to radio model this transponder has a tx opportunity
       pTransponderUser_->notifyTxOpportunity(this);
     }
 }

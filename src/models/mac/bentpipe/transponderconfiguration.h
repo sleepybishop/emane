@@ -50,8 +50,10 @@ namespace EMANE
       {
       public:
         TransponderConfiguration(TransponderIndex transponderIndex);
+        ~TransponderConfiguration();
 
-        TransponderConfiguration(const TransponderConfiguration &) = default;
+        TransponderConfiguration(const TransponderConfiguration &);
+        TransponderConfiguration& operator=(const TransponderConfiguration& other);
 
         void setReceiveFrequencyHz(std::uint64_t u64FrequencyHz);
         void setReceiveBandwidthHz(std::uint64_t u64BandwidthHz);
@@ -94,26 +96,12 @@ namespace EMANE
         bool getTransmitEnable() const;
 
       private:
-        TransponderIndex transponderIndex_;
-        std::uint64_t u64ReceiveFrequencyHz_;
-        std::uint64_t u64ReceiveBandwidthHz_;
-        AntennaIndex  receiveAntennaIndex_;
-        PCRCurveIndex curveIndex_;
-        ReceiveAction receiveAction_;
-        std::uint64_t u64TransmitFrequencyHz_;
-        std::uint64_t u64TransmitBandwidthHz_;
-        std::uint64_t u64TransmitDataRatebps_;
-        AntennaIndex  transmitAntennaIndex_;
-        double dTransmitPowerdBm_;
-        Microseconds transmitUbendDelay_;
         TOSSet transmitProcessTOS_;
-        std::uint16_t u16TransmitSlotsPerFrame_;
-        Microseconds transmitSlotSize_;
         TransmitSlots transmitSlots_;
-        std::uint64_t u64TransmitMTUBytes_;
-        bool bReceiveEnable_;
-        bool bTransmitEnable_;
+        void* rust_obj_;
       };
+
+
 
       using TransponderConfigurations =
         std::map<TransponderIndex,

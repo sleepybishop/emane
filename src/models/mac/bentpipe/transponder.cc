@@ -31,6 +31,7 @@
  */
 
 #include "transponder.h"
+extern "C" { void rust_bentpipe_transponder_dummy(); }
 #include "transponderuser.h"
 
 EMANE::Models::BentPipe::Transponder::Transponder(NEMId id,
@@ -59,3 +60,4 @@ EMANE::Models::BentPipe::Transponder::getConfiguration() const
 {
   return configuration_;
 }
+void dummy_call() { rust_bentpipe_transponder_dummy(); }

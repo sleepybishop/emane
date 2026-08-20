@@ -46,6 +46,7 @@ namespace EMANE
       class TransponderTDMAProtocol: public Transponder
       {
       public:
+        ~TransponderTDMAProtocol();
         TransponderTDMAProtocol(NEMId id,
                                 PlatformServiceProvider * pPlatformService,
                                 TransponderUser * pTransponderUser,
@@ -70,6 +71,7 @@ namespace EMANE
         Slotter slotter_;
         std::uint64_t u64AbsoluteFrameIndexLastTxSchedule_;
         std::set<uint64_t> pendingTxOpportunities_;
+        void* rust_obj_;
 
         void getTxOpportunities(const TimePoint & requestFrameTime,
                                 unsigned uNumFrames);

@@ -44,6 +44,7 @@ namespace EMANE
       class TransponderNoProtocol: public Transponder
       {
       public:
+        ~TransponderNoProtocol();
         TransponderNoProtocol(NEMId id,
                               PlatformServiceProvider * pPlatformService,
                               TransponderUser * pTransponderUser,
@@ -64,6 +65,7 @@ namespace EMANE
       private:
         TimePoint eot_;
         std::uint64_t u64TxOpportunityIndex_;
+        void* rust_obj_;
 
         void processTxOpportunity(std::uint64_t u64TxOpportunityIndex);
       };

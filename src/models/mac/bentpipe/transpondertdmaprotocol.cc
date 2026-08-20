@@ -31,6 +31,7 @@
  */
 
 #include "transpondertdmaprotocol.h"
+extern "C" { void* rust_bentpipe_ttp_new(); void rust_bentpipe_ttp_free(void*); }
 #include "transponderuser.h"
 
 EMANE::Models::BentPipe::TransponderTDMAProtocol::TransponderTDMAProtocol(NEMId id,
@@ -41,7 +42,8 @@ EMANE::Models::BentPipe::TransponderTDMAProtocol::TransponderTDMAProtocol(NEMId 
   Transponder{id,pPlatformService,pTransponderUser,transponderConfiguration},
   pSlotStatusPublisher_{pSlotStatusPublisher},
   transmitTimedEventId_{},
-  u64AbsoluteFrameIndexLastTxSchedule_{}
+  u64AbsoluteFrameIndexLastTxSchedule_{},
+  rust_obj_{rust_bentpipe_ttp_new()}
 {
   slotter_.reset(configuration_.getTransmitSlotSize(),
                  configuration_.getTransmitSlotsPerFrame());
@@ -264,4 +266,7 @@ bool EMANE::Models::BentPipe::TransponderTDMAProtocol::isTransmitOpportunity_i(c
 
   // is this a tx op
   return pendingTxOpportunities_.count(u64AbsoluteSlotIndex);
+}
+EMANE::Models::BentPipe::TransponderTDMAProtocol::~TransponderTDMAProtocol() {
+  if (rust_obj_) rust_bentpipe_ttp_free(rust_obj_);
 }
