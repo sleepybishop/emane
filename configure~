@@ -708,6 +708,7 @@ PYTHON_EXEC_PREFIX
 PYTHON_PREFIX
 PYTHON_PLATFORM
 PYTHON_VERSION
+libemane_CFLAGS
 PYTHON
 HAVE_DOT_FALSE
 HAVE_DOT_TRUE
@@ -718,20 +719,15 @@ HAVE_DOXYGEN
 EMANE_HAS_PTY_FALSE
 EMANE_HAS_PTY_TRUE
 LANG
-libemane_CFLAGS
 libuuid_LIBS
 libuuid_CFLAGS
 protobuf_LIBS
 protobuf_CFLAGS
-libxml2_LIBS
-libxml2_CFLAGS
 PKG_CONFIG_LIBDIR
 PKG_CONFIG_PATH
 PKG_CONFIG
 pcap_LIBS
 pcap_CFLAGS
-WITH_TESTCASES_FALSE
-WITH_TESTCASES_TRUE
 LT_SYS_LIBRARY_PATH
 OTOOL64
 OTOOL
@@ -878,7 +874,6 @@ with_profile
 with_debug
 with_dot
 with_verbose_logging
-with_testcases
 with_python_sys_prefix
 with_python_prefix
 with_python_exec_prefix
@@ -901,8 +896,6 @@ pcap_LIBS
 PKG_CONFIG
 PKG_CONFIG_PATH
 PKG_CONFIG_LIBDIR
-libxml2_CFLAGS
-libxml2_LIBS
 protobuf_CFLAGS
 protobuf_LIBS
 libuuid_CFLAGS
@@ -1562,7 +1555,6 @@ Optional Packages:
   --with-debug            add debug support (off)
   --with-dot              Use dot with doxygen (off)
   --without-verbose-logging  disable verbose logging support (on)
-  --with-testcases        add testcases to build (off)
   --with-python-sys-prefix
                           use Python's sys.prefix and sys.exec_prefix values
   --with-python_prefix    override the default PYTHON_PREFIX
@@ -1589,10 +1581,6 @@ Some influential environment variables:
               directories to add to pkg-config's search path
   PKG_CONFIG_LIBDIR
               path overriding pkg-config's built-in search path
-  libxml2_CFLAGS
-              C compiler flags for libxml2, overriding pkg-config
-  libxml2_LIBS
-              linker flags for libxml2, overriding pkg-config
   protobuf_CFLAGS
               C compiler flags for protobuf, overriding pkg-config
   protobuf_LIBS
@@ -1601,7 +1589,6 @@ Some influential environment variables:
               C compiler flags for libuuid, overriding pkg-config
   libuuid_LIBS
               linker flags for libuuid, overriding pkg-config
-  PYTHON      the Python interpreter
 
 Use these variables to override the choices made by 'configure' or to help
 it to find libraries and programs with nonstandard names/locations.
@@ -19656,30 +19643,6 @@ fi
 
 
 
-# Check whether --with-testcases was given.
-if test ${with_testcases+y}
-then :
-  withval=$with_testcases;  if true; then
-  WITH_TESTCASES_TRUE=
-  WITH_TESTCASES_FALSE='#'
-else
-  WITH_TESTCASES_TRUE='#'
-  WITH_TESTCASES_FALSE=
-fi
-
-else case e in #(
-  e)  if false; then
-  WITH_TESTCASES_TRUE=
-  WITH_TESTCASES_FALSE='#'
-else
-  WITH_TESTCASES_TRUE='#'
-  WITH_TESTCASES_FALSE=
-fi
- ;;
-esac
-fi
-
-
 
 
 
@@ -19818,97 +19781,6 @@ printf "%s\n" "no" >&6; }
 fi
 if test -z "$PKG_CONFIG"; then
 	as_fn_error $? "pkg-config not found" "$LINENO" 5
-fi
-
-pkg_failed=no
-{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for libxml-2.0" >&5
-printf %s "checking for libxml-2.0... " >&6; }
-
-if test -n "$libxml2_CFLAGS"; then
-    pkg_cv_libxml2_CFLAGS="$libxml2_CFLAGS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libxml-2.0\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libxml-2.0") 2>&5
-  ac_status=$?
-  printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_libxml2_CFLAGS=`$PKG_CONFIG --cflags "libxml-2.0" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-if test -n "$libxml2_LIBS"; then
-    pkg_cv_libxml2_LIBS="$libxml2_LIBS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libxml-2.0\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libxml-2.0") 2>&5
-  ac_status=$?
-  printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_libxml2_LIBS=`$PKG_CONFIG --libs "libxml-2.0" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-
-
-
-if test $pkg_failed = yes; then
-        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
-printf "%s\n" "no" >&6; }
-
-if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
-        _pkg_short_errors_supported=yes
-else
-        _pkg_short_errors_supported=no
-fi
-        if test $_pkg_short_errors_supported = yes; then
-                libxml2_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libxml-2.0" 2>&1`
-        else
-                libxml2_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libxml-2.0" 2>&1`
-        fi
-        # Put the nasty error message in config.log where it belongs
-        echo "$libxml2_PKG_ERRORS" >&5
-
-        as_fn_error $? "Package requirements (libxml-2.0) were not met:
-
-$libxml2_PKG_ERRORS
-
-Consider adjusting the PKG_CONFIG_PATH environment variable if you
-installed software in a non-standard prefix.
-
-Alternatively, you may set the environment variables libxml2_CFLAGS
-and libxml2_LIBS to avoid the need to call pkg-config.
-See the pkg-config man page for more details." "$LINENO" 5
-elif test $pkg_failed = untried; then
-        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
-printf "%s\n" "no" >&6; }
-        { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: error: in '$ac_pwd':" >&5
-printf "%s\n" "$as_me: error: in '$ac_pwd':" >&2;}
-as_fn_error $? "The pkg-config script could not be found or is too old.  Make sure it
-is in your PATH or set the PKG_CONFIG environment variable to the full
-path to pkg-config.
-
-Alternatively, you may set the environment variables libxml2_CFLAGS
-and libxml2_LIBS to avoid the need to call pkg-config.
-See the pkg-config man page for more details.
-
-To get pkg-config, see <http://pkg-config.freedesktop.org/>.
-See 'config.log' for more details" "$LINENO" 5; }
-else
-        libxml2_CFLAGS=$pkg_cv_libxml2_CFLAGS
-        libxml2_LIBS=$pkg_cv_libxml2_LIBS
-        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-printf "%s\n" "yes" >&6; }
-
 fi
 
 pkg_failed=no
@@ -20280,10 +20152,7 @@ then
 CPPFLAGS="$CPPFLAGS -DVERBOSE_LOGGING"
 fi
 
-libemane_CFLAGS="${libxml2_CFLAGS} ${protobuf_CFLAGS} ${libpcre_CFLAGS} ${libuuid_CFLAGS}"
-
-
-LANG=C
+libemane_CFLAGS=LANG=C
 
 
 ac_fn_cxx_check_header_compile "$LINENO" "pty.h" "ac_cv_header_pty_h" "$ac_includes_default"
@@ -20448,6 +20317,7 @@ fi
 
 
 
+    PYTHON      the Python interpreter
 
 
 
@@ -20459,10 +20329,10 @@ printf %s "checking whether $PYTHON version is >= 3.6... " >&6; }
 # split strings by '.' and convert to numeric.  Append some zeros
 # because we need at least 4 digits for the hex conversion.
 # map returns an iterator in Python 3.0 and a list in 2.x
-minver = list(map(int, '3.6'.split('.'))) + [0, 0, 0]
+minver = list(map(int, '3.6'.split('.'))) + 0, 0, 0
 minverhex = 0
 # xrange is not present in Python 3.0 and range returns an iterator
-for i in list(range(0, 4)): minverhex = (minverhex << 8) + minver[i]
+for i in list(range(0, 4)): minverhex = (minverhex << 8) + minveri
 sys.exit(sys.hexversion < minverhex)"
   if { echo "$as_me:$LINENO: $PYTHON -c "$prog"" >&5
    ($PYTHON -c "$prog") >&5 2>&5
@@ -20495,10 +20365,10 @@ else case e in #(
 # split strings by '.' and convert to numeric.  Append some zeros
 # because we need at least 4 digits for the hex conversion.
 # map returns an iterator in Python 3.0 and a list in 2.x
-minver = list(map(int, '3.6'.split('.'))) + [0, 0, 0]
+minver = list(map(int, '3.6'.split('.'))) + 0, 0, 0
 minverhex = 0
 # xrange is not present in Python 3.0 and range returns an iterator
-for i in list(range(0, 4)): minverhex = (minverhex << 8) + minver[i]
+for i in list(range(0, 4)): minverhex = (minverhex << 8) + minveri
 sys.exit(sys.hexversion < minverhex)"
   if { echo "$as_me:$LINENO: $am_cv_pathless_PYTHON -c "$prog"" >&5
    ($am_cv_pathless_PYTHON -c "$prog") >&5 2>&5
@@ -20526,7 +20396,8 @@ then :
   printf %s "(cached) " >&6
 else case e in #(
   e) case $PYTHON in
-  [\\/]* | ?:[\\/]*)
+  \\/* | ?:\\/*
+
   ac_cv_path_PYTHON="$PYTHON" # Let the user override the test with a path.
   ;;
   *)
@@ -21018,7 +20889,7 @@ DATE_RFC2822=`date -R`
 PACKAGE_VERSION_CODE=`echo $PACKAGE_VERSION | awk '/^([0-9]+)\.([0-9]+)\.([0-9]+)(\.([0-9]+)){0,1}$/ { split($0, m, "."); printf("%d", (m[1]*(2^16)) + (m[2]*(2^8)) + m[3]);}'`
 
 
-ac_config_files="$ac_config_files Makefile include/emane/Makefile include/emane/utils/Makefile include/emane/controls/Makefile include/emane/application/Makefile include/emane/generators/Makefile include/emane/generators/eel/Makefile include/emane/events/Makefile include/emane/models/Makefile include/emane/models/tdma/Makefile include/emane/version.h src/Makefile src/libemane/Makefile src/libemane/libemane.pc src/applications/Makefile src/applications/emane/Makefile src/applications/emaneinfo/Makefile src/applications/emanetransportd/Makefile src/applications/emaneeventd/Makefile src/applications/emaneeventservice/Makefile src/python/Makefile src/python/emane/info/__init__.py src/transports/Makefile src/transports/common/Makefile src/transports/virtual/Makefile src/transports/raw/Makefile src/models/Makefile src/models/mac/Makefile src/models/mac/bypass/Makefile src/models/phy/Makefile src/models/phy/bypass/Makefile src/models/mac/rfpipe/Makefile src/models/mac/ieee80211abg/Makefile src/models/mac/tdma/Makefile src/models/mac/tdma/eventscheduler/Makefile src/models/mac/bentpipe/Makefile src/models/shim/Makefile src/models/shim/timinganalysis/Makefile src/models/shim/phyapitest/Makefile src/models/shim/commeffect/Makefile src/agents/Makefile src/agents/gpsdlocation/Makefile src/generators/Makefile src/generators/eel/Makefile src/generators/eel/loaders/Makefile src/generators/eel/loaders/location/Makefile src/generators/eel/loaders/pathloss/Makefile src/generators/eel/loaders/pathlossex/Makefile src/generators/eel/loaders/antennaprofile/Makefile src/generators/eel/loaders/commeffect/Makefile src/generators/eel/loaders/fadingselection/Makefile test/Makefile test/harness/Makefile test/harness/gainscenario/Makefile test/harness/filterscenario/Makefile test/harness/noisescenario/Makefile test/harness/profilescenario/Makefile test/harness/propagationscenario/Makefile test/harness/phydownstreamspeed/Makefile test/harness/phyupstreamscenario/Makefile test/harness/phyupstreamspeed/Makefile test/testcases/Makefile test/testcases/gainscenario001/Makefile test/testcases/filterscenario001/Makefile test/testcases/noisescenario001/Makefile test/testcases/noisescenario002/Makefile test/testcases/profilescenario001/Makefile test/testcases/propagationscenario001/Makefile test/testcases/phyupstreamscenario001/Makefile test/testcases/phyupstreamscenario002/Makefile test/testcases/phyupstreamscenario003/Makefile test/testcases/phyupstreamscenario004/Makefile test/testcases/phyupstreamscenario005/Makefile test/testcases/phyupstreamscenario006/Makefile scripts/Makefile scripts/doc/Makefile dtd/Makefile schema/Makefile doc/Makefile"
+ac_config_files="$ac_config_files Makefile include/emane/Makefile include/emane/utils/Makefile include/emane/controls/Makefile include/emane/application/Makefile include/emane/generators/Makefile include/emane/generators/eel/Makefile include/emane/events/Makefile include/emane/models/Makefile include/emane/models/tdma/Makefile include/emane/version.h src/Makefile src/libemane/Makefile src/libemane/libemane.pc src/applications/Makefile src/applications/emane/Makefile src/applications/emanetransportd/Makefile src/applications/emaneeventd/Makefile src/applications/emaneeventservice/Makefile src/python/Makefile src/python/emane/info/__init__.py src/transports/Makefile src/transports/common/Makefile src/transports/virtual/Makefile src/transports/raw/Makefile src/models/Makefile src/models/mac/Makefile src/models/mac/bypass/Makefile src/models/phy/Makefile src/models/phy/bypass/Makefile src/models/mac/rfpipe/Makefile src/models/mac/ieee80211abg/Makefile src/models/mac/tdma/Makefile src/models/mac/tdma/eventscheduler/Makefile src/models/mac/bentpipe/Makefile src/models/shim/Makefile src/models/shim/timinganalysis/Makefile src/models/shim/commeffect/Makefile src/agents/Makefile src/agents/gpsdlocation/Makefile src/generators/Makefile src/generators/eel/Makefile src/generators/eel/loaders/Makefile src/generators/eel/loaders/location/Makefile src/generators/eel/loaders/pathloss/Makefile src/generators/eel/loaders/pathlossex/Makefile src/generators/eel/loaders/antennaprofile/Makefile src/generators/eel/loaders/commeffect/Makefile src/generators/eel/loaders/fadingselection/Makefile scripts/Makefile scripts/doc/Makefile dtd/Makefile schema/Makefile doc/Makefile"
 
 cat >confcache <<\_ACEOF
 # This file is a shell script that caches the results of configure
@@ -21201,14 +21072,6 @@ Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
 if test -z "${am__fastdepCC_TRUE}" && test -z "${am__fastdepCC_FALSE}"; then
   as_fn_error $? "conditional \"am__fastdepCC\" was never defined.
-Usually this means the macro was only invoked conditionally." "$LINENO" 5
-fi
-if test -z "${WITH_TESTCASES_TRUE}" && test -z "${WITH_TESTCASES_FALSE}"; then
-  as_fn_error $? "conditional \"WITH_TESTCASES\" was never defined.
-Usually this means the macro was only invoked conditionally." "$LINENO" 5
-fi
-if test -z "${WITH_TESTCASES_TRUE}" && test -z "${WITH_TESTCASES_FALSE}"; then
-  as_fn_error $? "conditional \"WITH_TESTCASES\" was never defined.
 Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
 if test -z "${EMANE_HAS_PTY_TRUE}" && test -z "${EMANE_HAS_PTY_FALSE}"; then
@@ -22214,7 +22077,6 @@ do
     "src/libemane/libemane.pc") CONFIG_FILES="$CONFIG_FILES src/libemane/libemane.pc" ;;
     "src/applications/Makefile") CONFIG_FILES="$CONFIG_FILES src/applications/Makefile" ;;
     "src/applications/emane/Makefile") CONFIG_FILES="$CONFIG_FILES src/applications/emane/Makefile" ;;
-    "src/applications/emaneinfo/Makefile") CONFIG_FILES="$CONFIG_FILES src/applications/emaneinfo/Makefile" ;;
     "src/applications/emanetransportd/Makefile") CONFIG_FILES="$CONFIG_FILES src/applications/emanetransportd/Makefile" ;;
     "src/applications/emaneeventd/Makefile") CONFIG_FILES="$CONFIG_FILES src/applications/emaneeventd/Makefile" ;;
     "src/applications/emaneeventservice/Makefile") CONFIG_FILES="$CONFIG_FILES src/applications/emaneeventservice/Makefile" ;;
@@ -22236,7 +22098,6 @@ do
     "src/models/mac/bentpipe/Makefile") CONFIG_FILES="$CONFIG_FILES src/models/mac/bentpipe/Makefile" ;;
     "src/models/shim/Makefile") CONFIG_FILES="$CONFIG_FILES src/models/shim/Makefile" ;;
     "src/models/shim/timinganalysis/Makefile") CONFIG_FILES="$CONFIG_FILES src/models/shim/timinganalysis/Makefile" ;;
-    "src/models/shim/phyapitest/Makefile") CONFIG_FILES="$CONFIG_FILES src/models/shim/phyapitest/Makefile" ;;
     "src/models/shim/commeffect/Makefile") CONFIG_FILES="$CONFIG_FILES src/models/shim/commeffect/Makefile" ;;
     "src/agents/Makefile") CONFIG_FILES="$CONFIG_FILES src/agents/Makefile" ;;
     "src/agents/gpsdlocation/Makefile") CONFIG_FILES="$CONFIG_FILES src/agents/gpsdlocation/Makefile" ;;
@@ -22249,29 +22110,6 @@ do
     "src/generators/eel/loaders/antennaprofile/Makefile") CONFIG_FILES="$CONFIG_FILES src/generators/eel/loaders/antennaprofile/Makefile" ;;
     "src/generators/eel/loaders/commeffect/Makefile") CONFIG_FILES="$CONFIG_FILES src/generators/eel/loaders/commeffect/Makefile" ;;
     "src/generators/eel/loaders/fadingselection/Makefile") CONFIG_FILES="$CONFIG_FILES src/generators/eel/loaders/fadingselection/Makefile" ;;
-    "test/Makefile") CONFIG_FILES="$CONFIG_FILES test/Makefile" ;;
-    "test/harness/Makefile") CONFIG_FILES="$CONFIG_FILES test/harness/Makefile" ;;
-    "test/harness/gainscenario/Makefile") CONFIG_FILES="$CONFIG_FILES test/harness/gainscenario/Makefile" ;;
-    "test/harness/filterscenario/Makefile") CONFIG_FILES="$CONFIG_FILES test/harness/filterscenario/Makefile" ;;
-    "test/harness/noisescenario/Makefile") CONFIG_FILES="$CONFIG_FILES test/harness/noisescenario/Makefile" ;;
-    "test/harness/profilescenario/Makefile") CONFIG_FILES="$CONFIG_FILES test/harness/profilescenario/Makefile" ;;
-    "test/harness/propagationscenario/Makefile") CONFIG_FILES="$CONFIG_FILES test/harness/propagationscenario/Makefile" ;;
-    "test/harness/phydownstreamspeed/Makefile") CONFIG_FILES="$CONFIG_FILES test/harness/phydownstreamspeed/Makefile" ;;
-    "test/harness/phyupstreamscenario/Makefile") CONFIG_FILES="$CONFIG_FILES test/harness/phyupstreamscenario/Makefile" ;;
-    "test/harness/phyupstreamspeed/Makefile") CONFIG_FILES="$CONFIG_FILES test/harness/phyupstreamspeed/Makefile" ;;
-    "test/testcases/Makefile") CONFIG_FILES="$CONFIG_FILES test/testcases/Makefile" ;;
-    "test/testcases/gainscenario001/Makefile") CONFIG_FILES="$CONFIG_FILES test/testcases/gainscenario001/Makefile" ;;
-    "test/testcases/filterscenario001/Makefile") CONFIG_FILES="$CONFIG_FILES test/testcases/filterscenario001/Makefile" ;;
-    "test/testcases/noisescenario001/Makefile") CONFIG_FILES="$CONFIG_FILES test/testcases/noisescenario001/Makefile" ;;
-    "test/testcases/noisescenario002/Makefile") CONFIG_FILES="$CONFIG_FILES test/testcases/noisescenario002/Makefile" ;;
-    "test/testcases/profilescenario001/Makefile") CONFIG_FILES="$CONFIG_FILES test/testcases/profilescenario001/Makefile" ;;
-    "test/testcases/propagationscenario001/Makefile") CONFIG_FILES="$CONFIG_FILES test/testcases/propagationscenario001/Makefile" ;;
-    "test/testcases/phyupstreamscenario001/Makefile") CONFIG_FILES="$CONFIG_FILES test/testcases/phyupstreamscenario001/Makefile" ;;
-    "test/testcases/phyupstreamscenario002/Makefile") CONFIG_FILES="$CONFIG_FILES test/testcases/phyupstreamscenario002/Makefile" ;;
-    "test/testcases/phyupstreamscenario003/Makefile") CONFIG_FILES="$CONFIG_FILES test/testcases/phyupstreamscenario003/Makefile" ;;
-    "test/testcases/phyupstreamscenario004/Makefile") CONFIG_FILES="$CONFIG_FILES test/testcases/phyupstreamscenario004/Makefile" ;;
-    "test/testcases/phyupstreamscenario005/Makefile") CONFIG_FILES="$CONFIG_FILES test/testcases/phyupstreamscenario005/Makefile" ;;
-    "test/testcases/phyupstreamscenario006/Makefile") CONFIG_FILES="$CONFIG_FILES test/testcases/phyupstreamscenario006/Makefile" ;;
     "scripts/Makefile") CONFIG_FILES="$CONFIG_FILES scripts/Makefile" ;;
     "scripts/doc/Makefile") CONFIG_FILES="$CONFIG_FILES scripts/doc/Makefile" ;;
     "dtd/Makefile") CONFIG_FILES="$CONFIG_FILES dtd/Makefile" ;;

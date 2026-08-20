@@ -74,7 +74,6 @@ AC_ARG_WITH([verbose-logging],
 AC_ARG_VAR([pcap_CFLAGS],[C compiler flags for libpcap])
 AC_ARG_VAR([pcap_LIBS], [linker flags for libpcap])
 
-PKG_CHECK_MODULES([libxml2], libxml-2.0)
 PKG_CHECK_MODULES([protobuf], protobuf)
 
 PKG_CHECK_MODULES([libuuid], uuid)
@@ -134,8 +133,7 @@ then
 CPPFLAGS="$CPPFLAGS -DVERBOSE_LOGGING"
 fi
 
-AC_SUBST(libemane_CFLAGS,
-["${libxml2_CFLAGS} ${protobuf_CFLAGS} ${libpcre_CFLAGS} ${libuuid_CFLAGS}"])
+AC_SUBST(libemane_CFLAGS, ["${protobuf_CFLAGS} ${libpcre_CFLAGS} ${libuuid_CFLAGS}"])
 
 LANG=C
 AC_SUBST(LANG)
@@ -193,12 +191,6 @@ AC_CONFIG_FILES([Makefile
  src/Makefile
  src/libemane/Makefile
  src/libemane/libemane.pc
- src/applications/Makefile
- src/applications/emane/Makefile
- src/applications/emaneinfo/Makefile
- src/applications/emanetransportd/Makefile
- src/applications/emaneeventd/Makefile
- src/applications/emaneeventservice/Makefile
  src/python/Makefile
  src/python/emane/info/__init__.py
  src/transports/Makefile

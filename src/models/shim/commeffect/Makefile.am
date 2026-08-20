@@ -7,7 +7,6 @@ libcommeffectshim_la_CPPFLAGS= \
 
 libcommeffectshim_la_LIBADD=                 \
  $(libuuid_LIBS)                             \
- $(libxml2_LIBS)                             \
  $(protobuf_LIBS)                            \
  @top_srcdir@/src/libemane/.libs/libemane.la
 

@@ -40,7 +40,6 @@
 #include "target.h"
 #include "filter.h"
 
-#include <libxml/parser.h>
 
 #include <string>
 

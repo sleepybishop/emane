@@ -7,7 +7,6 @@ libtdmaeventschedulerradiomodel_la_CPPFLAGS= \
 
 libtdmaeventschedulerradiomodel_la_LIBADD=   \
  $(libuuid_LIBS)                             \
- $(libxml2_LIBS)                             \
  @top_srcdir@/src/libemane/.libs/libemane.la \
  ../.libs/libtdmabase.la
 

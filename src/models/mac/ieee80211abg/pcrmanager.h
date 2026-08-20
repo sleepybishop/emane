@@ -39,7 +39,6 @@
 #include "emane/configurationexception.h"
 #include "emane/platformserviceprovider.h"
 
-#include <libxml/parser.h>
 
 #include <string>
 #include <vector>

@@ -38,8 +38,6 @@
 #include <cstdlib>
 #include <limits>
 
-#include <libxml/parser.h>
-#include <libxml/xmlschemas.h>
 
 namespace
 {

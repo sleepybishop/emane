@@ -6,7 +6,7 @@ SUBDIRS= src                            \
          scripts/doc                    \
          dtd                            \
          doc                            \
-         schema                         \
+         schema
         
 
 edit = sed                                               \

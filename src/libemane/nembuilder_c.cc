@@ -72,3 +72,8 @@ void* emane_rs_ffi_build_nem(uint16_t id, void** layers, size_t num_layers, FfiC
 }
 
 }
+
+extern "C" uint16_t emane_rs_ffi_component_get_build_id(void* component) {
+    if (!component) return 0;
+    return static_cast<EMANE::Buildable*>(component)->getBuildId();
+}

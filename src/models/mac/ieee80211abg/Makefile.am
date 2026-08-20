@@ -7,7 +7,6 @@ libieee80211abgmaclayer_la_CPPFLAGS= \
 
 libieee80211abgmaclayer_la_LIBADD=           \
  $(libuuid_LIBS)                             \
- $(libxml2_LIBS)                             \
  $(protobuf_LIBS)                            \
  @top_srcdir@/src/libemane/.libs/libemane.la
 

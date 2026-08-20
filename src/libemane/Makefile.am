@@ -15,7 +15,6 @@ $(top_srcdir)/rust/target/debug/libemane_core.a:
 
 libemane_la_LIBADD=      \
  -lrt                    \
- $(libxml2_LIBS)         \
  $(protobuf_LIBS)        \
  $(libuuid_LIBS) -lpcap
 
