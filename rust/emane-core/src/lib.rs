@@ -212,10 +212,10 @@ pub mod transport_layer;
 
 pub mod factory_manager;
 pub mod xml_parser;
-pub mod gpsd_location_agent;
+pub mod agents;
 pub mod r#virtual;
 pub mod raw_transport;
-pub mod eel_generator;
+pub mod generators;
 pub mod tdma;
 pub mod ieee80211abg;
 pub mod bentpipe;
