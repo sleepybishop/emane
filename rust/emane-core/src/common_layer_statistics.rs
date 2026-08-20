@@ -1,7 +1,5 @@
-
 // rust/emane-core/src/common_layer_statistics.rs
-use std::os::raw::{c_void, c_char};
-use std::collections::HashMap;
+use std::os::raw::c_void;
 
 #[repr(C)]
 pub struct CommonLayerStatisticsState {
@@ -26,6 +24,27 @@ pub extern "C" fn emane_rs_common_layer_statistics_new() -> *mut c_void {
 #[no_mangle]
 pub extern "C" fn emane_rs_common_layer_statistics_destroy(ptr: *mut c_void) {
     if !ptr.is_null() {
-        unsafe { drop(Box::from_raw(ptr as *mut CommonLayerStatisticsState)); }
+        unsafe {
+            drop(Box::from_raw(ptr as *mut CommonLayerStatisticsState));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_common_layer_statistics_lifecycle() {
+        let ptr = emane_rs_common_layer_statistics_new();
+        assert!(!ptr.is_null());
+
+        let state = unsafe { &*(ptr as *const CommonLayerStatisticsState) };
+        assert!(state.p_statistic_unicast_drop_table.is_null());
+        assert!(state.p_statistic_broadcast_drop_table.is_null());
+        assert!(state.p_statistic_unicast_accept_table.is_null());
+        assert!(state.p_statistic_broadcast_accept_table.is_null());
+
+        emane_rs_common_layer_statistics_destroy(ptr);
     }
 }
