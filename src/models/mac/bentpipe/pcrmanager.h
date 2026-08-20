@@ -51,6 +51,7 @@ namespace EMANE
       {
       public:
         PCRManager();
+        ~PCRManager();
 
         void load(const std::string & sPCRFileName);
 
@@ -69,6 +70,7 @@ namespace EMANE
       private:
         CurveTable curveTable_;
         size_t modifierLengthBytes_;
+        void * rust_obj_;
       };
     }
   }

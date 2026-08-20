@@ -115,199 +115,56 @@ namespace
   }
 }
 
+extern "C" {
+  void* rust_bentpipe_pcr_manager_new();
+  void rust_bentpipe_pcr_manager_free(void* ptr);
+  bool rust_bentpipe_pcr_manager_load(void* ptr, const char* filename);
+  bool rust_bentpipe_pcr_manager_get_por(void* ptr, uint16_t index, float sinr, size_t packet_length_bytes, float* out_por);
+  size_t rust_bentpipe_pcr_manager_get_indices(void* ptr, uint16_t* out_indices, size_t max_indices);
+}
+
 EMANE::Models::BentPipe::PCRManager::PCRManager():
-  modifierLengthBytes_{}{}
+  modifierLengthBytes_{0},
+  rust_obj_{rust_bentpipe_pcr_manager_new()}
+  {}
+
+EMANE::Models::BentPipe::PCRManager::~PCRManager()
+{
+  if(rust_obj_)
+    {
+      rust_bentpipe_pcr_manager_free(rust_obj_);
+    }
+}
 
 void EMANE::Models::BentPipe::PCRManager::load(const std::string & sPCRFileName)
 {
-  xmlDocPtr pSchemaDoc{xmlReadMemory(pzSchema,
-                                     strlen(pzSchema),
-                                     "file:///bentpipe-model-pcr.xsd",
-                                     NULL,
-                                     0)};
-  if(!pSchemaDoc)
+  if(!rust_bentpipe_pcr_manager_load(rust_obj_, sPCRFileName.c_str()))
     {
-      throw makeException<ConfigurationException>("unable to open schema");
-    }
-
-  xmlSchemaParserCtxtPtr pParserContext{xmlSchemaNewDocParserCtxt(pSchemaDoc)};
-
-  if(!pParserContext)
-    {
-      throw makeException<ConfigurationException>("bad schema context");
-    }
-
-  xmlSchemaPtr pSchema{xmlSchemaParse(pParserContext)};
-
-  if(!pSchema)
-    {
-      throw makeException<ConfigurationException>("bad schema parser");
-    }
-
-  xmlSchemaValidCtxtPtr pSchemaValidCtxtPtr{xmlSchemaNewValidCtxt(pSchema)};
-
-  if(!pSchemaValidCtxtPtr)
-    {
-      throw makeException<ConfigurationException>("bad schema valid context");
-    }
-
-  xmlSchemaSetValidOptions(pSchemaValidCtxtPtr,XML_SCHEMA_VAL_VC_I_CREATE);
-
-  xmlDocPtr pDoc = xmlReadFile(sPCRFileName.c_str(),nullptr,0);
-
-  if(xmlSchemaValidateDoc(pSchemaValidCtxtPtr, pDoc))
-    {
-      throw makeException<ConfigurationException>("invalid document: %s",
+      throw makeException<ConfigurationException>("failed to load or invalid document: %s",
                                                   sPCRFileName.c_str());
     }
 
-  xmlNodePtr pRoot = xmlDocGetRootElement(pDoc);
-
-  xmlChar * pPacketSize = xmlGetProp(pRoot,BAD_CAST "packetsize");
-
-  modifierLengthBytes_ = Utils::ParameterConvert(reinterpret_cast<const char *>(pPacketSize)).toUINT16();
-
-  xmlFree(pPacketSize);
-
-  for(xmlNodePtr pCurveNode = pRoot->children;
-      pCurveNode != nullptr;
-      pCurveNode = pCurveNode->next)
+  // Populate curveTable_ with empty curves just for getCurveTable() index extraction
+  uint16_t indices[1024];
+  size_t count = rust_bentpipe_pcr_manager_get_indices(rust_obj_, indices, 1024);
+  
+  for(size_t i = 0; i < count; ++i)
     {
-      if(!xmlStrcmp(pCurveNode->name, BAD_CAST "curve"))
-        {
-          xmlChar * pIndex = xmlGetProp(pCurveNode,BAD_CAST "index");
-
-          PCRCurveIndex index =
-            Utils::ParameterConvert(reinterpret_cast<const char *>(pIndex)).toUINT16();
-
-          xmlFree(pIndex);
-
-          Curve curve{};
-          std::int32_t i32MinScaledSINR{std::numeric_limits<std::int32_t>::max()};
-          std::int32_t i32MaxScaledSINR{std::numeric_limits<std::int32_t>::lowest()};
-
-          for(xmlNodePtr pEntryNode = pCurveNode->children;
-              pEntryNode != nullptr;
-              pEntryNode = pEntryNode->next)
-            {
-              if(!xmlStrcmp(pEntryNode->name, BAD_CAST "entry"))
-                {
-                  xmlChar * pSINR = xmlGetProp(pEntryNode,BAD_CAST "sinr");
-                  xmlChar * pPOR = xmlGetProp(pEntryNode,BAD_CAST "por");
-
-                  std::int32_t i32ScaledSINR =
-                    Utils::ParameterConvert(scaleFloatToInteger(reinterpret_cast<const char *>(pSINR))).toINT32();
-
-                  auto ret =
-                    curve.insert(std::make_pair(i32ScaledSINR,
-                                                Utils::ParameterConvert(reinterpret_cast<const char *>(pPOR)).toFloat()/100));
-
-                  if(!ret.second)
-                    {
-                      throw makeException<ConfigurationException>("duplicate PCR SINR value for index: %hu sinr: %s in %s",
-                                                                  index,
-                                                                  reinterpret_cast<const char *>(pSINR),
-                                                                  sPCRFileName.c_str());
-                    }
-
-                  xmlFree(pSINR);
-                  xmlFree(pPOR);
-
-                  i32MinScaledSINR = std::min(i32ScaledSINR,i32MinScaledSINR);
-                  i32MaxScaledSINR = std::max(i32ScaledSINR,i32MaxScaledSINR);
-                }
-            }
-
-          Curve interpolation{};
-
-          auto iter = curve.begin();
-
-          while(iter != curve.end())
-            {
-              auto x0 = iter->first;
-              auto y0 = iter->second;
-
-              ++iter;
-
-              if(iter != curve.end())
-                {
-                  auto x1 = iter->first;
-                  auto y1 = iter->second;
-
-                  auto slope = (y1 - y0) / (x1 - x0);
-
-                  for(auto i = x0; i < x1; ++i)
-                    {
-                      interpolation.insert({i,y1 - (x1 - i) * slope});
-                    }
-                }
-            }
-
-          curve.insert(interpolation.begin(),interpolation.end());
-
-          auto ret = curveTable_.insert(std::make_pair(index,
-                                                       std::make_tuple(i32MinScaledSINR,
-                                                                       i32MaxScaledSINR,
-                                                                       curve)));
-
-          if(!ret.second)
-            {
-              throw makeException<ConfigurationException>("duplicate PCR curve: %zu in %s",
-                                                          index,
-                                                          sPCRFileName.c_str());
-            }
-
-        }
+      Curve emptyCurve;
+      curveTable_.insert(std::make_pair(indices[i], std::make_tuple(0, 0, emptyCurve)));
     }
-
-  xmlFreeDoc(pSchemaDoc);
-
-  xmlFreeDoc(pDoc);
 }
-
 
 std::optional<float> EMANE::Models::BentPipe::PCRManager::getPOR(PCRCurveIndex index,
                                                                  float fSINR,
                                                                  size_t packetLengthBytes) const
 {
-  auto iter = curveTable_.find(index);
-
-  if(iter == curveTable_.end())
+  float out_por = 0.0f;
+  if(rust_bentpipe_pcr_manager_get_por(rust_obj_, index, fSINR, packetLengthBytes, &out_por))
     {
-      return {};
+      return out_por;
     }
-
-  std::int32_t i32MinScaledSINR = std::get<0>(iter->second);
-  std::int32_t i32MaxScaledSINR = std::get<1>(iter->second);
-  const Curve & curve = std::get<2>(iter->second);
-
-  std::int32_t i32Scaled{static_cast<std::int32_t>(fSINR * 100)};
-
-  if(i32Scaled < i32MinScaledSINR)
-    {
-      return 0;
-    }
-
-  if(i32Scaled > i32MaxScaledSINR)
-    {
-      return 1;
-    }
-
-  auto curveIter = curve.find(i32Scaled);
-
-  if(curveIter != curve.end())
-    {
-      auto por = curveIter->second;
-
-      if(modifierLengthBytes_)
-        {
-          por = powf(por, packetLengthBytes / static_cast<float>(modifierLengthBytes_));
-        }
-
-      return por;
-    }
-
-  return 0;
+  return {};
 }
 
 const EMANE::Models::BentPipe::PCRManager::CurveTable &
