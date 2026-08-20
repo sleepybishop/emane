@@ -1,37 +1,10 @@
 /*
  * Copyright (c) 2015,2023 - Adjacent Link LLC, Bridgewater, New Jersey
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- *   notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- *   notice, this list of conditions and the following disclaimer in
- *   the documentation and/or other materials provided with the
- *   distribution.
- * * Neither the name of Adjacent Link LLC nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "queuemanager.h"
-
+#include "rust_queuemanager.h"
 #include "emane/configureexception.h"
 
 EMANE::Models::BentPipe::QueueManager::QueueManager(NEMId id,
@@ -42,9 +15,17 @@ EMANE::Models::BentPipe::QueueManager::QueueManager(NEMId id,
   pPacketStatusPublisher_{pPacketStatusPublisher},
   u16QueueDepth_{},
   bAggregationEnable_{},
-  bFragmentationEnable_{}{}
+  bFragmentationEnable_{}
+{
+  pRustQueueManager_ = bentpipe_queue_manager_new();
+}
 
-EMANE::Models::BentPipe::QueueManager::~QueueManager(){}
+EMANE::Models::BentPipe::QueueManager::~QueueManager()
+{
+  if (pRustQueueManager_) {
+      bentpipe_queue_manager_free(pRustQueueManager_);
+  }
+}
 
 void EMANE::Models::BentPipe::QueueManager::initialize(Registrar & registrar)
 {
@@ -141,22 +122,17 @@ void EMANE::Models::BentPipe::QueueManager::configure(const ConfigurationUpdate 
         }
     }
 
+    bentpipe_queue_manager_set_config(pRustQueueManager_, u16QueueDepth_, bAggregationEnable_, bFragmentationEnable_);
 }
 
 void  EMANE::Models::BentPipe::QueueManager::addQueue(TransponderIndex transponderIndex)
 {
-  Queue * pQueue = new Queue{};
-
-  pQueue->initialize(u16QueueDepth_,
-                     bFragmentationEnable_,
-                     bAggregationEnable_);
-
-  queues_.emplace(transponderIndex,pQueue);
+  bentpipe_queue_manager_add_queue(pRustQueueManager_, transponderIndex);
 }
 
 void EMANE::Models::BentPipe::QueueManager::removeQueue(TransponderIndex transponderIndex)
 {
-  queues_.erase(transponderIndex);
+  bentpipe_queue_manager_remove_queue(pRustQueueManager_, transponderIndex);
 }
 
 void EMANE::Models::BentPipe::QueueManager::start()
@@ -199,30 +175,30 @@ size_t EMANE::Models::BentPipe::QueueManager::enqueue(TransponderIndex transpons
                                                       DownstreamPacket && pkt)
 {
   size_t packetsDropped{};
+  
+  DownstreamPacket* pPkt = new DownstreamPacket{std::move(pkt)};
 
-  if(auto iter = queues_.find(transponserIndex);
-     iter != queues_.end())
+  BentPipeEnqueueResult ret = bentpipe_queue_manager_enqueue(pRustQueueManager_, transponserIndex, pPkt, pPkt->length());
+
+  if(ret.dropped)
     {
-      auto ret = iter->second->enqueue(std::move(pkt));
+      packetsDropped = 1;
 
-      if(ret.second)
-        {
-          packetsDropped = 1;
+      queueStatusPublisher_.drop(transponserIndex,
+                                 QueueStatusPublisher::DropReason::DROP_OVERFLOW,
+                                 1);
 
-          queueStatusPublisher_.drop(transponserIndex,
-                                     QueueStatusPublisher::DropReason::DROP_OVERFLOW,
-                                     1);
+      DownstreamPacket* droppedPkt = static_cast<DownstreamPacket*>(ret.dropped_pkt);
+      const auto & pktInfo = droppedPkt->getPacketInfo();
 
-          const auto & pktInfo = ret.first->getPacketInfo();
-
-          pPacketStatusPublisher_->outbound(pktInfo.getSource(),
-                                            pktInfo.getDestination(),
-                                            ret.first->length(),
-                                            PacketStatusPublisher::OutboundAction::DROP_OVERFLOW);
-        }
-
-      queueStatusPublisher_.enqueue(transponserIndex);
+      pPacketStatusPublisher_->outbound(pktInfo.getSource(),
+                                        pktInfo.getDestination(),
+                                        droppedPkt->length(),
+                                        PacketStatusPublisher::OutboundAction::DROP_OVERFLOW);
+      delete droppedPkt;
     }
+
+  queueStatusPublisher_.enqueue(transponserIndex);
 
   return packetsDropped;
 }
@@ -232,33 +208,18 @@ EMANE::Models::BentPipe::QueueManager::dequeue(TransponderIndex transponserIndex
                                                size_t requestedBytes)
 {
   MessageComponents components{};
-  size_t totalLength{};
+  
+  BentPipeDequeueResult res;
+  bentpipe_queue_manager_dequeue(pRustQueueManager_, transponserIndex, requestedBytes, &res);
+  
+  size_t totalLength = res.total_bytes;
 
-  if(auto iter = queues_.find(transponserIndex);
-     iter != queues_.end())
-    {
-      auto ret = iter->second->dequeue(requestedBytes,
-                                       true);
-
-      auto length = std::get<1>(ret);
-
-      if(length)
-        {
-          totalLength += length;
-
-          auto & parts = std::get<0>(ret);
-
-          queueStatusPublisher_.dequeue(transponserIndex,
-                                        parts);
-
-          components.splice(components.end(),parts);
-        }
-
-      // update drop info
-      for(const auto & pPkt : std::get<2>(ret))
-        {
+  for (size_t i = 0; i < res.num_actions; ++i) {
+      const auto& action = res.actions[i];
+      DownstreamPacket* pPkt = static_cast<DownstreamPacket*>(action.pkt_ptr);
+      
+      if (action.action_type == 0) { // DROP
           const auto & pktInfo = pPkt->getPacketInfo();
-
           pPacketStatusPublisher_->outbound(pktInfo.getSource(),
                                             pktInfo.getDestination(),
                                             pPkt->length(),
@@ -267,8 +228,86 @@ EMANE::Models::BentPipe::QueueManager::dequeue(TransponderIndex transponserIndex
           queueStatusPublisher_.drop(transponserIndex,
                                      QueueStatusPublisher::DropReason::DROP_TOOBIG,
                                      1);
-        }
+          delete pPkt;
+      } else if (action.action_type == 1) { // FULL
+          NEMId dst = pPkt->getPacketInfo().getDestination();
+          components.push_back({dst,
+                                pPkt->getVectorIO(),
+                                action.fragment_index,
+                                action.fragment_offset,
+                                action.seq,
+                                false});
+          delete pPkt;
+      } else if (action.action_type == 2) { // FRAGMENT
+          NEMId dst = pPkt->getPacketInfo().getDestination();
+          
+          size_t totalBytesVisited{};
+          size_t totalBytesCopied{};
+          Utils::VectorIO vectorIOs{};
+          
+          for(const auto & entry : pPkt->getVectorIO())
+            {
+              if(totalBytesCopied < action.fragment_size)
+                {
+                  if(totalBytesVisited + entry.iov_len < action.fragment_offset)
+                    {
+                      totalBytesVisited += entry.iov_len;
+                    }
+                  else
+                    {
+                      char * pBuf{reinterpret_cast<char *>(entry.iov_base)};
+                      auto offset = action.fragment_offset - totalBytesVisited;
+                      auto remainder = entry.iov_len - offset;
+
+                      if(totalBytesVisited < action.fragment_offset)
+                        {
+                          totalBytesVisited = action.fragment_offset;
+                        }
+
+                      size_t amountToCopy{};
+
+                      if(remainder > action.fragment_size - totalBytesCopied)
+                        {
+                          amountToCopy =  action.fragment_size - totalBytesCopied;
+                          remainder -= amountToCopy;
+                        }
+                      else
+                        {
+                          amountToCopy = remainder;
+                        }
+
+                      vectorIOs.push_back(Utils::make_iovec(pBuf+offset,amountToCopy));
+
+                      totalBytesVisited += amountToCopy;
+                      totalBytesCopied += amountToCopy;
+                    }
+                }
+              else
+                {
+                  break;
+                }
+            }
+
+          components.push_back({dst,
+                                vectorIOs,
+                                action.fragment_index,
+                                action.fragment_offset,
+                                action.seq,
+                                action.more_fragments});
+                                
+          if (!action.more_fragments) {
+              delete pPkt;
+          }
+      }
+  }
+  
+  if(totalLength)
+    {
+      queueStatusPublisher_.dequeue(transponserIndex,
+                                    components);
     }
+  
+  bentpipe_queue_manager_free_dequeue_result(&res);
 
   pPacketStatusPublisher_->outbound(id_,
                                     components,
@@ -281,15 +320,15 @@ EMANE::Models::BentPipe::QueueInfos
 EMANE::Models::BentPipe::QueueManager::getPacketQueueInfo() const
 {
   QueueInfos queueInfos{};
-
-  for(const auto & entry : queues_)
-    {
-      auto status = entry.second->getStatus();
-
-      queueInfos.push_back({entry.first, // transponder index
-          std::get<0>(status), // packets
-          std::get<1>(status)}); //bytes
-    }
+  
+  BentPipeQueueInfosResult res;
+  bentpipe_queue_manager_get_queue_infos(pRustQueueManager_, &res);
+  
+  for(size_t i = 0; i < res.num_infos; ++i) {
+      queueInfos.push_back({res.infos[i].transponder_index, res.infos[i].packets, res.infos[i].bytes});
+  }
+  
+  bentpipe_queue_manager_free_queue_infos_result(&res);
 
   return queueInfos;
 }

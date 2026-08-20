@@ -97,8 +97,7 @@ namespace EMANE
         bool bAggregationEnable_;
         bool bFragmentationEnable_;
 
-        using Queues = std::map<TransponderIndex,std::unique_ptr<Queue>>;
-        Queues queues_;
+        void* pRustQueueManager_;
 
         QueueStatusPublisher queueStatusPublisher_;
       };
