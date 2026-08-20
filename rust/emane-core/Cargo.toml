@@ -21,3 +21,4 @@ crate-type = ["staticlib", "lib"]
 cc = "1.0"
 bindgen = "0.69.5"
 prost-build = "0.12"
+

@@ -1,3 +1,3 @@
 [workspace]
 resolver = "2"
-members = ["emane-core"]
+members = ["bypassmaclayer", "emane-core", "bypass-phy"]

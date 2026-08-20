@@ -1,138 +1,127 @@
+#include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
-void emane_ieee80211abg_macstatistics_incrementDownstreamUnicastDataDiscardDueToRetries(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementDownstreamUnicastDataDiscardDueToRetries(void* pStat) {}
-void emane_ieee80211abg_macstatistics_incrementDownstreamUnicastRtsCtsDataDiscardDueToRetries(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementDownstreamUnicastRtsCtsDataDiscardDueToRetries(void* pStat) {}
-void emane_ieee80211abg_macstatistics_incrementDownstreamUnicastDataDiscardDueToTxop(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementDownstreamUnicastDataDiscardDueToTxop(void* pStat) {}
-void emane_ieee80211abg_macstatistics_incrementDownstreamBroadcastDataDiscardDueToTxop(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementDownstreamBroadcastDataDiscardDueToTxop(void* pStat) {}
-void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastDataDiscardDueToSinr(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastDataDiscardDueToSinr(void* pStat) {}
-void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastDataDiscardDueToSinr(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastDataDiscardDueToSinr(void* pStat) {}
-void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastDataDiscardDueToClobberRxDuringTx(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastDataDiscardDueToClobberRxDuringTx(void* pStat) {}
-void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastDataDiscardDueToClobberRxDuringTx(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastDataDiscardDueToClobberRxDuringTx(void* pStat) {}
-void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastDataDiscardDueToClobberRxHiddenBusy(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastDataDiscardDueToClobberRxHiddenBusy(void* pStat) {}
-void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastDataDiscardDueToClobberRxHiddenBusy(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastDataDiscardDueToClobberRxHiddenBusy(void* pStat) {}
-void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastNoiseHiddenRx(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastNoiseHiddenRx(void* pStat) {}
-void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastNoiseHiddenRx(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastNoiseHiddenRx(void* pStat) {}
-void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastNoiseRxCommon(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastNoiseRxCommon(void* pStat) {}
-void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastNoiseRxCommon(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastNoiseRxCommon(void* pStat) {}
-void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastRtsCtsDataRxFromPhy(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastRtsCtsDataRxFromPhy(void* pStat) {}
-void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastCtsRxFromPhy(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastCtsRxFromPhy(void* pStat) {}
-void emane_ieee80211abg_macstatistics_incrementRxOneHopNbrListEventCount(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementRxOneHopNbrListEventCount(void* pStat) {}
-void emane_ieee80211abg_macstatistics_incrementRxOneHopNbrListInvalidEventCount(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementRxOneHopNbrListInvalidEventCount(void* pStat) {}
-void emane_ieee80211abg_macstatistics_incrementTxOneHopNbrListEventCount(void* pStat) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_incrementTxOneHopNbrListEventCount(void* pStat) {}
-
-void emane_ieee80211abg_macstatistics_updateOneHopNbrHighWaterMark(void* pStat, size_t num) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_updateOneHopNbrHighWaterMark(void* pStat, size_t num) {}
-void emane_ieee80211abg_macstatistics_updateTwoHopNbrHighWaterMark(void* pStat, size_t num) __attribute__((weak));
-void emane_ieee80211abg_macstatistics_updateTwoHopNbrHighWaterMark(void* pStat, size_t num) {}
-
-void* emane_ieee80211abg_collisiontable_new() __attribute__((weak));
-void* emane_ieee80211abg_collisiontable_new() { return 0; }
-void emane_ieee80211abg_collisiontable_free(void* ptr) __attribute__((weak));
-void emane_ieee80211abg_collisiontable_free(void* ptr) {}
-float emane_ieee80211abg_collisiontable_getCollisionFactor(void* ptr, int num, int cw) __attribute__((weak));
-float emane_ieee80211abg_collisiontable_getCollisionFactor(void* ptr, int num, int cw) { return 0.0f; }
-
-bool emane_ieee80211abg_macconfig_getPromiscuosEnable(void* pConfig) __attribute__((weak));
-bool emane_ieee80211abg_macconfig_getPromiscuosEnable(void* pConfig) { return 0; }
-bool emane_ieee80211abg_macconfig_getWmmEnable(void* pConfig) __attribute__((weak));
-bool emane_ieee80211abg_macconfig_getWmmEnable(void* pConfig) { return 0; }
-int emane_ieee80211abg_macconfig_getModulationType(void* pConfig) __attribute__((weak));
-int emane_ieee80211abg_macconfig_getModulationType(void* pConfig) { return 0; }
-uint8_t emane_ieee80211abg_macconfig_getUnicastDataRateIndex(void* pConfig) __attribute__((weak));
-uint8_t emane_ieee80211abg_macconfig_getUnicastDataRateIndex(void* pConfig) { return 0; }
-uint8_t emane_ieee80211abg_macconfig_getBroadcastDataRateIndex(void* pConfig) __attribute__((weak));
-uint8_t emane_ieee80211abg_macconfig_getBroadcastDataRateIndex(void* pConfig) { return 0; }
-uint32_t emane_ieee80211abg_macconfig_getUnicastDataRateKbps(void* pConfig) __attribute__((weak));
-uint32_t emane_ieee80211abg_macconfig_getUnicastDataRateKbps(void* pConfig) { return 0; }
-uint32_t emane_ieee80211abg_macconfig_getBroadcastDataRateKbps(void* pConfig) __attribute__((weak));
-uint32_t emane_ieee80211abg_macconfig_getBroadcastDataRateKbps(void* pConfig) { return 0; }
-uint32_t emane_ieee80211abg_macconfig_getMaxDataRateKbps(void* pConfig) __attribute__((weak));
-uint32_t emane_ieee80211abg_macconfig_getMaxDataRateKbps(void* pConfig) { return 0; }
-uint32_t emane_ieee80211abg_macconfig_getUnicastDataRateKbps_by_category(void* pConfig, uint8_t arg0) __attribute__((weak));
-uint32_t emane_ieee80211abg_macconfig_getUnicastDataRateKbps_by_category(void* pConfig, uint8_t arg0) { return 0; }
-uint32_t emane_ieee80211abg_macconfig_getBroadcastDataRateKbps_by_category(void* pConfig, uint8_t arg0) __attribute__((weak));
-uint32_t emane_ieee80211abg_macconfig_getBroadcastDataRateKbps_by_category(void* pConfig, uint8_t arg0) { return 0; }
-uint32_t emane_ieee80211abg_macconfig_getMaxP2pDistance(void* pConfig) __attribute__((weak));
-uint32_t emane_ieee80211abg_macconfig_getMaxP2pDistance(void* pConfig) { return 0; }
-uint8_t emane_ieee80211abg_macconfig_getNumAccessCategories(void* pConfig) __attribute__((weak));
-uint8_t emane_ieee80211abg_macconfig_getNumAccessCategories(void* pConfig) { return 0; }
-uint16_t emane_ieee80211abg_macconfig_getRtsThreshold(void* pConfig) __attribute__((weak));
-uint16_t emane_ieee80211abg_macconfig_getRtsThreshold(void* pConfig) { return 0; }
-uint8_t emane_ieee80211abg_macconfig_getQueueSize(void* pConfig, uint8_t arg0) __attribute__((weak));
-uint8_t emane_ieee80211abg_macconfig_getQueueSize(void* pConfig, uint8_t arg0) { return 0; }
-uint16_t emane_ieee80211abg_macconfig_getQueueEntrySize(void* pConfig, uint8_t arg0) __attribute__((weak));
-uint16_t emane_ieee80211abg_macconfig_getQueueEntrySize(void* pConfig, uint8_t arg0) { return 0; }
-uint16_t emane_ieee80211abg_macconfig_getCWMin(void* pConfig, uint8_t arg0) __attribute__((weak));
-uint16_t emane_ieee80211abg_macconfig_getCWMin(void* pConfig, uint8_t arg0) { return 0; }
-uint16_t emane_ieee80211abg_macconfig_getCWMax(void* pConfig, uint8_t arg0) __attribute__((weak));
-uint16_t emane_ieee80211abg_macconfig_getCWMax(void* pConfig, uint8_t arg0) { return 0; }
-uint64_t emane_ieee80211abg_macconfig_getAifsMicroseconds(void* pConfig, uint8_t arg0) __attribute__((weak));
-uint64_t emane_ieee80211abg_macconfig_getAifsMicroseconds(void* pConfig, uint8_t arg0) { return 0; }
-uint64_t emane_ieee80211abg_macconfig_getTxOpMicroseconds(void* pConfig, uint8_t arg0) __attribute__((weak));
-uint64_t emane_ieee80211abg_macconfig_getTxOpMicroseconds(void* pConfig, uint8_t arg0) { return 0; }
-uint8_t emane_ieee80211abg_macconfig_getRetryLimit(void* pConfig, uint8_t arg0) __attribute__((weak));
-uint8_t emane_ieee80211abg_macconfig_getRetryLimit(void* pConfig, uint8_t arg0) { return 0; }
-uint16_t emane_ieee80211abg_macconfig_getFlowControlTokens(void* pConfig) __attribute__((weak));
-uint16_t emane_ieee80211abg_macconfig_getFlowControlTokens(void* pConfig) { return 0; }
-bool emane_ieee80211abg_macconfig_getFlowControlEnable(void* pConfig) __attribute__((weak));
-bool emane_ieee80211abg_macconfig_getFlowControlEnable(void* pConfig) { return 0; }
-uint64_t emane_ieee80211abg_macconfig_getNeighborTimeoutMicroseconds(void* pConfig) __attribute__((weak));
-uint64_t emane_ieee80211abg_macconfig_getNeighborTimeoutMicroseconds(void* pConfig) { return 0; }
-uint64_t emane_ieee80211abg_macconfig_getChannelActivityIntervalMicroseconds(void* pConfig) __attribute__((weak));
-uint64_t emane_ieee80211abg_macconfig_getChannelActivityIntervalMicroseconds(void* pConfig) { return 0; }
-uint64_t emane_ieee80211abg_macconfig_getNeighborMetricDeleteTimeMicroseconds(void* pConfig) __attribute__((weak));
-uint64_t emane_ieee80211abg_macconfig_getNeighborMetricDeleteTimeMicroseconds(void* pConfig) { return 0; }
-uint64_t emane_ieee80211abg_macconfig_getRadioMetricReportIntervalMicroseconds(void* pConfig) __attribute__((weak));
-uint64_t emane_ieee80211abg_macconfig_getRadioMetricReportIntervalMicroseconds(void* pConfig) { return 0; }
-bool emane_ieee80211abg_macconfig_getRadioMetricEnable(void* pConfig) __attribute__((weak));
-bool emane_ieee80211abg_macconfig_getRadioMetricEnable(void* pConfig) { return 0; }
-
-
-void* emane_ieee80211abg_modetimingparameters_new(void* config_ptr) __attribute__((weak));
-void* emane_ieee80211abg_modetimingparameters_new(void* config_ptr) { return 0; }
-void emane_ieee80211abg_modetimingparameters_free(void* ptr) __attribute__((weak));
-void emane_ieee80211abg_modetimingparameters_free(void* ptr) {}
-uint64_t emane_ieee80211abg_modetimingparameters_getSlotSizeMicroseconds(void* ptr) __attribute__((weak));
-uint64_t emane_ieee80211abg_modetimingparameters_getSlotSizeMicroseconds(void* ptr) { return 0; }
-uint64_t emane_ieee80211abg_modetimingparameters_getOverheadMicroseconds(void* ptr, uint8_t category) __attribute__((weak));
-uint64_t emane_ieee80211abg_modetimingparameters_getOverheadMicroseconds(void* ptr, uint8_t category) { return 0; }
-uint64_t emane_ieee80211abg_modetimingparameters_getDeferIntervalMicroseconds(void* ptr, uint8_t category) __attribute__((weak));
-uint64_t emane_ieee80211abg_modetimingparameters_getDeferIntervalMicroseconds(void* ptr, uint8_t category) { return 0; }
-uint64_t emane_ieee80211abg_modetimingparameters_getMessageDurationMicroseconds(void* ptr, uint8_t category, size_t len) __attribute__((weak));
-uint64_t emane_ieee80211abg_modetimingparameters_getMessageDurationMicroseconds(void* ptr, uint8_t category, size_t len) { return 0; }
-uint64_t emane_ieee80211abg_modetimingparameters_getBroadcastMessageDurationMicroseconds(void* ptr, size_t len) __attribute__((weak));
-uint64_t emane_ieee80211abg_modetimingparameters_getBroadcastMessageDurationMicroseconds(void* ptr, size_t len) { return 0; }
-uint64_t emane_ieee80211abg_modetimingparameters_getUnicastMessageDurationMicroseconds(void* ptr, size_t len) __attribute__((weak));
-uint64_t emane_ieee80211abg_modetimingparameters_getUnicastMessageDurationMicroseconds(void* ptr, size_t len) { return 0; }
-uint64_t emane_ieee80211abg_modetimingparameters_getCtsMessageDurationMicroseconds(void* ptr) __attribute__((weak));
-uint64_t emane_ieee80211abg_modetimingparameters_getCtsMessageDurationMicroseconds(void* ptr) { return 0; }
-uint64_t emane_ieee80211abg_modetimingparameters_getRtsMessageDurationMicroseconds(void* ptr) __attribute__((weak));
-uint64_t emane_ieee80211abg_modetimingparameters_getRtsMessageDurationMicroseconds(void* ptr) { return 0; }
-
-
-
-void emane_ieee80211abg_maclayer_sendDownstreamBroadcastData(void* maclayer, void* entry) __attribute__((weak));
-void emane_ieee80211abg_maclayer_sendDownstreamBroadcastData(void* maclayer, void* entry) {}
-void emane_ieee80211abg_maclayer_sendDownstreamUnicastData(void* maclayer, void* entry) __attribute__((weak));
-void emane_ieee80211abg_maclayer_sendDownstreamUnicastData(void* maclayer, void* entry) {}
-void emane_ieee80211abg_maclayer_setDelayTime(void* maclayer, void* entry) __attribute__((weak));
-void emane_ieee80211abg_maclayer_setDelayTime(void* maclayer, void* entry) {}
-
+__attribute__((weak)) void emane_commonmacheader_get_registration_id() {}
+__attribute__((weak)) void emane_commonmacheader_get_sequence_number() {}
+__attribute__((weak)) void emane_controlmessages_find_frequency() {}
+__attribute__((weak)) void emane_controlmessages_find_receive_properties() {}
+__attribute__((weak)) void emane_downstreampacket_get_length() {}
+__attribute__((weak)) void emane_downstreampacket_get_packetinfo() {}
+__attribute__((weak)) void emane_frequencycontrol_get_segment() {}
+__attribute__((weak)) void emane_frequencycontrol_is_empty() {}
+__attribute__((weak)) void emane_ieee80211abg_entry_get_bCollisionOccured() {}
+__attribute__((weak)) void emane_ieee80211abg_entry_get_bRtsCtsEnable() {}
+__attribute__((weak)) void emane_ieee80211abg_entry_get_destination() {}
+__attribute__((weak)) void emane_ieee80211abg_entry_get_length() {}
+__attribute__((weak)) void emane_ieee80211abg_entry_get_maxRetries() {}
+__attribute__((weak)) void emane_ieee80211abg_entry_get_numRetries() {}
+__attribute__((weak)) void emane_ieee80211abg_entry_get_postTxWaitTime_micro() {}
+__attribute__((weak)) void emane_ieee80211abg_entry_get_preTxDelayTime_micro() {}
+__attribute__((weak)) void emane_ieee80211abg_entry_is_txop_timeout() {}
+__attribute__((weak)) void emane_ieee80211abg_entry_set_duration_and_tx_time_now() {}
+__attribute__((weak)) void emane_ieee80211abg_entry_set_numRetries() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getAifsMicroseconds() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getBroadcastDataRateIndex() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getBroadcastDataRateKbps() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getBroadcastDataRateKbps_by_category() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getCWMax() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getCWMin() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getChannelActivityIntervalMicroseconds() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getFlowControlEnable() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getFlowControlTokens() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getMaxDataRateKbps() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getMaxP2pDistance() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getModulationType() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getNeighborMetricDeleteTimeMicroseconds() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getNeighborTimeoutMicroseconds() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getNumAccessCategories() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getPromiscuosEnable() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getQueueEntrySize() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getQueueSize() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getRadioMetricEnable() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getRadioMetricReportIntervalMicroseconds() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getRetryLimit() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getRtsThreshold() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getTxOpMicroseconds() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getUnicastDataRateIndex() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getUnicastDataRateKbps() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getUnicastDataRateKbps_by_category() {}
+__attribute__((weak)) void emane_ieee80211abg_macconfig_getWmmEnable() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_checkForRxCollision() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_checkPOR() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_createDownstreamQueueEntry() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_destroyDownstreamQueueEntry() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_dscpToCategory() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_enqueueDownstreamQueueEntry() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_getHasPendingDownstreamQueueEntry() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_getModeTiming() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_getPendingDownstreamQueueEntry() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_getPromiscuosEnable() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_getRandomRxPowerCommonNodesMilliWatts() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_getRandomRxPowerHiddenNodesMilliWatts() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_getRetryLimit() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_getRtsThreshold() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_getStatistics() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_getTxState() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_get_registration_id() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_handleDownstreamQueueEntry() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_incrementUpstreamBroadcastDataDiscardDueToClobberRxDuringTx() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_incrementUpstreamBroadcastDataDiscardDueToClobberRxHiddenBusy() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_incrementUpstreamBroadcastNoiseHiddenRx() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_incrementUpstreamBroadcastNoiseRxCommon() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_incrementUpstreamUnicastCtsRxFromPhy() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_incrementUpstreamUnicastDataDiscardDueToClobberRxDuringTx() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_incrementUpstreamUnicastDataDiscardDueToClobberRxHiddenBusy() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_incrementUpstreamUnicastNoiseHiddenRx() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_incrementUpstreamUnicastNoiseRxCommon() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_incrementUpstreamUnicastRtsCtsDataRxFromPhy() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_isCurrentEndOfTransmissionTimePast() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_parseMACHeader() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_processInbound() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_processOutbound() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_removeToken() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_scheduleDownstreamQueue() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_scheduleUpstreamCallback() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_sendDownstreamBroadcastData() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_sendDownstreamUnicastCts() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_sendDownstreamUnicastData() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_sendUpstreamPacket() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_setDelayTime() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_setHasPendingDownstreamQueueEntry() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_setPendingDownstreamQueueEntry() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_updateCtrlChannelActivity() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_updateDataChannelActivity() {}
+__attribute__((weak)) void emane_ieee80211abg_maclayer_updateNeighborRxMetric() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementDownstreamBroadcastDataDiscardDueToTxop() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementDownstreamUnicastDataDiscardDueToRetries() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementDownstreamUnicastDataDiscardDueToTxop() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementDownstreamUnicastRtsCtsDataDiscardDueToRetries() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementRxOneHopNbrListEventCount() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementRxOneHopNbrListInvalidEventCount() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementTxOneHopNbrListEventCount() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastDataDiscardDueToClobberRxDuringTx() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastDataDiscardDueToClobberRxHiddenBusy() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastDataDiscardDueToSinr() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastNoiseHiddenRx() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementUpstreamBroadcastNoiseRxCommon() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastCtsRxFromPhy() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastDataDiscardDueToClobberRxDuringTx() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastDataDiscardDueToClobberRxHiddenBusy() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastDataDiscardDueToSinr() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastNoiseHiddenRx() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastNoiseRxCommon() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_incrementUpstreamUnicastRtsCtsDataRxFromPhy() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_updateOneHopNbrHighWaterMark() {}
+__attribute__((weak)) void emane_ieee80211abg_macstatistics_updateTwoHopNbrHighWaterMark() {}
+__attribute__((weak)) void emane_ieee80211abg_modetimingparameters_getMessageDurationMicroseconds() {}
+__attribute__((weak)) void emane_ieee80211abg_tx_state_machine_getWaitTime() {}
+__attribute__((weak)) void emane_packetinfo_get_destination() {}
+__attribute__((weak)) void emane_packetinfo_get_priority() {}
+__attribute__((weak)) void emane_packetinfo_get_source() {}
+__attribute__((weak)) void emane_receiveproperties_get_propagation_delay() {}
+__attribute__((weak)) void emane_receiveproperties_get_tx_time() {}
+__attribute__((weak)) void emane_upstreampacket_get_packetinfo() {}
+__attribute__((weak)) void ieee80211abg_downstream_queue_free_entry() {}
+__attribute__((weak)) void ieee80211abg_downstream_queue_stat_add() {}
+__attribute__((weak)) void ieee80211abg_downstream_queue_stat_get() {}
+__attribute__((weak)) void ieee80211abg_downstream_queue_stat_set() {}
