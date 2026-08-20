@@ -154,3 +154,65 @@ impl Drop for TunTap {
         unsafe { libc::close(self.fd); }
     }
 }
+
+#[no_mangle]
+pub extern "C" fn emane_rs_tuntap_new_ffi(path: *const libc::c_char, name: *const libc::c_char) -> *mut TunTap {
+    let p = unsafe { std::ffi::CStr::from_ptr(path).to_str().unwrap_or("") };
+    let n = unsafe { std::ffi::CStr::from_ptr(name).to_str().unwrap_or("") };
+    match TunTap::new(p, n) {
+        Ok(t) => Box::into_raw(Box::new(t)),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_tuntap_free_ffi(ptr: *mut TunTap) {
+    if !ptr.is_null() {
+        unsafe { let _ = Box::from_raw(ptr); }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_tuntap_activate_ffi(ptr: *mut TunTap, arp_enabled: bool) -> libc::c_int {
+    let tt = unsafe { &*ptr };
+    match tt.activate(arp_enabled) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_tuntap_deactivate_ffi(ptr: *mut TunTap) -> libc::c_int {
+    let tt = unsafe { &*ptr };
+    match tt.deactivate() {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_tuntap_get_handle_ffi(ptr: *mut TunTap) -> libc::c_int {
+    let tt = unsafe { &*ptr };
+    tt.fd
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_tuntap_set_ethaddr_ffi(ptr: *mut TunTap, id: u16) -> libc::c_int {
+    let tt = unsafe { &*ptr };
+    match tt.set_ethaddr(id) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_tuntap_readv_ffi(ptr: *mut TunTap, iov: *mut libc::iovec, iov_len: libc::size_t) -> libc::c_int {
+    let tt = unsafe { &*ptr };
+    unsafe { libc::readv(tt.fd, iov, iov_len as libc::c_int) as libc::c_int }
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_tuntap_writev_ffi(ptr: *mut TunTap, iov: *const libc::iovec, iov_len: libc::size_t) -> libc::c_int {
+    let tt = unsafe { &*ptr };
+    unsafe { libc::writev(tt.fd, iov, iov_len as libc::c_int) as libc::c_int }
+}
