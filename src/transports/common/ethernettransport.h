@@ -60,6 +60,8 @@ namespace EMANE
 
         ~EthernetTransport();
 
+        bool getUnknownPriority(std::uint16_t eth_type, std::uint8_t& prio) const;
+
       protected:
         virtual int parseFrame(const Utils::EtherHeader *pEthHeader,
                                EMANE::NEMId & dst,
@@ -106,6 +108,7 @@ namespace EMANE
         using EthAddrMap = std::map<Utils::EtherAddr, EMANE::NEMId, ltmacaddr>;
 
         EthAddrMap macCache_;
+        void* pRustState_;
       };
     }
   }

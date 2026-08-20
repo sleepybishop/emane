@@ -21,6 +21,7 @@ pub mod rfpipe_mac;
 pub mod rfpipe_message;
 pub mod tdma_message;
 pub mod nem_manager;
+pub mod common;
 
 
 
