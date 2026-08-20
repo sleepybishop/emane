@@ -35,6 +35,159 @@
 #include "bentpipemessage.pb.h"
 #include "emane/utils/spectrumwindowutils.h"
 
+extern "C" {
+  void* emane_rs_bentpipe_receive_manager_new(void* cpp_this, uint16_t id, uint16_t transponder_index, bool b_process, uint16_t rx_antenna_index, uint64_t fragment_check_threshold, uint64_t fragment_timeout_threshold);
+  void emane_rs_bentpipe_receive_manager_free(void* rs_rm);
+  void emane_rs_bentpipe_receive_manager_enqueue(void* rs_rm, void* msg_ptr, void* pkt_info_ptr, size_t length, uint64_t sor, void* freq_segments_ptr, uint64_t span, uint64_t begin_time, uint64_t seq);
+  void emane_rs_bentpipe_receive_manager_process(void* rs_rm);
+
+  uint64_t emane_bentpipe_receivemanager_cxx_now(void* /*cpp_this*/) {
+    return std::chrono::duration_cast<std::chrono::microseconds>(EMANE::Clock::now().time_since_epoch()).count();
+  }
+  void emane_bentpipe_receivemanager_cxx_drop_lock(void* cpp_this, void* pkt_info_ptr, void* msg_ptr) {
+    auto rm = static_cast<EMANE::Models::BentPipe::ReceiveManager*>(cpp_this);
+    auto pktInfo = static_cast<EMANE::PacketInfo*>(pkt_info_ptr);
+    auto msg = static_cast<EMANE::Models::BentPipe::BentPipeMessage*>(msg_ptr);
+    rm->pPacketStatusPublisher_->inbound(pktInfo->getSource(), msg->getMessages(), std::remove_pointer<decltype(rm->pPacketStatusPublisher_)>::type::InboundAction::DROP_LOCK);
+  }
+  void emane_bentpipe_receivemanager_cxx_drop_spectrum_service(void* cpp_this, void* pkt_info_ptr, void* msg_ptr) {
+    auto rm = static_cast<EMANE::Models::BentPipe::ReceiveManager*>(cpp_this);
+    auto pktInfo = static_cast<EMANE::PacketInfo*>(pkt_info_ptr);
+    auto msg = static_cast<EMANE::Models::BentPipe::BentPipeMessage*>(msg_ptr);
+    rm->pPacketStatusPublisher_->inbound(pktInfo->getSource(), msg->getMessages(), std::remove_pointer<decltype(rm->pPacketStatusPublisher_)>::type::InboundAction::DROP_SPECTRUM_SERVICE);
+  }
+  void emane_bentpipe_receivemanager_cxx_drop_sinr(void* cpp_this, void* pkt_info_ptr, void* msg_ptr) {
+    auto rm = static_cast<EMANE::Models::BentPipe::ReceiveManager*>(cpp_this);
+    auto pktInfo = static_cast<EMANE::PacketInfo*>(pkt_info_ptr);
+    auto msg = static_cast<EMANE::Models::BentPipe::BentPipeMessage*>(msg_ptr);
+    rm->pPacketStatusPublisher_->inbound(pktInfo->getSource(), msg->getMessages(), std::remove_pointer<decltype(rm->pPacketStatusPublisher_)>::type::InboundAction::DROP_SINR);
+  }
+  void emane_bentpipe_receivemanager_cxx_drop_bad_curve(void* cpp_this, void* pkt_info_ptr, void* msg_ptr) {
+    auto rm = static_cast<EMANE::Models::BentPipe::ReceiveManager*>(cpp_this);
+    auto pktInfo = static_cast<EMANE::PacketInfo*>(pkt_info_ptr);
+    auto msg = static_cast<EMANE::Models::BentPipe::BentPipeMessage*>(msg_ptr);
+    rm->pPacketStatusPublisher_->inbound(pktInfo->getSource(), msg->getMessages(), std::remove_pointer<decltype(rm->pPacketStatusPublisher_)>::type::InboundAction::DROP_BAD_CURVE);
+  }
+  void emane_bentpipe_receivemanager_cxx_publish_drop_destination_mac(void* cpp_this, void* pkt_info_ptr, void* msg_ptr, size_t msg_index) {
+    auto rm = static_cast<EMANE::Models::BentPipe::ReceiveManager*>(cpp_this);
+    auto pktInfo = static_cast<EMANE::PacketInfo*>(pkt_info_ptr);
+    auto msg = static_cast<EMANE::Models::BentPipe::BentPipeMessage*>(msg_ptr);
+    rm->pPacketStatusPublisher_->inbound(pktInfo->getSource(), (*std::next(msg->getMessages().begin(), msg_index)), std::remove_pointer<decltype(rm->pPacketStatusPublisher_)>::type::InboundAction::DROP_DESTINATION_MAC);
+  }
+  void emane_bentpipe_receivemanager_cxx_publish_accept_good(void* cpp_this, void* pkt_info_ptr, void* msg_ptr, size_t msg_index) {
+    auto rm = static_cast<EMANE::Models::BentPipe::ReceiveManager*>(cpp_this);
+    auto pktInfo = static_cast<EMANE::PacketInfo*>(pkt_info_ptr);
+    auto msg = static_cast<EMANE::Models::BentPipe::BentPipeMessage*>(msg_ptr);
+    rm->pPacketStatusPublisher_->inbound(pktInfo->getSource(), (*std::next(msg->getMessages().begin(), msg_index)), std::remove_pointer<decltype(rm->pPacketStatusPublisher_)>::type::InboundAction::ACCEPT_GOOD);
+  }
+  void emane_bentpipe_receivemanager_cxx_publish_accept_good_len(void* cpp_this, void* pkt_info_ptr, uint16_t dst, size_t length) {
+    auto rm = static_cast<EMANE::Models::BentPipe::ReceiveManager*>(cpp_this);
+    auto pktInfo = static_cast<EMANE::PacketInfo*>(pkt_info_ptr);
+    rm->pPacketStatusPublisher_->inbound(pktInfo->getSource(), dst, length, std::remove_pointer<decltype(rm->pPacketStatusPublisher_)>::type::InboundAction::ACCEPT_GOOD);
+  }
+  int emane_bentpipe_receivemanager_cxx_check_spectrum(void* cpp_this, uint16_t rx_antenna_index, uint64_t freq_hz, uint64_t span, uint64_t sor, double rx_power_dbm, double* out_noise_floor, bool* out_signal_in_noise) {
+    auto rm = static_cast<EMANE::Models::BentPipe::ReceiveManager*>(cpp_this);
+    try {
+      auto window = rm->pRadioService_->spectrumService().requestAntenna(rx_antenna_index, freq_hz, EMANE::Microseconds{span}, EMANE::TimePoint{EMANE::Microseconds{sor}});
+      std::tie(*out_noise_floor, *out_signal_in_noise) = EMANE::Utils::maxBinNoiseFloor(window, rx_power_dbm);
+      return 0;
+    } catch (EMANE::SpectrumServiceException &) {
+      return -1;
+    }
+  }
+  int emane_bentpipe_receivemanager_cxx_get_por(void* cpp_this, uint16_t pcr_curve_index, double sinr, size_t length, float* out_por) {
+    auto rm = static_cast<EMANE::Models::BentPipe::ReceiveManager*>(cpp_this);
+    if(auto fPOR = rm->pPCRManager_->getPOR(pcr_curve_index, sinr, length)) {
+      *out_por = *fPOR;
+      return 0;
+    }
+    return -1;
+  }
+  float emane_bentpipe_receivemanager_cxx_get_random(void* cpp_this) {
+    auto rm = static_cast<EMANE::Models::BentPipe::ReceiveManager*>(cpp_this);
+    return rm->distribution_();
+  }
+  void emane_bentpipe_receivemanager_cxx_update_neighbor_metrics(void* cpp_this, void* pkt_info_ptr, uint16_t transponder_index, double sinr, double noise_floor, uint64_t sor) {
+    auto rm = static_cast<EMANE::Models::BentPipe::ReceiveManager*>(cpp_this);
+    auto pktInfo = static_cast<EMANE::PacketInfo*>(pkt_info_ptr);
+    rm->pNeighborStatusPublisher_->update(pktInfo->getSource(), transponder_index, sinr, noise_floor, EMANE::TimePoint{EMANE::Microseconds{sor}});
+  }
+  size_t emane_bentpipe_receivemanager_cxx_get_messages_count(void* msg_ptr) {
+    return static_cast<EMANE::Models::BentPipe::BentPipeMessage*>(msg_ptr)->getMessages().size();
+  }
+  uint16_t emane_bentpipe_receivemanager_cxx_msg_get_dst(void* msg_ptr, size_t index) {
+    return std::next(static_cast<EMANE::Models::BentPipe::BentPipeMessage*>(msg_ptr)->getMessages().begin(), index)->getDestination();
+  }
+  bool emane_bentpipe_receivemanager_cxx_msg_is_fragment(void* msg_ptr, size_t index) {
+    return std::next(static_cast<EMANE::Models::BentPipe::BentPipeMessage*>(msg_ptr)->getMessages().begin(), index)->isFragment();
+  }
+  size_t emane_bentpipe_receivemanager_cxx_msg_get_fragment_index(void* msg_ptr, size_t index) {
+    return std::next(static_cast<EMANE::Models::BentPipe::BentPipeMessage*>(msg_ptr)->getMessages().begin(), index)->getFragmentIndex();
+  }
+  size_t emane_bentpipe_receivemanager_cxx_msg_get_fragment_offset(void* msg_ptr, size_t index) {
+    return std::next(static_cast<EMANE::Models::BentPipe::BentPipeMessage*>(msg_ptr)->getMessages().begin(), index)->getFragmentOffset();
+  }
+  uint64_t emane_bentpipe_receivemanager_cxx_msg_get_fragment_sequence(void* msg_ptr, size_t index) {
+    return std::next(static_cast<EMANE::Models::BentPipe::BentPipeMessage*>(msg_ptr)->getMessages().begin(), index)->getFragmentSequence();
+  }
+  bool emane_bentpipe_receivemanager_cxx_msg_is_more_fragments(void* msg_ptr, size_t index) {
+    return std::next(static_cast<EMANE::Models::BentPipe::BentPipeMessage*>(msg_ptr)->getMessages().begin(), index)->isMoreFragments();
+  }
+  const uint8_t* emane_bentpipe_receivemanager_cxx_msg_get_data(void* msg_ptr, size_t index, size_t* out_len) {
+    const auto& data = std::next(static_cast<EMANE::Models::BentPipe::BentPipeMessage*>(msg_ptr)->getMessages().begin(), index)->getData();
+    *out_len = data.size();
+    return reinterpret_cast<const uint8_t*>(data.data());
+  }
+  uint16_t emane_bentpipe_receivemanager_cxx_pktinfo_get_src(void* pkt_info_ptr) { return static_cast<EMANE::PacketInfo*>(pkt_info_ptr)->getSource(); }
+  uint16_t emane_bentpipe_receivemanager_cxx_pktinfo_get_dst(void* pkt_info_ptr) { return static_cast<EMANE::PacketInfo*>(pkt_info_ptr)->getDestination(); }
+  uint8_t emane_bentpipe_receivemanager_cxx_pktinfo_get_priority(void* pkt_info_ptr) { return static_cast<EMANE::PacketInfo*>(pkt_info_ptr)->getPriority(); }
+  uint64_t emane_bentpipe_receivemanager_cxx_pktinfo_get_creation_time(void* pkt_info_ptr) { return std::chrono::duration_cast<std::chrono::microseconds>(static_cast<EMANE::PacketInfo*>(pkt_info_ptr)->getCreationTime().time_since_epoch()).count(); }
+  uint16_t emane_bentpipe_receivemanager_cxx_bpm_get_pcr_curve_index(void* msg_ptr) { return static_cast<EMANE::Models::BentPipe::BentPipeMessage*>(msg_ptr)->getPCRCurveIndex(); }
+  uint64_t emane_bentpipe_receivemanager_cxx_freq_get_frequency_hz(void* freq_ptr) { return static_cast<EMANE::FrequencySegments*>(freq_ptr)->begin()->getFrequencyHz(); }
+  double emane_bentpipe_receivemanager_cxx_freq_get_rx_power_dbm(void* freq_ptr) { return static_cast<EMANE::FrequencySegments*>(freq_ptr)->begin()->getRxPowerdBm(); }
+  void emane_bentpipe_receivemanager_cxx_forward_upstream(void* cpp_this, void* pkt_info_ptr, uint16_t dst, const uint8_t* data, size_t len) {
+    auto rm = static_cast<EMANE::Models::BentPipe::ReceiveManager*>(cpp_this);
+    auto pktInfo = static_cast<EMANE::PacketInfo*>(pkt_info_ptr);
+    EMANE::UpstreamPacket pkt{{pktInfo->getSource(), dst, pktInfo->getPriority(), pktInfo->getCreationTime(), pktInfo->getUUID()}, data, len};
+    rm->pTransponderPacketTransport_->processPacket(pkt);
+  }
+  void emane_bentpipe_receivemanager_cxx_bend_downstream(void* cpp_this, void* pkt_info_ptr, uint16_t dst, const uint8_t* data, size_t len) {
+    auto rm = static_cast<EMANE::Models::BentPipe::ReceiveManager*>(cpp_this);
+    auto pktInfo = static_cast<EMANE::PacketInfo*>(pkt_info_ptr);
+    EMANE::DownstreamPacket pkt{{rm->id_, dst, pktInfo->getPriority(), pktInfo->getCreationTime(), pktInfo->getUUID()}, data, len};
+    rm->pTransponderPacketTransport_->ubendPacket(pkt, rm->transponderIndex_);
+  }
+  void emane_bentpipe_receivemanager_cxx_forward_upstream_parts(void* cpp_this, void* pkt_info_ptr, uint16_t dst, const uint8_t** data_ptrs, const size_t* data_lens, size_t num_parts) {
+    auto rm = static_cast<EMANE::Models::BentPipe::ReceiveManager*>(cpp_this);
+    auto pktInfo = static_cast<EMANE::PacketInfo*>(pkt_info_ptr);
+    EMANE::Utils::VectorIO vectorIO{};
+    for(size_t i=0; i<num_parts; ++i) {
+      vectorIO.push_back(EMANE::Utils::make_iovec(const_cast<uint8_t*>(data_ptrs[i]), data_lens[i]));
+    }
+    EMANE::UpstreamPacket pkt{{pktInfo->getSource(), dst, pktInfo->getPriority(), pktInfo->getCreationTime(), pktInfo->getUUID()}, vectorIO};
+    rm->pTransponderPacketTransport_->processPacket(pkt);
+  }
+  void emane_bentpipe_receivemanager_cxx_bend_downstream_parts(void* cpp_this, void* pkt_info_ptr, uint16_t dst, const uint8_t** data_ptrs, const size_t* data_lens, size_t num_parts) {
+    auto rm = static_cast<EMANE::Models::BentPipe::ReceiveManager*>(cpp_this);
+    auto pktInfo = static_cast<EMANE::PacketInfo*>(pkt_info_ptr);
+    EMANE::DownstreamPacket pkt{{rm->id_, dst, pktInfo->getPriority(), pktInfo->getCreationTime(), pktInfo->getUUID()}, nullptr, 0};
+    for(size_t i=num_parts; i>0; --i) {
+      pkt.prepend(data_ptrs[i-1], data_lens[i-1]);
+    }
+    rm->pTransponderPacketTransport_->ubendPacket(pkt, rm->transponderIndex_);
+  }
+  void emane_bentpipe_receivemanager_cxx_schedule_process(void* cpp_this, uint64_t eor) {
+    auto rm = static_cast<EMANE::Models::BentPipe::ReceiveManager*>(cpp_this);
+    rm->pPlatformService_->timerService().schedule(std::bind(&EMANE::Models::BentPipe::ReceiveManager::process, rm), EMANE::TimePoint{EMANE::Microseconds{eor}});
+  }
+  void emane_bentpipe_receivemanager_cxx_drop_miss_fragment(void* cpp_this, uint16_t src, uint16_t dst, size_t total_bytes) {
+    auto rm = static_cast<EMANE::Models::BentPipe::ReceiveManager*>(cpp_this);
+    rm->pPacketStatusPublisher_->inbound(src, dst, total_bytes, std::remove_pointer<decltype(rm->pPacketStatusPublisher_)>::type::InboundAction::DROP_MISS_FRAGMENT);
+  }
+  void emane_bentpipe_receivemanager_cxx_delete_msg(void* ptr) { delete static_cast<EMANE::Models::BentPipe::BentPipeMessage*>(ptr); }
+  void emane_bentpipe_receivemanager_cxx_delete_pkt_info(void* ptr) { delete static_cast<EMANE::PacketInfo*>(ptr); }
+  void emane_bentpipe_receivemanager_cxx_delete_freq_segments(void* ptr) { delete static_cast<EMANE::FrequencySegments*>(ptr); }
+}
 EMANE::Models::BentPipe::ReceiveManager::ReceiveManager(NEMId id,
                                                         TransponderIndex transponderIndex,
                                                         TransponderPacketTransport * pTransponderPacketTransport,
@@ -62,7 +215,8 @@ EMANE::Models::BentPipe::ReceiveManager::ReceiveManager(NEMId id,
                                                         distribution_{0.0, 1.0},
                                                         fragmentCheckThreshold_{fragmentCheckThreshold},
                                                         fragmentTimeoutThreshold_{fragmentTimeoutThreshold},
-                                                        nextEoRCheckTime_{TimePoint::max()}
+                                                        nextEoRCheckTime_{TimePoint::max()},
+                                                        p_rust_rm_{nullptr}
 
 {
   LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
@@ -72,6 +226,21 @@ EMANE::Models::BentPipe::ReceiveManager::ReceiveManager(NEMId id,
                           __func__,
                           transponderIndex,
                           bProcess ? "process" : "ubend");
+
+  p_rust_rm_ = emane_rs_bentpipe_receive_manager_new(
+      this, id_, transponderIndex_, bProcess_, rxAntennaIndex_,
+      std::chrono::duration_cast<std::chrono::microseconds>(fragmentCheckThreshold_).count(),
+      std::chrono::duration_cast<std::chrono::microseconds>(fragmentTimeoutThreshold_).count()
+  );
+}
+
+EMANE::Models::BentPipe::ReceiveManager::~ReceiveManager()
+{
+  if(p_rust_rm_)
+    {
+      emane_rs_bentpipe_receive_manager_free(p_rust_rm_);
+      p_rust_rm_ = nullptr;
+    }
 }
 
 void
@@ -84,467 +253,26 @@ EMANE::Models::BentPipe::ReceiveManager::enqueue(BentPipeMessage && otaMessage,
                                                  const TimePoint & beginTime,
                                                  std::uint64_t u64PacketSequence)
 {
-  LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
-                          DEBUG_LEVEL,
-                          "MACI %03hu BentPipe::ReceiveManager::%s ",
-                          id_,
-                          __func__);
-
-  // if the startOfReception of this over-the-air frame is <= to the
-  // last end of reception of the receive manager than it is possible
-  // to handle this message, so add it to the pending queue
-  if(startOfReception >= lastEndOfReception_)
-    {
-      pendingQueue_.emplace(startOfReception,
-                            std::make_tuple(std::move(otaMessage),
-                                            pktInfo,
-                                            length,
-                                            startOfReception,
-                                            frequencySegments,
-                                            span,
-                                            beginTime,
-                                            u64PacketSequence));
-    }
-  else
-    {
-      pPacketStatusPublisher_->inbound(pktInfo.getSource(),
-                                       otaMessage.getMessages(),
-                                       PacketStatusPublisher::InboundAction::DROP_LOCK);
-    }
-
-  process();
+  BentPipeMessage* msg_ptr = new BentPipeMessage(std::move(otaMessage));
+  PacketInfo* pkt_info_ptr = new PacketInfo(pktInfo);
+  FrequencySegments* freq_segments_ptr = new FrequencySegments(frequencySegments);
+  
+  emane_rs_bentpipe_receive_manager_enqueue(
+      p_rust_rm_,
+      msg_ptr,
+      pkt_info_ptr,
+      length,
+      startOfReception.time_since_epoch().count(),
+      freq_segments_ptr,
+      span.count(),
+      beginTime.time_since_epoch().count(),
+      u64PacketSequence
+  );
 }
 
 void
 EMANE::Models::BentPipe::ReceiveManager::process()
 {
-  LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
-                          DEBUG_LEVEL,
-                          "MACI %03hu BentPipe::ReceiveManager::%s",
-                          id_,
-                          __func__);
-
-  auto now = Clock::now();
-
-  // check to make sure we work off anything in the pending queue that
-  // should be worked off
-  while(!pendingQueue_.empty())
-    {
-      // first item in the queue is the frame we are currently locked
-      // on, earliest SoR
-      TimePoint pendingStartOfReception{pendingQueue_.begin()->first};
-      TimePoint pendingEndOfReception{pendingStartOfReception + std::get<5>(pendingQueue_.begin()->second)};
-
-      // are we able to process this SoR, does it start after the end of the
-      // last frame we processed
-      if(pendingStartOfReception >= lastEndOfReception_)
-        {
-          if(now >= pendingEndOfReception)
-            {
-              // time to processing this pending frame
-              FrameInfo pendingFrameInfo = std::move(pendingQueue_.begin()->second);
-
-              // remove from queue after moving contents
-              pendingQueue_.erase(pendingQueue_.begin());
-
-              BentPipeMessage & bentPipeMessage{std::get<0>(pendingFrameInfo)};
-              PacketInfo & pktInfo{std::get<1>(pendingFrameInfo)};
-              size_t length{std::get<2>(pendingFrameInfo)};
-              FrequencySegments & frequencySegments = std::get<4>(pendingFrameInfo);
-              Microseconds & span = std::get<5>(pendingFrameInfo);
-
-              auto & frequencySegment = *frequencySegments.begin();
-
-              double dSINR{};
-              double dNoiseFloordB{};
-
-              try
-                {
-                  auto window =
-                    pRadioService_->spectrumService().requestAntenna(rxAntennaIndex_,
-                                                                     frequencySegment.getFrequencyHz(),
-                                                                     span,
-                                                                     pendingStartOfReception);
-
-                  bool bSignalInNoise{};
-
-                  std::tie(dNoiseFloordB,bSignalInNoise) =
-                    Utils::maxBinNoiseFloor(window,frequencySegment.getRxPowerdBm());
-
-                  dSINR = frequencySegment.getRxPowerdBm() - dNoiseFloordB;
-
-                  LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                                         DEBUG_LEVEL,
-                                         "MACI %03hu BentPipe::ReceiveManager upstream EOR processing:"
-                                         " src %hu, dst %hu, max noise %lf, signal in noise %s, SINR %lf",
-                                         id_,
-                                         pktInfo.getSource(),
-                                         pktInfo.getDestination(),
-                                         dNoiseFloordB,
-                                         bSignalInNoise ? "yes" : "no",
-                                         dSINR);
-                }
-              catch(SpectrumServiceException & exp)
-                {
-                  pPacketStatusPublisher_->inbound(pktInfo.getSource(),
-                                                   bentPipeMessage.getMessages(),
-                                                   PacketStatusPublisher::InboundAction::DROP_SPECTRUM_SERVICE);
-
-
-                  LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                                         ERROR_LEVEL,
-                                         "MACI %03hu BentPipe::ReceiveManager upstream EOR processing: src %hu,"
-                                         " dst %hu, now %ju sor %ju, span %ju queue %ju spectrum service request error: %s",
-                                         id_,
-                                         pktInfo.getSource(),
-                                         pktInfo.getDestination(),
-                                         std::chrono::duration_cast<Microseconds>(now.time_since_epoch()).count(),
-                                         std::chrono::duration_cast<Microseconds>(pendingStartOfReception.time_since_epoch()).count(),
-                                         span.count(),
-                                         pendingQueue_.size(),
-                                         exp.what());
-
-                  continue;
-                }
-
-
-              // check sinr
-              if(auto fPOR = pPCRManager_->getPOR(bentPipeMessage.getPCRCurveIndex(),dSINR,length))
-                {
-                  LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                                         DEBUG_LEVEL,
-                                         "MACI %03hu BentPipe::ReceiveManager upstream EOR processing: src %hu,"
-                                         " dst %hu, curve index: %hu sinr: %lf length: %lu, por: %f",
-                                         id_,
-                                         pktInfo.getSource(),
-                                         pktInfo.getDestination(),
-                                         bentPipeMessage.getPCRCurveIndex(),
-                                         dSINR,
-                                         length,
-                                         *fPOR);
-
-                  // get random value [0.0, 1.0]
-                  float fRandom{distribution_()};
-
-                  if(fPOR < fRandom)
-                    {
-                      pPacketStatusPublisher_->inbound(pktInfo.getSource(),
-                                                       bentPipeMessage.getMessages(),
-                                                       PacketStatusPublisher::InboundAction::DROP_SINR);
-
-                      LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                                             DEBUG_LEVEL,
-                                             "MACI %03hu BentPipe::ReceiveManager upstream EOR processing: src %hu, dst %hu, "
-                                             "rxpwr %3.2f dBm, drop",
-                                             id_,
-                                             pktInfo.getSource(),
-                                             pktInfo.getDestination(),
-                                             frequencySegment.getRxPowerdBm());
-
-                      continue;
-                    }
-                }
-              else
-                {
-                  pPacketStatusPublisher_->inbound(pktInfo.getSource(),
-                                                   bentPipeMessage.getMessages(),
-                                                   PacketStatusPublisher::InboundAction::DROP_BAD_CURVE);
-
-                  LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                                         ERROR_LEVEL,
-                                         "MACI %03hu BentPipe::ReceiveManager upstream EOR processing error: src %hu, dst %hu, "
-                                         " using unknown pcr curve index: %hu, drop",
-                                         id_,
-                                         pktInfo.getSource(),
-                                         pktInfo.getDestination(),
-                                         bentPipeMessage.getPCRCurveIndex());
-
-                  continue;
-                }
-
-              // update neighbor metrics
-              pNeighborStatusPublisher_->update(pktInfo.getSource(),
-                                                transponderIndex_,
-                                                dSINR,
-                                                dNoiseFloordB,
-                                                pendingStartOfReception);
-
-              for(const auto & message : bentPipeMessage.getMessages())
-                {
-                  NEMId dst{message.getDestination()};
-
-                  if((bProcess_ && ((dst == id_) || (dst == NEM_BROADCAST_MAC_ADDRESS))) ||
-                     (!bProcess_ && (dst != id_)))
-                    {
-                      const auto & data = message.getData();
-
-                      if(message.isFragment())
-                        {
-                          LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                                                 DEBUG_LEVEL,
-                                                 "MACI %03hu BentPipe::ReceiveManager upstream EOR processing:"
-                                                 " src %hu, dst %hu, findex: %zu foffset: %zu fbytes: %zu"
-                                                 " fmore: %s",
-                                                 id_,
-                                                 pktInfo.getSource(),
-                                                 pktInfo.getDestination(),
-                                                 message.getFragmentIndex(),
-                                                 message.getFragmentOffset(),
-                                                 data.size(),
-                                                 message.isMoreFragments() ? "yes" : "no");
-
-                          auto key = std::make_tuple(pktInfo.getSource(),
-                                                     message.getFragmentSequence());
-
-                          auto iter = fragmentStore_.find(key);
-
-                          if(iter != fragmentStore_.end())
-                            {
-                              auto & indexSet = std::get<0>(iter->second);
-                              auto & parts = std::get<1>(iter->second);
-                              auto & lastFragmentTime = std::get<2>(iter->second);
-                              auto & totalNumFragments = std::get<4>(iter->second);
-
-                              if(indexSet.insert(message.getFragmentIndex()).second)
-                                {
-                                  parts.insert(std::make_pair(message.getFragmentOffset(),message.getData()));
-
-                                  lastFragmentTime = now;
-
-                                  // this is a new fragment. If the
-                                  // more fragments bit is not set
-                                  // then this is the last fragment
-                                  // piece so set the
-                                  // totalNumFragments appropriately.
-                                  if(!message.isMoreFragments())
-                                    {
-                                      totalNumFragments = message.getFragmentIndex() + 1;
-                                    }
-
-                                  // check to see if all fragments have been received
-                                  if(totalNumFragments && indexSet.size() == totalNumFragments)
-                                    {
-                                      Utils::VectorIO vectorIO{};
-
-                                      for(const auto & part : parts)
-                                        {
-                                          vectorIO.push_back(Utils::make_iovec(const_cast<std::uint8_t *>(part.second.data()),
-                                                                               part.second.size()));
-                                        }
-
-                                      if(bProcess_)
-                                        {
-                                          UpstreamPacket pkt{{pktInfo.getSource(),
-                                                                dst,
-                                                                pktInfo.getPriority(),
-                                                                pktInfo.getCreationTime(),
-                                                                pktInfo.getUUID()},vectorIO};
-
-                                          pPacketStatusPublisher_->inbound(pktInfo.getSource(),
-                                                                           dst,
-                                                                           pkt.length(),
-                                                                           PacketStatusPublisher::InboundAction::ACCEPT_GOOD);
-
-                                          LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                                                                 DEBUG_LEVEL,
-                                                                 "MACI %03hu BentPipe::ReceiveManager upstream EOR processing:"
-                                                                 " src %hu, dst %hu, forward upstream",
-                                                                 id_,
-                                                                 pktInfo.getSource(),
-                                                                 pktInfo.getDestination());
-
-                                          pTransponderPacketTransport_->processPacket(pkt);
-                                        }
-                                      else
-                                        {
-                                          LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                                                                 DEBUG_LEVEL,
-                                                                 "MACI %03hu BentPipe::ReceiveManager upstream EOR processing:"
-                                                                 " src %hu, dst %hu, bend downstream",
-                                                                 id_,
-                                                                 pktInfo.getSource(),
-                                                                 pktInfo.getDestination());
-
-                                          DownstreamPacket pkt{{id_,
-                                                                  pktInfo.getDestination(),
-                                                                  pktInfo.getPriority(),
-                                                                  pktInfo.getCreationTime(),
-                                                                  pktInfo.getUUID()},
-                                                               nullptr,0};
-
-                                          for(auto iter = vectorIO.rbegin();
-                                              iter != vectorIO.rend();
-                                              ++iter)
-                                            {
-                                              pkt.prepend(iter->iov_base,iter->iov_len);
-                                            }
-
-                                          // ubend
-                                          pTransponderPacketTransport_->ubendPacket(pkt,
-                                                                                    transponderIndex_);
-
-                                        }
-
-                                      fragmentStore_.erase(iter);
-                                    }
-                                }
-                            }
-                          else
-                            {
-                              // this is the first fragment for this
-                              // message. Just need to set the total number of
-                              // fragments if this happens to also be the last
-                              // fragment in the set.
-                              fragmentStore_.insert(std::make_pair(key,
-                                                                   std::make_tuple(std::set<size_t>{message.getFragmentIndex()},
-                                                                                   FragmentParts{{message.getFragmentOffset(),
-                                                                                                    message.getData()}},
-                                                                                   now,
-                                                                                   dst,
-                                                                                   message.isMoreFragments() ? 0 : message.getFragmentIndex() + 1)));
-                            }
-                        }
-                      else
-                        {
-                          if(bProcess_)
-                            {
-                              LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                                                     DEBUG_LEVEL,
-                                                     "MACI %03hu BentPipe::ReceiveManager upstream EOR processing:"
-                                                     " src %hu, dst %hu, forward upstream",
-                                                     id_,
-                                                     pktInfo.getSource(),
-                                                     pktInfo.getDestination());
-
-
-                              auto data = message.getData();
-
-                              UpstreamPacket pkt{{pktInfo.getSource(),
-                                                    dst,
-                                                    pktInfo.getPriority(),
-                                                    pktInfo.getCreationTime(),
-                                                    pktInfo.getUUID()},
-                                                 &data[0],
-                                                 data.size()};
-
-
-                              pPacketStatusPublisher_->inbound(pktInfo.getSource(),
-                                                               message,
-                                                               PacketStatusPublisher::InboundAction::ACCEPT_GOOD);
-
-                              pTransponderPacketTransport_->processPacket(pkt);
-                            }
-                          else
-                            {
-                              LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                                                     DEBUG_LEVEL,
-                                                     "MACI %03hu BentPipe::ReceiveManager upstream EOR processing:"
-                                                     " src %hu, dst %hu, bend downstream",
-                                                     id_,
-                                                     pktInfo.getSource(),
-                                                     pktInfo.getDestination());
-
-                              // ubend
-                              DownstreamPacket pkt{{id_,
-                                                      pktInfo.getDestination(),
-                                                      pktInfo.getPriority(),
-                                                      pktInfo.getCreationTime(),
-                                                      pktInfo.getUUID()},
-                                                   &data[0],
-                                                   data.size()};
-
-                              pTransponderPacketTransport_->ubendPacket(pkt,
-                                                                        transponderIndex_);
-                            }
-
-                          // update the last EoR
-                          lastEndOfReception_ = pendingEndOfReception;
-                        }
-                    }
-                  else
-                    {
-                      LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                                             DEBUG_LEVEL,
-                                             "MACI %03hu BentPipe::ReceiveManager::%s mode:%s dst:%hu, dropping",
-                                             id_,
-                                             __func__,
-                                             bProcess_ ? "process" : "ubend",
-                                             pktInfo.getDestination());
-
-                      pPacketStatusPublisher_->inbound(pktInfo.getSource(),
-                                                       message,
-                                                       PacketStatusPublisher::InboundAction::DROP_DESTINATION_MAC);
-                    }
-                }
-            }
-          else
-            {
-              break;
-            }
-        }
-      else
-        {
-          FrameInfo pendingFrameInfo = std::move(pendingQueue_.begin()->second);
-          BentPipeMessage & bentPipeMessage{std::get<0>(pendingFrameInfo)};
-          PacketInfo & pktInfo{std::get<1>(pendingFrameInfo)};
-
-          pPacketStatusPublisher_->inbound(pktInfo.getSource(),
-                                           bentPipeMessage.getMessages(),
-                                           PacketStatusPublisher::InboundAction::DROP_LOCK);
-
-          // drop this frame, it has an SoR that occurs during our
-          // previous locked frame transmission
-          pendingQueue_.erase(pendingQueue_.begin());
-        }
-    }
-
-  if(!pendingQueue_.empty())
-    {
-      TimePoint pendingStartOfReception{pendingQueue_.begin()->first};
-      TimePoint pendingEndOfReception{pendingStartOfReception + std::get<5>(pendingQueue_.begin()->second)};
-
-      // if(pendingEndOfReception < nextEoRCheckTime_)
-      //   {
-      pPlatformService_->timerService().
-        schedule(std::bind(&ReceiveManager::process,this),
-                 pendingEndOfReception);
-
-      nextEoRCheckTime_ = pendingEndOfReception;
-      //}
-    }
-
-
-  // check to see if there are fragment assemblies to abandon
-  if(lastFragmentCheckTime_ + fragmentCheckThreshold_ <= now)
-    {
-      for(auto iter = fragmentStore_.begin(); iter != fragmentStore_.end();)
-        {
-          auto & parts = std::get<1>(iter->second);
-          auto & lastFragmentTime  = std::get<2>(iter->second);
-          auto & dst  = std::get<3>(iter->second);
-
-          if(lastFragmentTime + fragmentTimeoutThreshold_ <= now)
-            {
-              size_t totalBytes{};
-
-              for(const auto & part : parts)
-                {
-                  totalBytes += part.second.size();
-                }
-
-              pPacketStatusPublisher_->inbound(std::get<0>(iter->first),
-                                               dst,
-                                               totalBytes,
-                                               PacketStatusPublisher::InboundAction::DROP_MISS_FRAGMENT);
-
-              fragmentStore_.erase(iter++);
-            }
-          else
-            {
-              ++iter;
-            }
-        }
-
-      lastFragmentCheckTime_ = now;
-    }
+  emane_rs_bentpipe_receive_manager_process(p_rust_rm_);
 }
+

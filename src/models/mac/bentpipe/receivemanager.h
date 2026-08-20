@@ -83,6 +83,8 @@ namespace EMANE
                        const std::chrono::seconds & fragmentCheckThreshold,
                        const std::chrono::seconds & fragmentTimeoutThreshold);
 
+        ~ReceiveManager();
+
         void enqueue(BentPipeMessage && bentPipeMessage,
                      const PacketInfo & pktInfo,
                      size_t length,
@@ -94,7 +96,7 @@ namespace EMANE
 
         void process();
 
-      private:
+      public:
         NEMId id_;
         TransponderIndex transponderIndex_;
         TransponderPacketTransport * pTransponderPacketTransport_;
@@ -137,6 +139,7 @@ namespace EMANE
         FragmentStore fragmentStore_;
         TimePoint lastFragmentCheckTime_;
         TimePoint nextEoRCheckTime_;
+        void * p_rust_rm_;
 
         ReceiveManager(const ReceiveManager &) = delete;
 
