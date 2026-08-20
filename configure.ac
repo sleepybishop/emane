@@ -69,10 +69,6 @@ AC_ARG_WITH([verbose-logging],
            [with_verbose_logging=yes])
 
 
-AC_ARG_WITH([testcases],
-           [  --with-testcases        add testcases to build (off)],
-           [AM_CONDITIONAL(WITH_TESTCASES,true)],
-           [AM_CONDITIONAL(WITH_TESTCASES,false)])
 
 
 AC_ARG_VAR([pcap_CFLAGS],[C compiler flags for libpcap])
