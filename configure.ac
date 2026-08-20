@@ -221,7 +221,6 @@ AC_CONFIG_FILES([Makefile
  src/models/mac/bentpipe/Makefile
  src/models/shim/Makefile
  src/models/shim/timinganalysis/Makefile
- src/models/shim/phyapitest/Makefile
  src/models/shim/commeffect/Makefile
  src/agents/Makefile
  src/agents/gpsdlocation/Makefile
@@ -234,29 +233,6 @@ AC_CONFIG_FILES([Makefile
  src/generators/eel/loaders/antennaprofile/Makefile
  src/generators/eel/loaders/commeffect/Makefile
  src/generators/eel/loaders/fadingselection/Makefile
- test/Makefile
- test/harness/Makefile
- test/harness/gainscenario/Makefile
- test/harness/filterscenario/Makefile
- test/harness/noisescenario/Makefile
- test/harness/profilescenario/Makefile
- test/harness/propagationscenario/Makefile
- test/harness/phydownstreamspeed/Makefile
- test/harness/phyupstreamscenario/Makefile
- test/harness/phyupstreamspeed/Makefile
- test/testcases/Makefile
- test/testcases/gainscenario001/Makefile
- test/testcases/filterscenario001/Makefile
- test/testcases/noisescenario001/Makefile
- test/testcases/noisescenario002/Makefile
- test/testcases/profilescenario001/Makefile
- test/testcases/propagationscenario001/Makefile
- test/testcases/phyupstreamscenario001/Makefile
- test/testcases/phyupstreamscenario002/Makefile
- test/testcases/phyupstreamscenario003/Makefile
- test/testcases/phyupstreamscenario004/Makefile
- test/testcases/phyupstreamscenario005/Makefile
- test/testcases/phyupstreamscenario006/Makefile
  scripts/Makefile
  scripts/doc/Makefile
  dtd/Makefile

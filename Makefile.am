@@ -7,7 +7,7 @@ SUBDIRS= src                            \
          dtd                            \
          doc                            \
          schema                         \
-         test
+        
 
 edit = sed                                               \
        -e 's|@VERSION[@]|$(VERSION)|g'                   \
@@ -42,7 +42,7 @@ clean-local: cleantar
 	-rm -f emane.spec
 
 emane.spec: emane.spec.in
-	if test -f $@; then chmod u+w $@; fi
+	if -f $@; then chmod u+w $@; fi
 	$(edit) $< > $@
 	chmod g-w,u-w $@
 
