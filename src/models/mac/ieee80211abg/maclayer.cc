@@ -39,7 +39,10 @@ extern "C" {
     bool emane_ieee80211abg_tx_state_machine_process(void* ptr, void* maclayer, void* entry);
     bool emane_ieee80211abg_tx_state_machine_getWaitTime(void* ptr, void* entry, uint64_t* out_time);
     const char* emane_ieee80211abg_tx_state_machine_statename(void* ptr);
+    bool emane_ieee80211abg_tx_state_machine_getWaitTime(void* ptr, void* entry, uint64_t* out_time);
+    const char* emane_ieee80211abg_tx_state_machine_statename(void* ptr);
     void emane_ieee80211abg_tx_state_machine_update(void* ptr, void* maclayer, void* entry);
+    void emane_ieee80211abg_mac_layer_processDownstreamPacket(void* maclayer, EMANE::DownstreamPacket* pkt, const EMANE::ControlMessages* msgs);
 }
 
 #include "macstatistics.h"
@@ -1408,21 +1411,7 @@ EMANE::Models::IEEE80211ABG::MACLayer::sendDownstreamMessage(DownstreamQueueEntr
  * @param pState new state
  *
  */
-void
-EMANE::Models::IEEE80211ABG::MACLayer::changeDownstreamState(TransmissionTxState * pState)
-{
-  LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                         DEBUG_LEVEL,
-                         "MACI %03hu %s::%s:  %s => %s",
-                         id_,
-                         pzLayerName,
-                         __func__,
-                         emane_ieee80211abg_tx_state_machine_statename(rs_tx_state_),
-                         pState->statename());
 
-  // change state
-  pTxState_ = pState;
-}
 
 
 
@@ -2171,3 +2160,147 @@ extern "C" {
     }
 }
 
+
+
+// FFI Stubs for Rust integration
+extern "C" {
+
+  const EMANE::PacketInfo* emane_upstreampacket_get_packetinfo(const EMANE::UpstreamPacket* pkt) {
+    return &pkt->getPacketInfo();
+  }
+
+  const EMANE::PacketInfo* emane_downstreampacket_get_packetinfo(const EMANE::DownstreamPacket* pkt) {
+    return &pkt->getPacketInfo();
+  }
+
+  uint16_t emane_packetinfo_get_source(const EMANE::PacketInfo* pktInfo) {
+    return pktInfo->getSource();
+  }
+
+  uint16_t emane_packetinfo_get_destination(const EMANE::PacketInfo* pktInfo) {
+    return pktInfo->getDestination();
+  }
+
+  uint8_t emane_packetinfo_get_priority(const EMANE::PacketInfo* pktInfo) {
+    return pktInfo->getPriority();
+  }
+
+  const EMANE::ControlMessage* emane_controlmessages_find(const EMANE::ControlMessages* msgs, uint16_t id) {
+    for(auto pMsg : *msgs) {
+      if(pMsg->getId() == id) {
+        return pMsg;
+      }
+    }
+    return nullptr;
+  }
+}
+
+// Downstream FFI wrappers
+extern "C" {
+    uint8_t emane_ieee80211abg_maclayer_dscpToCategory(void* maclayer, uint8_t dscp) {
+        return static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer)->dscpToCategory(dscp);
+    }
+    
+    void emane_ieee80211abg_maclayer_processInbound(void* maclayer, uint8_t category, EMANE::DownstreamPacket* pkt) {
+        static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer)->commonLayerStatistics_[category]->processInbound(*pkt);
+    }
+    
+    void emane_ieee80211abg_maclayer_processOutbound(void* maclayer, uint8_t category, EMANE::DownstreamPacket* pkt, int drop_code) {
+        static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer)->commonLayerStatistics_[category]->processOutbound(
+            *pkt,
+            EMANE::Microseconds{0},
+            drop_code
+        );
+    }
+    
+    bool emane_ieee80211abg_maclayer_removeToken(void* maclayer) {
+        return static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer)->removeToken();
+    }
+
+    uint8_t emane_ieee80211abg_maclayer_getRetryLimit(void* maclayer, uint8_t category) {
+        return static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer)->macConfig_.getRetryLimit(category);
+    }
+    
+    size_t emane_ieee80211abg_maclayer_getRtsThreshold(void* maclayer) {
+        return static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer)->macConfig_.getRtsThreshold();
+    }
+
+    size_t emane_downstreampacket_get_length(const EMANE::DownstreamPacket* pkt) {
+        return pkt->length();
+    }
+
+    void* emane_ieee80211abg_maclayer_createDownstreamQueueEntry(
+        void* maclayer,
+        EMANE::DownstreamPacket* pkt,
+        uint8_t category,
+        uint8_t retries,
+        bool rtsCtsEnable
+    ) {
+        auto* layer = static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer);
+        auto entry = new EMANE::Models::IEEE80211ABG::DownstreamQueueEntry(
+            *pkt,
+            EMANE::Clock::now(),
+            layer->macConfig_.getTxOpMicroseconds(category),
+            category,
+            retries
+        );
+        entry->bRtsCtsEnable_ = rtsCtsEnable;
+        return entry;
+    }
+
+    void emane_ieee80211abg_maclayer_destroyDownstreamQueueEntry(void* entry) {
+        delete static_cast<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry*>(entry);
+    }
+
+    bool emane_ieee80211abg_maclayer_getHasPendingDownstreamQueueEntry(void* maclayer) {
+        return static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer)->bHasPendingDownstreamQueueEntry_;
+    }
+
+    void emane_ieee80211abg_maclayer_setHasPendingDownstreamQueueEntry(void* maclayer, bool value) {
+        static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer)->bHasPendingDownstreamQueueEntry_ = value;
+    }
+
+    void emane_ieee80211abg_maclayer_setPendingDownstreamQueueEntry(void* maclayer, void* entry) {
+        auto* layer = static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer);
+        auto* pEntry = static_cast<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry*>(entry);
+        layer->pendingDownstreamQueueEntry_ = std::move(*pEntry);
+    }
+
+    void emane_ieee80211abg_maclayer_enqueueDownstreamQueueEntry(void* maclayer, void* entry, uint8_t category) {
+        auto* layer = static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer);
+        auto* pEntry = static_cast<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry*>(entry);
+        
+        std::vector<EMANE::Models::IEEE80211ABG::DownstreamQueueEntry> result = layer->downstreamQueue_.enqueue(*pEntry);
+        for(auto & iter : result) {
+            layer->commonLayerStatistics_[category]->processOutbound(
+                iter.pkt_,
+                std::chrono::duration_cast<EMANE::Microseconds>(EMANE::Clock::now() - iter.acquireTime_),
+                DROP_CODE_QUEUE_OVERFLOW
+            );
+            layer->addToken();
+        }
+    }
+
+    bool emane_ieee80211abg_maclayer_isCurrentEndOfTransmissionTimePast(void* maclayer) {
+        auto* layer = static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer);
+        return layer->currentEndOfTransmissionTime_ <= EMANE::Clock::now();
+    }
+
+    void emane_ieee80211abg_maclayer_handleDownstreamQueueEntry(void* maclayer) {
+        auto* layer = static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer);
+        layer->handleDownstreamQueueEntry(layer->u64SequenceNumber_);
+    }
+
+    void emane_ieee80211abg_maclayer_scheduleDownstreamQueue(void* maclayer, uint64_t waitTimeMicro) {
+        auto* layer = static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer);
+        layer->FFI_scheduleDownstreamQueue(waitTimeMicro);
+    }
+    
+    void* emane_ieee80211abg_maclayer_getPendingDownstreamQueueEntry(void* maclayer) {
+        return &static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer)->pendingDownstreamQueueEntry_;
+    }
+    
+    void* emane_ieee80211abg_maclayer_getTxState(void* maclayer) {
+        return static_cast<EMANE::Models::IEEE80211ABG::MACLayer*>(maclayer)->rs_tx_state_;
+    }
+}

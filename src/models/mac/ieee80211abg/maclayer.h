@@ -103,6 +103,14 @@ namespace EMANE
       class MACLayer : public MACLayerImplementor
       {
       public:
+    void FFI_scheduleDownstreamQueue(uint64_t waitTimeMicro) {
+        downstreamQueueTimedEventId_ =
+            pPlatformService_->timerService().
+            schedule(std::bind(&MACLayer::handleDownstreamQueueEntry,
+                               this,
+                               u64SequenceNumber_),
+                     EMANE::TimePoint{EMANE::Microseconds{waitTimeMicro}});
+    }
         MACLayer(NEMId id,
                  PlatformServiceProvider *pPlatformServiceProvider,
                  RadioServiceProvider * pRadioServiceProvider);
@@ -281,7 +289,7 @@ namespace EMANE
         ModeTimingParameters & getModeTiming();
 
 
-      private:
+      public:
         static const RegistrationId registrationId_ {EMANE::REGISTERED_EMANE_MAC_IEEE_802_11_ABG};
 
         NEMId id_;

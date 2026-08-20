@@ -8,3 +8,4 @@ pub mod downstream_queue;
 pub mod mode_timing_parameters;
 pub mod neighbor_manager;
 pub mod tx_state_machine;
+pub mod mac_layer;
