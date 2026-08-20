@@ -44,27 +44,19 @@ namespace EMANE
     namespace CommEffect
     {
       class EthernetProtocolIPv4Rule : public EthernetProtocolRule
-      {
-      public:
-        EthernetProtocolIPv4Rule(std::uint32_t u32Src, 
-                                 std::uint32_t u32Dst,
-                                 std::uint16_t u16Len,
-                                 std::uint8_t u8TOS,
-                                 std::uint8_t u8TTL,
-                                 const IPProtocolRules & rules);
-        
-        ~EthernetProtocolIPv4Rule();
-        
-        bool match(const void * buf, std::size_t len, std::uint16_t u16Type) override;
-      
-      private:
-        bool bCare_;
-        std::uint32_t u32Src_;
-        std::uint32_t u32Dst_;
-        std::uint16_t u16Len_;
-        std::uint8_t u8TOS_;
-        std::uint8_t u8TTL_;
-      };
+{
+public:
+  EthernetProtocolIPv4Rule(std::uint32_t u32Src,
+                           std::uint32_t u32Dst,
+                           std::uint16_t u16Len,
+                           std::uint8_t u8TOS,
+                           std::uint8_t u8TTL,
+                           const IPProtocolRules & rules);
+  ~EthernetProtocolIPv4Rule();
+  bool match(const void * buf, std::size_t len, std::uint16_t u16Type) override;
+private:
+  void* pRustObj;
+};
     }
   }
 }

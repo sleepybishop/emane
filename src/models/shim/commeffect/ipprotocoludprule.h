@@ -44,19 +44,16 @@ namespace EMANE
     namespace CommEffect
     {
       class IPProtocolUDPRule : public IPProtocolRule
-      {
-      public:
-        IPProtocolUDPRule(std::uint16_t u16SrcPort, std::uint16_t u16DstPort);
-      
-        ~IPProtocolUDPRule();
-      
-        bool match(const void * buf, std::size_t len, std::uint16_t u16Type) override;
-
-      private:
-        bool bCare_;
-        std::uint16_t u16SrcPort_;
-        std::uint16_t u16DstPort_;
-      };
+{
+public:
+  IPProtocolUDPRule(std::uint16_t u16SrcPort, std::uint16_t u16DstPort);
+  ~IPProtocolUDPRule();
+  bool match(const void * buf, std::size_t len, std::uint16_t u16Type) override;
+  void* getRustObj() const override { return pRustObj; }
+  bool isUdp() const override { return true; }
+private:
+  void* pRustObj;
+};
     }
   }
 }

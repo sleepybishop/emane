@@ -45,14 +45,16 @@ namespace EMANE
     namespace CommEffect
     {
       class IPProtocolSimpleRule : public IPProtocolRule
-      {
-      public:
-        IPProtocolSimpleRule(std::uint8_t u8Type);
-      
-        ~IPProtocolSimpleRule();
-      
-        bool match(const void *, std::size_t, std::uint16_t) override;
-      };
+{
+public:
+  IPProtocolSimpleRule(std::uint8_t u8Type);
+  ~IPProtocolSimpleRule();
+  bool match(const void * buf, std::size_t len, std::uint16_t u16Type) override;
+  void* getRustObj() const override { return pRustObj; }
+  bool isUdp() const override { return false; }
+private:
+  void* pRustObj;
+};
     }
   }
 }

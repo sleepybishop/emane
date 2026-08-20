@@ -455,108 +455,39 @@ void EMANE::Models::PHYAPITest::ShimLayer::destroy()
 
 
 
-void EMANE::Models::PHYAPITest::ShimLayer::processUpstreamControl(const ControlMessages &)
+extern "C" void emane_phyapitest_processUpstreamControl(void* layer, const void* msgs);
+
+void EMANE::Models::PHYAPITest::ShimLayer::processUpstreamControl(const ControlMessages & msgs)
 {
-  LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                         DEBUG_LEVEL,
-                         "SHIMI %03d %s::%s, unexpected control message, drop", 
-                         id_,
-                         pzLayerName,
-                         __func__);
+  emane_phyapitest_processUpstreamControl(this, &msgs);
 }
 
 
 
-void EMANE::Models::PHYAPITest::ShimLayer::processDownstreamControl(const ControlMessages &)
+extern "C" void emane_phyapitest_processDownstreamControl(void* layer, const void* msgs);
+
+void EMANE::Models::PHYAPITest::ShimLayer::processDownstreamControl(const ControlMessages & msgs)
 {
-  LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                         DEBUG_LEVEL,
-                         "SHIMI %03d %s::%s, unexpected control message, drop", 
-                         id_,
-                         pzLayerName,
-                         __func__);
+  emane_phyapitest_processDownstreamControl(this, &msgs);
 }
 
 
+
+extern "C" void emane_phyapitest_processUpstreamPacket(void* layer, void* pkt, const void* msgs);
 
 void EMANE::Models::PHYAPITest::ShimLayer::processUpstreamPacket(UpstreamPacket & pkt,
                                                        const ControlMessages & msgs)
 {
-   // get pkt info
-   const PacketInfo & pktInfo = pkt.getPacketInfo();
-
-   LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
-                           DEBUG_LEVEL,
-                           "SHIMI %03d %s::%s src %hu dst %hu size %zu controls %zu",
-                           id_,
-                           pzLayerName,
-                           __func__,
-                           pktInfo.getSource(),
-                           pktInfo.getDestination(),
-                           pkt.length(),
-                           msgs.size());
-   
-   for(const auto & pControlMessage : msgs)
-     {
-       switch(pControlMessage->getId())
-         {
-         case Controls::FrequencyControlMessage::IDENTIFIER:
-           {
-             const auto pFrequencyControlMessage =
-               static_cast<const Controls::FrequencyControlMessage *>(pControlMessage); 
-             
-             LOGGER_STANDARD_LOGGING_FN_VARGS(pPlatformService_->logService(),
-                                              DEBUG_LEVEL,
-                                              Controls::FrequencyControlMessageFormatter{pFrequencyControlMessage},
-                                              "SHIMI %03d %s::%s Frequency Control Message",
-                                              id_,
-                                              pzLayerName,
-                                              __func__);
-
-           }
-
-           break;
-
-         case Controls::ReceivePropertiesControlMessage::IDENTIFIER:
-           {
-             const auto pReceivePropertiesControlMessage =
-               static_cast<const Controls::ReceivePropertiesControlMessage *>(pControlMessage); 
-             
-             LOGGER_STANDARD_LOGGING_FN_VARGS(pPlatformService_->logService(),
-                                              DEBUG_LEVEL,
-                                              Controls::ReceivePropertiesControlMessageFormatter{pReceivePropertiesControlMessage},
-                                              "SHIMI %03d %s::%s Receive Properties Control Message",
-                                              id_,
-                                              pzLayerName,
-                                              __func__);
-
-           }
-
-           break;
-           
-         default:
-           LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
-                                   ERROR_LEVEL,
-                                   "SHIMI %03d %s::%s Unknown control message id %hu",
-                                   id_,
-                                   pzLayerName,
-                                   __func__,
-                                   pControlMessage->getId());
-           break;
-         }
-     }
+  emane_phyapitest_processUpstreamPacket(this, &pkt, &msgs);
 }
 
 
 
-void EMANE::Models::PHYAPITest::ShimLayer::processDownstreamPacket(DownstreamPacket &, const ControlMessages &)
+extern "C" void emane_phyapitest_processDownstreamPacket(void* layer, void* pkt, const void* msgs);
+
+void EMANE::Models::PHYAPITest::ShimLayer::processDownstreamPacket(DownstreamPacket & pkt, const ControlMessages & msgs)
 {
-  LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                         DEBUG_LEVEL,
-                         "SHIMI %03d %s::%s, unexpected packet, drop", 
-                         id_,
-                         pzLayerName,
-                         __func__);
+  emane_phyapitest_processDownstreamPacket(this, &pkt, &msgs);
 }
 
 

@@ -32,6 +32,8 @@
  *
  */
 
+extern "C" void emane_rs_commeffect_test();
+
 #include "shim.h"
 #include "shimheader.h"
 
@@ -106,6 +108,8 @@ EMANE::Models::CommEffect::Shim::~Shim()
 
 void EMANE::Models::CommEffect::Shim::initialize(Registrar & registrar)
 {
+  emane_rs_commeffect_test();
+
   LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
                           DEBUG_LEVEL,
                           "SHIMI %03hu %s::%s",

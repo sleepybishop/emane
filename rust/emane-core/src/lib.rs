@@ -220,3 +220,4 @@ pub mod generators;
 pub mod tdma;
 pub mod ieee80211abg;
 pub mod bentpipe;
+pub mod shim;
