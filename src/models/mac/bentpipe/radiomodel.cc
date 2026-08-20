@@ -1,3 +1,7 @@
+extern "C" {
+  void emane_bentpipe_radiomodel_processUpstreamPacket(void* radiomodel, const void* hdr, void* pkt, const void* msgs);
+  void emane_bentpipe_radiomodel_processDownstreamPacket(void* radiomodel, void* pkt, const void* msgs);
+}
 /*
  * Copyright (c) 2023 - Adjacent Link LLC, Bridgewater, New Jersey
  * All rights reserved.
@@ -940,195 +944,21 @@ void EMANE::Models::BentPipe::RadioModel::processUpstreamControl(const ControlMe
 {}
 
 
-void EMANE::Models::BentPipe::RadioModel::processUpstreamPacket(const CommonMACHeader & hdr,
-                                                                UpstreamPacket & pkt,
-                                                                const ControlMessages & msgs)
+void EMANE::Models::BentPipe::RadioModel::processUpstreamPacket(const CommonMACHeader & hdr, UpstreamPacket & pkt, const ControlMessages & msgs)
 {
-  TimePoint now{Clock::now()};
-
-  const PacketInfo & pktInfo{pkt.getPacketInfo()};
-
-  if(hdr.getRegistrationId() != REGISTERED_EMANE_MAC_BENT_PIPE)
-    {
-      LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
-                              ERROR_LEVEL,
-                              "MACI %03hu BentPipe::%s: MAC Registration"
-                              " Id %hu does not match our Id %hu, drop.",
-                              id_,
-                              __func__,
-                              hdr.getRegistrationId(),
-                              REGISTERED_EMANE_MAC_BENT_PIPE);
-
-
-      packetStatusPublisher_.inbound(pktInfo.getSource(),
-                                     pktInfo.getDestination(),
-                                     pkt.length(),
-                                     PacketStatusPublisher::InboundAction::DROP_REGISTRATION_ID);
-
-
-      // drop
-      return;
-    }
-
-  LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                         DEBUG_LEVEL,
-                         "MACI %03hu BentPipe::RadioModel::%s src %hu dst %hu tos %hhu",
-                         id_,
-                         __func__,
-                         pktInfo.getSource(),
-                         pktInfo.getDestination(),
-                         pktInfo.getPriority());
-
-  const Controls::MIMOReceivePropertiesControlMessage * pMIMOReceivePropertiesControlMessage{};
-
-  for(auto & pControlMessage : msgs)
-    {
-      switch(pControlMessage->getId())
-        {
-        case Controls::MIMOReceivePropertiesControlMessage::IDENTIFIER:
-          {
-            pMIMOReceivePropertiesControlMessage =
-              static_cast<const Controls::MIMOReceivePropertiesControlMessage *>(pControlMessage);
-
-            LOGGER_VERBOSE_LOGGING_FN_VARGS(pPlatformService_->logService(),
-                                            DEBUG_LEVEL,
-                                            Controls::MIMOReceivePropertiesControlMessageFormatter(pMIMOReceivePropertiesControlMessage),
-                                            "MACI %03hu BentPipe::RadioModel::%s MIMO Receive"
-                                            " Properties Control Message",
-                                            id_,
-                                            __func__);
-          }
-          break;
-        }
-    }
-
-  size_t len{pkt.stripLengthPrefixFraming()};
-
-  auto msg = EMANEMessage::BentPipeMessage();
-
-  if(len && pkt.length() >= len)
-    {
-      BentPipeMessage bentPipeMessage{pkt.get(), len};
-
-      // BentPipe only populates a single transmit antenna per over-the-air frame
-      const Controls::AntennaReceiveInfo & antennaReceiveInfo =
-        *pMIMOReceivePropertiesControlMessage->getAntennaReceiveInfos().begin();
-
-      const FrequencySegments & frequencySegments =
-        antennaReceiveInfo.getFrequencySegments();
-
-      const FrequencySegment & frequencySegment =
-        *frequencySegments.begin();
-
-      TimePoint startOfReception{pMIMOReceivePropertiesControlMessage->getTxTime() +
-                                 pMIMOReceivePropertiesControlMessage->getPropagationDelay() +
-                                 frequencySegment.getOffset()};
-
-
-      // enqueue the over-the-air frame using the appropriate receive manager
-      if(auto iter = antennaTransponderMap_.find(std::make_pair(antennaReceiveInfo.getRxAntennaIndex(),
-                                                                frequencySegment.getFrequencyHz()));
-         iter != antennaTransponderMap_.end())
-        {
-          auto transponderIndex = iter->second;
-
-          auto & configuration = transponders_[transponderIndex]->getConfiguration();
-
-          if(configuration.getReceiveEnable())
-            {
-              LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                                     DEBUG_LEVEL,
-                                     "MACI %03hu BentPipe::RadioModel::%s"
-                                     " transponder %hu rx on %hu @ %zu src %hu dst %hu",
-                                     id_,
-                                     __func__,
-                                     transponderIndex,
-                                     antennaReceiveInfo.getRxAntennaIndex(),
-                                     frequencySegment.getFrequencyHz(),
-                                     pktInfo.getSource(),
-                                     pktInfo.getDestination());
-
-              receiveManagers_[transponderIndex]->enqueue(std::move(bentPipeMessage),
-                                                          pktInfo,
-                                                          pkt.length(),
-                                                          startOfReception,
-                                                          frequencySegments,
-                                                          antennaReceiveInfo.getSpan(),
-                                                          now,
-                                                          hdr.getSequenceNumber());
-            }
-          else
-            {
-              LOGGER_VERBOSE_LOGGING(pPlatformService_->logService(),
-                                     DEBUG_LEVEL,
-                                     "MACI %03hu BentPipe::RadioModel::%s"
-                                     " transponder %hu rx on %hu @ %zu src %hu dst %hu, receive disabled, drop",
-                                     id_,
-                                     __func__,
-                                     transponderIndex,
-                                     antennaReceiveInfo.getRxAntennaIndex(),
-                                     frequencySegment.getFrequencyHz(),
-                                     pktInfo.getSource(),
-                                     pktInfo.getDestination());
-
-              packetStatusPublisher_.inbound(pktInfo.getSource(),
-                                             bentPipeMessage.getMessages(),
-                                             PacketStatusPublisher::InboundAction::DROP_RX_OFF);
-            }
-        }
-      else
-        {
-          LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
-                                  ERROR_LEVEL,
-                                  "MACI %03hu BentPipe::RadioModel::%s unable to enqueue"
-                                  " message received on antenna %hu @ %zu",
-                                  id_,
-                                  __func__,
-                                  antennaReceiveInfo.getRxAntennaIndex(),
-                                  frequencySegment.getFrequencyHz());
-        }
-    }
-  else
-    {
-      LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
-                              ERROR_LEVEL,
-                              "MACI %03hu BentPipe::RadioModel::%s Packet payload"
-                              " length %zu does not match length prefix %zu",
-                              id_,
-                              __func__,
-                              pkt.length(),
-                              len);
-    }
+  emane_bentpipe_radiomodel_processUpstreamPacket(this, &hdr, &pkt, &msgs);
 }
+
 
 void EMANE::Models::BentPipe::RadioModel::processDownstreamControl(const ControlMessages &)
 {}
 
 
-void EMANE::Models::BentPipe::RadioModel::processDownstreamPacket(DownstreamPacket & pkt,
-                                                                  const ControlMessages &)
+void EMANE::Models::BentPipe::RadioModel::processDownstreamPacket(DownstreamPacket & pkt, const ControlMessages & msgs)
 {
-  auto now = Clock::now();
-
-  int iTransponderIndex{tosToTransponder_[pkt.getPacketInfo().getPriority()]};
-
-  if(iTransponderIndex != -1)
-    {
-      queueManager_.enqueue(iTransponderIndex,std::move(pkt));
-    }
-  else
-    {
-      LOGGER_STANDARD_LOGGING(pPlatformService_->logService(),
-                              ERROR_LEVEL,
-                              "MACI %03hu BentPipe::RadioModel::%s no transponder mapped to tos"
-                              " %hhu, ignoring",
-                              id_,
-                              __func__,
-                              pkt.getPacketInfo().getPriority());
-    }
-
-  process(now);
+  emane_bentpipe_radiomodel_processDownstreamPacket(this, &pkt, &msgs);
 }
+
 
 void EMANE::Models::BentPipe::RadioModel::processConfiguration(const ConfigurationUpdate & update)
 {
@@ -1806,3 +1636,141 @@ void EMANE::Models::BentPipe::RadioModel::processPacket(UpstreamPacket & pkt)
 }
 
 DECLARE_MAC_LAYER(EMANE::Models::BentPipe::RadioModel);
+
+
+
+
+extern "C" {
+    void emane_bentpipe_radiomodel_processUpstreamControl(void* radiomodel, const void* msgs);
+    void emane_bentpipe_radiomodel_processDownstreamControl(void* radiomodel, const void* msgs);
+    void emane_bentpipe_radiomodel_processUpstreamPacket(void* radiomodel, const void* hdr, void* pkt, const void* msgs);
+    void emane_bentpipe_radiomodel_processDownstreamPacket(void* radiomodel, void* pkt, const void* msgs);
+
+    uint16_t emane_bentpipe_upstreampacket_get_src(const void* pkt) {
+        return static_cast<const EMANE::UpstreamPacket*>(pkt)->getPacketInfo().getSource();
+    }
+    uint16_t emane_bentpipe_upstreampacket_get_dst(const void* pkt) {
+        return static_cast<const EMANE::UpstreamPacket*>(pkt)->getPacketInfo().getDestination();
+    }
+    uint8_t emane_bentpipe_upstreampacket_get_priority(const void* pkt) {
+        return static_cast<const EMANE::UpstreamPacket*>(pkt)->getPacketInfo().getPriority();
+    }
+    size_t emane_bentpipe_upstreampacket_length(const void* pkt) {
+        return static_cast<const EMANE::UpstreamPacket*>(pkt)->length();
+    }
+    size_t emane_bentpipe_upstreampacket_stripLengthPrefixFraming(void* pkt) {
+        return static_cast<EMANE::UpstreamPacket*>(pkt)->stripLengthPrefixFraming();
+    }
+    const void* emane_bentpipe_upstreampacket_get(const void* pkt) {
+        return static_cast<const EMANE::UpstreamPacket*>(pkt)->get();
+    }
+    uint8_t emane_bentpipe_downstreampacket_get_priority(const void* pkt) {
+        return static_cast<const EMANE::DownstreamPacket*>(pkt)->getPacketInfo().getPriority();
+    }
+    uint16_t emane_bentpipe_commonmacheader_get_registration_id(const void* hdr) {
+        return static_cast<const EMANE::CommonMACHeader*>(hdr)->getRegistrationId();
+    }
+    uint64_t emane_bentpipe_commonmacheader_get_sequence_number(const void* hdr) {
+        return static_cast<const EMANE::CommonMACHeader*>(hdr)->getSequenceNumber();
+    }
+
+    void emane_bentpipe_radiomodel_drop_registration_id(void* radiomodel, uint16_t src, uint16_t dst, size_t length) {
+        auto rm = static_cast<EMANE::Models::BentPipe::RadioModel*>(radiomodel);
+        rm->packetStatusPublisher_.inbound(src, dst, length, EMANE::Models::BentPipe::PacketStatusPublisher::InboundAction::DROP_REGISTRATION_ID);
+    }
+    
+    void emane_bentpipe_radiomodel_drop_rx_off(void* radiomodel, uint16_t src, const void* pkt_data, size_t pkt_len) {
+        auto rm = static_cast<EMANE::Models::BentPipe::RadioModel*>(radiomodel);
+        EMANE::Models::BentPipe::BentPipeMessage bentPipeMessage{pkt_data, pkt_len};
+        rm->packetStatusPublisher_.inbound(src, bentPipeMessage.getMessages(), EMANE::Models::BentPipe::PacketStatusPublisher::InboundAction::DROP_RX_OFF);
+    }
+    
+    int32_t emane_bentpipe_radiomodel_find_transponder(void* radiomodel, const void* msgs_ptr, uint16_t* out_antenna_index, uint64_t* out_freq_hz, uint64_t* out_span, uint64_t* out_start_of_reception) {
+        auto rm = static_cast<EMANE::Models::BentPipe::RadioModel*>(radiomodel);
+        auto msgs = static_cast<const EMANE::ControlMessages*>(msgs_ptr);
+        
+        const EMANE::Controls::MIMOReceivePropertiesControlMessage * pMIMOReceivePropertiesControlMessage{};
+        for(auto & pControlMessage : *msgs) {
+            if(pControlMessage->getId() == EMANE::Controls::MIMOReceivePropertiesControlMessage::IDENTIFIER) {
+                pMIMOReceivePropertiesControlMessage = static_cast<const EMANE::Controls::MIMOReceivePropertiesControlMessage *>(pControlMessage);
+                break;
+            }
+        }
+        if(!pMIMOReceivePropertiesControlMessage) return -1;
+        
+        const EMANE::Controls::AntennaReceiveInfo & antennaReceiveInfo = *pMIMOReceivePropertiesControlMessage->getAntennaReceiveInfos().begin();
+        const EMANE::FrequencySegments & frequencySegments = antennaReceiveInfo.getFrequencySegments();
+        const EMANE::FrequencySegment & frequencySegment = *frequencySegments.begin();
+        
+        auto iter = rm->antennaTransponderMap_.find(std::make_pair(antennaReceiveInfo.getRxAntennaIndex(), frequencySegment.getFrequencyHz()));
+        if(iter == rm->antennaTransponderMap_.end()) return -1;
+        
+        *out_antenna_index = antennaReceiveInfo.getRxAntennaIndex();
+        *out_freq_hz = frequencySegment.getFrequencyHz();
+        *out_span = antennaReceiveInfo.getSpan().count();
+        *out_start_of_reception = std::chrono::duration_cast<std::chrono::microseconds>(
+            (pMIMOReceivePropertiesControlMessage->getTxTime() +
+             pMIMOReceivePropertiesControlMessage->getPropagationDelay() +
+             frequencySegment.getOffset()).time_since_epoch()).count();
+             
+        return iter->second;
+    }
+    
+    void emane_bentpipe_radiomodel_enqueue_receive(void* radiomodel, int32_t transponder_index, void* pkt_ptr, const void* msgs_ptr, uint64_t seq_num) {
+        auto rm = static_cast<EMANE::Models::BentPipe::RadioModel*>(radiomodel);
+        auto pkt = static_cast<EMANE::UpstreamPacket*>(pkt_ptr);
+        auto msgs = static_cast<const EMANE::ControlMessages*>(msgs_ptr);
+        
+        const EMANE::Controls::MIMOReceivePropertiesControlMessage * pMIMOReceivePropertiesControlMessage{};
+        for(auto & pControlMessage : *msgs) {
+            if(pControlMessage->getId() == EMANE::Controls::MIMOReceivePropertiesControlMessage::IDENTIFIER) {
+                pMIMOReceivePropertiesControlMessage = static_cast<const EMANE::Controls::MIMOReceivePropertiesControlMessage *>(pControlMessage);
+                break;
+            }
+        }
+        if(!pMIMOReceivePropertiesControlMessage) return;
+        
+        const EMANE::Controls::AntennaReceiveInfo & antennaReceiveInfo = *pMIMOReceivePropertiesControlMessage->getAntennaReceiveInfos().begin();
+        const EMANE::FrequencySegments & frequencySegments = antennaReceiveInfo.getFrequencySegments();
+        const EMANE::FrequencySegment & frequencySegment = *frequencySegments.begin();
+        
+        EMANE::TimePoint startOfReception{pMIMOReceivePropertiesControlMessage->getTxTime() +
+                                   pMIMOReceivePropertiesControlMessage->getPropagationDelay() +
+                                   frequencySegment.getOffset()};
+                                   
+        auto len = pkt->length();
+        EMANE::Models::BentPipe::BentPipeMessage bentPipeMessage{pkt->get(), len};
+        
+        auto & configuration = rm->transponders_[transponder_index]->getConfiguration();
+        if(configuration.getReceiveEnable()) {
+            rm->receiveManagers_[transponder_index]->enqueue(std::move(bentPipeMessage),
+                                                             pkt->getPacketInfo(),
+                                                             pkt->length(),
+                                                             startOfReception,
+                                                             frequencySegments,
+                                                             antennaReceiveInfo.getSpan(),
+                                                             EMANE::Clock::now(),
+                                                             seq_num);
+        } else {
+            rm->packetStatusPublisher_.inbound(pkt->getPacketInfo().getSource(),
+                                               bentPipeMessage.getMessages(),
+                                               EMANE::Models::BentPipe::PacketStatusPublisher::InboundAction::DROP_RX_OFF);
+        }
+    }
+    
+    int32_t emane_bentpipe_radiomodel_get_tos_to_transponder(void* radiomodel, uint8_t tos) {
+        auto rm = static_cast<EMANE::Models::BentPipe::RadioModel*>(radiomodel);
+        return rm->tosToTransponder_[tos];
+    }
+    
+    void emane_bentpipe_radiomodel_queue_manager_enqueue(void* radiomodel, int32_t transponder_index, void* pkt_ptr) {
+        auto rm = static_cast<EMANE::Models::BentPipe::RadioModel*>(radiomodel);
+        auto pkt = static_cast<EMANE::DownstreamPacket*>(pkt_ptr);
+        rm->queueManager_.enqueue(transponder_index, std::move(*pkt));
+    }
+    
+    void emane_bentpipe_radiomodel_process(void* radiomodel) {
+        auto rm = static_cast<EMANE::Models::BentPipe::RadioModel*>(radiomodel);
+        rm->process(EMANE::Clock::now());
+    }
+}

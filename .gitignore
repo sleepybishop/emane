@@ -115,3 +115,4 @@ src/transports/raw/transraw.xml
 src/transports/virtual/transvirtual.xml
 src/models/mac/tdma/eventscheduler/tdmanem.xml
 src/models/mac/tdma/eventscheduler/tdmaradiomodel.xml
+rust/target/

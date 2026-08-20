@@ -1,10 +1,29 @@
-EXTRA_DIST = bypassphy.xml.in
-BUILT_SOURCES = bypassphy.xml
+lib_LTLIBRARIES = libbypassphylayer.la
 
-edit = sed -e 's|@datadir[@]|$(pkgdatadir)|g'
+libbypassphylayer_la_CPPFLAGS= \
+ -I@top_srcdir@/include        \
+ $(AM_CPPFLAGS)                \
+ $(libemane_CFLAGS)
 
-all-local:
-	cd $(top_srcdir)/rust/emane-core && cargo build -p bypass-phy
+libbypassphylayer_la_LIBADD=                 \
+ $(libuuid_LIBS)                             \
+ @top_srcdir@/src/libemane/.libs/libemane.la
+
+libbypassphylayer_la_LDFLAGS=  \
+ $(AM_LDFLAGS)                 \
+ -avoid-version
+
+libbypassphylayer_la_SOURCES = \
+ phylayer.cc
+
+EXTRA_DIST =                   \
+ bypassphy.xml.in
+
+BUILT_SOURCES =                \
+ bypassphy.xml                   
+
+edit = sed                     \
+       -e 's|@datadir[@]|$(pkgdatadir)|g'  
 
 bypassphy.xml: bypassphy.xml.in
 	$(edit) $< > $@
@@ -15,9 +34,7 @@ clean-local:
 install-exec-hook:	
 	$(mkinstalldirs) $(DESTDIR)$(datadir)/$(PACKAGE)/xml/models/phy/bypass
 	cp -f bypassphy.xml $(SCHEMAS) $(DESTDIR)$(datadir)/$(PACKAGE)/xml/models/phy/bypass
-	$(mkinstalldirs) $(DESTDIR)$(libdir)
-	cp -f $(top_srcdir)/rust/target/debug/libbypassphylayer.so $(DESTDIR)$(libdir)/libbypassphylayer.so
 
 uninstall-local:
 	rm -f $(DESTDIR)$(datadir)/$(PACKAGE)/xml/models/phy/bypass/bypassphy.xml
-	rm -f $(DESTDIR)$(libdir)/libbypassphylayer.so
+

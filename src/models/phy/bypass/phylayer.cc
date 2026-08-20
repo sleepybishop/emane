@@ -3,8 +3,8 @@
 #include "emane/utils/commonlayerstatistics.h"
 #include "emane/configureexception.h"
 
-extern "C" void* emane_rs_bypass_phy_create(uint16_t id, EMANE::PlatformServiceProvider* pPlatformService, void* cpp_this);
-extern "C" void emane_rs_bypass_phy_destroy(void* state);
+extern "C" void* emane_rs_create(uint16_t id, EMANE::PlatformServiceProvider* pPlatformService, void* cpp_this);
+extern "C" void emane_rs_destroy(void* state);
 extern "C" void emane_rs_bypass_phy_process_downstream(void* state, EMANE::DownstreamPacket* pkt);
 extern "C" void emane_rs_bypass_phy_process_upstream(void* state, EMANE::UpstreamPacket* pkt);
 
@@ -14,10 +14,10 @@ namespace EMANE {
       class PHYLayer : public PHYLayerImplementor {
       public:
         PHYLayer(NEMId id, PlatformServiceProvider* pPlatformService) : PHYLayerImplementor(id, pPlatformService), commonLayerStatistics_{{}} {
-            rs_state_ = emane_rs_bypass_phy_create(id, pPlatformService, this);
+            rs_state_ = emane_rs_create(id, pPlatformService, this);
         }
         ~PHYLayer() override {
-            emane_rs_bypass_phy_destroy(rs_state_);
+            emane_rs_destroy(rs_state_);
         }
 
         void initialize(Registrar & registrar) override {
@@ -71,11 +71,11 @@ namespace EMANE {
 }
 
 // These are exported so the EMANE plugin loader can find them natively when dlopen-ing the Rust library!
-extern "C" EMANE::PHYLayerImplementor* emane_bypass_phy_create_shim(EMANE::NEMId id, EMANE::PlatformServiceProvider* pPlatformService) {
+extern "C" EMANE::PHYLayerImplementor* emane_create_shim(EMANE::NEMId id, EMANE::PlatformServiceProvider* pPlatformService) {
     return new EMANE::Models::Bypass::PHYLayer(id, pPlatformService);
 }
 
-extern "C" void emane_bypass_phy_destroy_shim(EMANE::PHYLayerImplementor* p) {
+extern "C" void emane_destroy_shim(EMANE::PHYLayerImplementor* p) {
     delete p;
 }
 

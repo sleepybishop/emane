@@ -1,3 +1,21 @@
+lib_LTLIBRARIES = libbypassmaclayer.la
+
+libbypassmaclayer_la_CPPFLAGS= \
+ -I@top_srcdir@/include        \
+ $(AM_CPPFLAGS)                \
+ $(libemane_CFLAGS)
+
+libbypassmaclayer_la_LIBADD=                 \
+ $(libuuid_LIBS)                             \
+ @top_srcdir@/src/libemane/.libs/libemane.la
+
+libbypassmaclayer_la_LDFLAGS=  \
+ $(AM_LDFLAGS)                 \
+ -avoid-version
+
+libbypassmaclayer_la_SOURCES = \
+ maclayer.cc
+
 EXTRA_DIST =                   \
  bypassnem.xml.in              \
  bypassmac.xml.in

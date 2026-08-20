@@ -3,7 +3,6 @@ use std::path::PathBuf;
 
 fn main() {
     println!("cargo:rerun-if-changed=wrapper.h");
-    println!("cargo:rerun-if-changed=src/bypass_phy_proxy.cc");
 
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")
@@ -56,28 +55,13 @@ fn main() {
     let emane_root = std::fs::canonicalize(PathBuf::from(manifest_dir).join("../../")).unwrap();
     let emane_root_str = emane_root.to_str().unwrap();
 
+        
     println!("cargo:rustc-link-search=native={}/src/libemane/.libs", emane_root_str);
     println!("cargo:rustc-link-search=native={}/src/models/mac/ieee80211abg/.libs", emane_root_str);
     println!("cargo:rustc-link-search=native={}/src/models/mac/tdma/.libs", emane_root_str);
     println!("cargo:rustc-link-search=native={}/src/models/mac/rfpipe/.libs", emane_root_str);
+    println!("cargo:rustc-link-search=native={}/src/models/mac/bentpipe/.libs", emane_root_str);
     println!("cargo:rustc-link-lib=dylib=emane");
-    cc::Build::new().file("src/tdma_stubs.c").file("src/ieee80211abg_stubs.c").compile("tdma_stubs");
-    
-    cc::Build::new()
-        .cpp(true)
-        .flag("-std=c++17")
-        .include("../../include")
-        .include("/usr/include/uuid")
-        .include("/usr/include/libxml2")
-        .file("src/bypass_mac_proxy.cc")
-        .compile("bypass_mac_proxy");
 
-    cc::Build::new()
-        .cpp(true)
-        .flag("-std=c++17")
-        .include("../../include")
-        .include("/usr/include/uuid")
-        .include("/usr/include/libxml2")
-        .file("src/bypass_phy_proxy.cc")
-        .compile("bypass_phy_proxy");
+    cc::Build::new().file("src/tdma_stubs.c").file("src/ieee80211abg_stubs.c").file("src/bentpipe_stubs.c").compile("tdma_stubs");
 }

@@ -106,7 +106,7 @@ namespace EMANE
 
         void processPacket(UpstreamPacket & pkt) override;
 
-      private:
+      public:
         using Transponders = std::map<TransponderIndex,std::unique_ptr<Transponder>>;
         Transponders transponders_;
 

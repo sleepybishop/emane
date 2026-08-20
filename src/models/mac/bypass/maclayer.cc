@@ -5,7 +5,7 @@
 
 // Forward declare the Rust FFI functions that currently exist in libemane/rust_ffi.h
 // Wait, they exist in src/libemane/rust_ffi.h!
-#include "../../../src/libemane/rust_ffi.h"
+#include "../../../libemane/rust_ffi.h"
 
 namespace EMANE {
   namespace Models {
@@ -77,10 +77,10 @@ namespace EMANE {
   }
 }
 
-extern "C" void* bypass_mac_create(EMANE::NEMId id, EMANE::PlatformServiceProvider* pPlatformService, EMANE::RadioServiceProvider* pRadioServiceProvider) {
+extern "C" void* create(EMANE::NEMId id, EMANE::PlatformServiceProvider* pPlatformService, EMANE::RadioServiceProvider* pRadioServiceProvider) {
   return new EMANE::Models::Bypass::MACLayer(id, pPlatformService, pRadioServiceProvider);
 }
 
-extern "C" void bypass_mac_destroy(void* p) {
+extern "C" void destroy(void* p) {
   delete static_cast<EMANE::Models::Bypass::MACLayer*>(p);
 }
