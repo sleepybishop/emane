@@ -3,6 +3,13 @@ name = "emane-core"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+# Transitional C/C++ proxy APIs retained only for downstream users that still
+# provide the historical companion symbols. The native Rust applications and
+# plugins do not compile or link these modules.
+legacy-ffi = []
+
 [dependencies]
 emane-plugin-api = { path = "../emane-plugin-api" }
 rand = "0.8"

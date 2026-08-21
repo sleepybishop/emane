@@ -1,14 +1,36 @@
-#![allow(dead_code, unused_variables, unused_assignments, unused_mut)]
-#![allow(non_upper_case_globals)]
-#![allow(non_camel_case_types)]
-#![allow(non_snake_case)]
+#![cfg_attr(
+    feature = "legacy-ffi",
+    allow(
+        dead_code,
+        unused_variables,
+        unused_assignments,
+        unused_mut,
+        non_upper_case_globals,
+        non_camel_case_types,
+        non_snake_case
+    )
+)]
+// The exported C ABI intentionally keeps safe `extern "C"` entry points for
+// source compatibility with the existing headers. Pointer validity is checked
+// at each boundary; Clippy cannot express that contract. Several model APIs
+// also mirror fixed EMANE call signatures and wire-cache shapes.
+#![allow(
+    clippy::not_unsafe_ptr_arg_deref,
+    clippy::missing_safety_doc,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 
+#[cfg(feature = "legacy-ffi")]
 pub mod configuration_service;
+#[cfg(feature = "legacy-ffi")]
 pub mod control_port;
 pub mod events;
+#[cfg(feature = "legacy-ffi")]
 pub mod framework_phy;
 pub mod regex;
 pub mod xml;
+#[cfg(feature = "legacy-ffi")]
 pub use configuration_service as config;
 pub mod build_id_service;
 pub mod common;
@@ -20,6 +42,7 @@ pub mod ota_manager;
 pub mod pcr_manager;
 pub mod queue_metric_manager;
 pub mod rf_signal_table;
+#[cfg(feature = "legacy-ffi")]
 pub mod statistics;
 pub mod tdma_message;
 
@@ -109,15 +132,89 @@ pub struct LognormalFadingState {
     rng: StdRng,
 }
 
+impl Default for LognormalFadingState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LognormalFadingState {
+    pub fn new() -> Self {
+        Self {
+            param_counter: 0,
+            reset: true,
+            depth_dbm: 0.0,
+            nexttime_microsec: 0,
+            rng: StdRng::seed_from_u64(5489),
+        }
+    }
+
+    pub fn process(
+        &mut self,
+        power_dbm: f64,
+        params: &LognormalFadingParameters,
+        now_microsec: u64,
+    ) -> Option<f64> {
+        if !power_dbm.is_finite()
+            || !params.dmu.is_finite()
+            || !params.dsigma.is_finite()
+            || params.dsigma < 0.0
+            || !params.lmean.is_finite()
+            || !params.lstddev.is_finite()
+            || params.lmean < 0.0
+            || params.lstddev < 0.0
+            || params.dlthresh > params.duthresh
+            || params.minpathloss >= params.maxpathloss
+        {
+            return None;
+        }
+
+        if params.counter != self.param_counter {
+            self.reset = true;
+            self.param_counter = params.counter;
+        }
+
+        if self.reset || now_microsec >= self.nexttime_microsec {
+            let length_seconds = if params.lstddev == 0.0 {
+                params.lmean
+            } else {
+                Normal::new(params.lmean, params.lstddev)
+                    .ok()?
+                    .sample(&mut self.rng)
+                    .max(0.0)
+            };
+            let length_microseconds = (length_seconds * 1_000_000.0)
+                .round()
+                .clamp(0.0, u64::MAX as f64) as u64;
+            self.nexttime_microsec = now_microsec.saturating_add(length_microseconds);
+
+            let depth_norm = if params.dsigma == 0.0 {
+                params.dmu.exp()
+            } else {
+                LogNormal::new(params.dmu, params.dsigma)
+                    .ok()?
+                    .sample(&mut self.rng)
+            };
+
+            self.depth_dbm = if depth_norm <= params.dlthresh {
+                params.maxpathloss
+            } else if depth_norm >= params.duthresh || params.duthresh == params.dlthresh {
+                params.minpathloss
+            } else {
+                ((depth_norm - params.dlthresh) / (params.duthresh - params.dlthresh))
+                    * (params.minpathloss - params.maxpathloss)
+                    + params.maxpathloss
+            };
+            self.reset = false;
+        }
+
+        Some(10.0_f64.powf((power_dbm - self.depth_dbm) / 10.0))
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn emane_rs_lognormal_fading_new() -> *mut LognormalFadingState {
-    Box::into_raw(Box::new(LognormalFadingState {
-        param_counter: 0,
-        reset: true,
-        depth_dbm: 0.0,
-        nexttime_microsec: 0,
-        rng: StdRng::seed_from_u64(5489),
-    }))
+    Box::into_raw(Box::new(LognormalFadingState::new()))
 }
 
 #[no_mangle]
@@ -143,46 +240,26 @@ pub extern "C" fn emane_rs_lognormal_fading_process(
     let state = unsafe { &mut *state_ptr };
     let p = unsafe { &*params };
 
-    if p.counter != state.param_counter {
-        state.reset = true;
-        state.param_counter = p.counter;
-    }
-
-    if state.reset || now_microsec >= state.nexttime_microsec {
-        let l_dist = Normal::new(p.lmean, p.lstddev).unwrap();
-        let next_ms = l_dist.sample(&mut state.rng) as u64;
-        state.nexttime_microsec = now_microsec + (next_ms * 1000);
-
-        let d_dist = LogNormal::new(p.dmu, p.dsigma).unwrap();
-        let depth_norm = d_dist.sample(&mut state.rng);
-
-        if depth_norm <= p.dlthresh {
-            state.depth_dbm = p.maxpathloss;
-        } else if depth_norm >= p.duthresh {
-            state.depth_dbm = p.minpathloss;
-        } else {
-            state.depth_dbm = ((depth_norm - p.dlthresh) / (p.duthresh - p.dlthresh))
-                * (p.minpathloss - p.maxpathloss)
-                + p.maxpathloss;
-        }
-        state.reset = false;
-    }
-
-    // DB_TO_MILLIWATT calculation
-    let target_dbm = power_dbm - state.depth_dbm;
-    10.0_f64.powf(target_dbm / 10.0)
+    state.process(power_dbm, p, now_microsec).unwrap_or(0.0)
 }
 pub mod antenna;
+#[cfg(feature = "legacy-ffi")]
 pub mod antenna_manager;
+#[cfg(feature = "legacy-ffi")]
 pub mod controls;
 pub mod flow_control_client;
 pub mod formatters;
+#[cfg(feature = "legacy-ffi")]
 pub mod gain_manager;
+#[cfg(feature = "legacy-ffi")]
 pub mod location_manager;
 pub mod log_service;
+#[cfg(feature = "legacy-ffi")]
 pub mod mac_layer;
 pub mod nakagami_fading_algorithm;
+#[cfg(feature = "legacy-ffi")]
 pub mod nem_impl;
+#[cfg(feature = "legacy-ffi")]
 pub mod nem_layer_stack;
 pub mod nem_queued_layer;
 pub mod noise_recorder;
@@ -216,26 +293,38 @@ pub extern "C" fn emane_rs_socket_sendto(
 ) -> libc::ssize_t {
     unsafe { libc::sendto(sock, buf, len, flags, addr, addrlen) }
 }
+#[cfg(feature = "legacy-ffi")]
 pub mod boundary_message_manager;
+#[cfg(feature = "legacy-ffi")]
 pub mod common_layer_statistics;
+#[cfg(feature = "legacy-ffi")]
 pub mod fading_manager;
+#[cfg(feature = "legacy-ffi")]
 mod framework_phy_downstream;
+#[cfg(feature = "legacy-ffi")]
 pub mod nem_ota_adapter;
+#[cfg(feature = "legacy-ffi")]
 pub mod nem_stateful_layer;
+#[cfg(feature = "legacy-ffi")]
 pub mod receive_processor;
 pub mod spectrum_monitor;
 
+#[cfg(feature = "legacy-ffi")]
 pub mod shim_layer;
 
+#[cfg(feature = "legacy-ffi")]
 pub mod phy_layer;
 
+#[cfg(feature = "legacy-ffi")]
 pub mod transport_layer;
 
 pub mod agents;
+#[cfg(feature = "legacy-ffi")]
 pub mod factory_manager;
 pub mod generators;
 pub mod plugin_interface;
 pub mod raw_transport;
+#[cfg(feature = "legacy-ffi")]
 pub mod shim;
 pub mod types;
 pub mod r#virtual;
