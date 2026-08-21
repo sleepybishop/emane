@@ -27,9 +27,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 name = "bentpipe"
 version = "0.1.0"
 dependencies = [
- "emane-core",
- "libc",
- "roxmltree 0.21.1",
+ "emane-plugin-api",
 ]
 
 [[package]]
@@ -70,7 +68,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 name = "dummy-mac"
 version = "0.1.0"
 dependencies = [
- "emane-core",
+ "emane-plugin-api",
 ]
 
 [[package]]
@@ -85,6 +83,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "cc",
+ "emane-plugin-api",
  "lazy_static",
  "libc",
  "libloading 0.9.0",
@@ -94,9 +93,13 @@ dependencies = [
  "rand",
  "rand_distr",
  "regex",
- "roxmltree 0.19.0",
+ "roxmltree",
  "socket2",
 ]
+
+[[package]]
+name = "emane-plugin-api"
+version = "0.1.0"
 
 [[package]]
 name = "equivalent"
@@ -191,9 +194,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 name = "ieee80211abg"
 version = "0.1.0"
 dependencies = [
- "emane-core",
- "libc",
- "roxmltree 0.21.1",
+ "emane-plugin-api",
 ]
 
 [[package]]
@@ -493,9 +494,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "rfpipe"
 version = "0.1.0"
 dependencies = [
- "emane-core",
- "libc",
- "rand",
+ "emane-plugin-api",
 ]
 
 [[package]]
@@ -503,15 +502,6 @@ name = "roxmltree"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3cd14fd5e3b777a7422cca79358c57a8f6e3a703d9ac187448d0daf220c2407f"
-
-[[package]]
-name = "roxmltree"
-version = "0.21.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "rustix"
@@ -557,10 +547,7 @@ dependencies = [
 name = "tdma"
 version = "0.1.0"
 dependencies = [
- "emane-core",
- "libc",
- "rand",
- "roxmltree 0.19.0",
+ "emane-plugin-api",
 ]
 
 [[package]]

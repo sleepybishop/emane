@@ -1,4 +1,12 @@
 
 [workspace]
-members = ["rust/emane-core"]
-
+resolver = "2"
+members = [
+    "rust/emane-plugin-api",
+    "rust/emane-core",
+    "rust/plugins/dummy-mac",
+    "rust/plugins/ieee80211abg",
+    "rust/plugins/bentpipe",
+    "rust/plugins/tdma",
+    "rust/plugins/rfpipe",
+]

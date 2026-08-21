@@ -1,5 +1,7 @@
 [workspace]
+resolver = "2"
 members = [
+    "emane-plugin-api",
     "emane-core",
     "plugins/dummy-mac",
     "plugins/ieee80211abg",

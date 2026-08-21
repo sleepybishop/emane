@@ -7,4 +7,4 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-emane-core = { path = "../../emane-core" }
+emane-plugin-api = { path = "../../emane-plugin-api" }
