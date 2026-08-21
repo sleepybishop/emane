@@ -1,4 +1,4 @@
 
 [workspace]
-members = ["pcap_test","rust/emane-core"]
+members = ["rust/emane-core"]
 
