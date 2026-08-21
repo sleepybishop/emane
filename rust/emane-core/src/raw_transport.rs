@@ -10,7 +10,7 @@ use std::thread;
 unsafe impl Send for RawTransport {}
 unsafe impl Sync for RawTransport {}
 pub struct RawTransport {
-    id: u16,
+    _id: u16,
     thread: Option<thread::JoinHandle<()>>,
     canceled: Arc<AtomicBool>,
     cpp_obj: *mut c_void,
@@ -26,7 +26,7 @@ pub extern "C" fn emane_rs_raw_transport_new(
     cb: extern "C" fn(*mut c_void, *const u8, usize),
 ) -> *mut RawTransport {
     let rt = Box::new(RawTransport {
-        id,
+        _id: id,
         thread: None,
         canceled: Arc::new(AtomicBool::new(false)),
         cpp_obj,
@@ -111,10 +111,10 @@ pub extern "C" fn emane_rs_raw_transport_start(
     rt.thread = Some(thread::spawn(move || {
         while !canceled.load(Ordering::SeqCst) {
             match rx_cap.next_packet() {
-                Ok(packet) => unsafe {
+                Ok(packet) => {
                     let cpp_obj = cpp_obj_usize as *mut c_void;
                     cb(cpp_obj, packet.data.as_ptr(), packet.data.len());
-                },
+                }
                 Err(pcap::Error::TimeoutExpired) => {
                     // Just loop again and check `canceled`
                     continue;

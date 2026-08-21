@@ -2,7 +2,22 @@ use roxmltree::Document;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
+use std::path::PathBuf;
 use std::sync::OnceLock;
+
+fn file_uri_path(uri: &str) -> Result<PathBuf, String> {
+    if let Some(path) = uri.strip_prefix("file://") {
+        if path.starts_with('/') {
+            Ok(PathBuf::from(path))
+        } else if let Some(path) = path.strip_prefix("localhost/") {
+            Ok(PathBuf::from(format!("/{path}")))
+        } else {
+            Err(format!("unsupported non-local file URI: {uri}"))
+        }
+    } else {
+        Ok(PathBuf::from(uri))
+    }
+}
 
 pub fn frequency_overlap_ratio(freq1: u64, bw1: u64, freq2: u64, bw2: u64) -> (f64, u64, u64) {
     if bw1 == 0 || bw2 == 0 {
@@ -82,8 +97,9 @@ impl SpectralMaskManager {
     }
 
     pub fn load(&mut self, uri: &str) -> Result<(), String> {
-        let content =
-            std::fs::read_to_string(uri).map_err(|e| format!("Failed to read {}: {}", uri, e))?;
+        let path = file_uri_path(uri)?;
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
         let doc = Document::parse(&content).map_err(|e| format!("Failed to parse XML: {}", e))?;
 
         let root = doc.root_element();
@@ -286,18 +302,15 @@ fn parse_finite(val: &str, error: &str) -> Result<f64, String> {
 }
 
 fn parse_frequency(val: &str) -> Result<u64, String> {
-    let mut multiplier = 1.0;
-    let mut num_str = val;
-    if val.ends_with('G') {
-        multiplier = 1_000_000_000.0;
-        num_str = &val[..val.len() - 1];
-    } else if val.ends_with('M') {
-        multiplier = 1_000_000.0;
-        num_str = &val[..val.len() - 1];
-    } else if val.ends_with('K') {
-        multiplier = 1_000.0;
-        num_str = &val[..val.len() - 1];
-    }
+    let (num_str, multiplier) = if let Some(value) = val.strip_suffix('G') {
+        (value, 1_000_000_000.0)
+    } else if let Some(value) = val.strip_suffix('M') {
+        (value, 1_000_000.0)
+    } else if let Some(value) = val.strip_suffix('K') {
+        (value, 1_000.0)
+    } else {
+        (val, 1.0)
+    };
 
     let num = parse_finite(num_str, "invalid frequency")?;
     let scaled = num * multiplier;

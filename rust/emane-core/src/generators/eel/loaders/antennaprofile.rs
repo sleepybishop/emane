@@ -13,6 +13,12 @@ pub struct AntennaProfileLoader {
     delta_cache: HashMap<u16, EmaneRsAntennaProfile>,
 }
 
+impl Default for AntennaProfileLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AntennaProfileLoader {
     pub fn new() -> Self {
         Self {

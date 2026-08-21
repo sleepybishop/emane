@@ -10,6 +10,12 @@ pub struct FadingSelectionLoader {
     delta_cache: HashMap<u16, HashMap<u16, i32>>,
 }
 
+impl Default for FadingSelectionLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FadingSelectionLoader {
     pub fn new() -> Self {
         Self {

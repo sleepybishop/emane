@@ -333,13 +333,14 @@ pub extern "C" fn emane_rs_event_service_send_event_multicast(
     }
     let mut msg = Event::default();
 
-    let mut serialization = Serialization::default();
-    serialization.nem_id = nem_id as u32;
-    serialization.event_id = event_id as u32;
-    serialization.data = if len == 0 {
-        Vec::new()
-    } else {
-        unsafe { std::slice::from_raw_parts(data as *const u8, len) }.to_vec()
+    let serialization = Serialization {
+        nem_id: nem_id as u32,
+        event_id: event_id as u32,
+        data: if len == 0 {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(data as *const u8, len) }.to_vec()
+        },
     };
 
     let mut data_msg = Data::default();

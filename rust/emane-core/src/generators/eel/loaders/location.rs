@@ -26,6 +26,12 @@ pub struct LocationLoader {
     delta_cache: HashMap<u16, LocationEntry>,
 }
 
+impl Default for LocationLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LocationLoader {
     pub fn new() -> Self {
         Self {

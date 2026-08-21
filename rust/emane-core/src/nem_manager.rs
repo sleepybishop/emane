@@ -29,10 +29,12 @@ use crate::{
         emane_rs_raw_transport_stop, RawTransport,
     },
 };
+use crate::{LognormalFadingParameters, LognormalFadingState};
 use libloading::{Library, Symbol};
 use prost::Message;
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{c_void, CStr, CString};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, OnceLock, RwLock, Weak};
@@ -597,6 +599,17 @@ struct PhyState {
     propagation_model: PropagationModel,
     locations: HashMap<u16, Location>,
     pathloss: HashMap<u16, HashMap<u64, f64>>,
+    antenna_profiles: HashMap<u16, AntennaProfileSelection>,
+    fading_selections: HashMap<u16, FadingMode>,
+    fading_mode: FadingMode,
+    nakagami: crate::nakagami_fading_algorithm::NakagamiFadingAlgorithm,
+    nakagami_parameters: NakagamiParameters,
+    lognormal_states: HashMap<u16, LognormalFadingState>,
+    lognormal_parameters: LognormalFadingParameters,
+    doppler_shift_enabled: bool,
+    spectral_mask_index: u16,
+    radio_silence_enabled: bool,
+    exclude_same_sub_id_from_filter: bool,
     sub_id: u16,
     noise_mode: NoiseMode,
     noise_bin_size: i64,
@@ -621,6 +634,45 @@ struct Location {
     latitude_degrees: f64,
     longitude_degrees: f64,
     altitude_meters: f64,
+    velocity: Option<Velocity>,
+    orientation: Orientation,
+}
+
+#[derive(Clone, Copy)]
+struct Velocity {
+    azimuth_degrees: f64,
+    elevation_degrees: f64,
+    magnitude_meters_per_second: f64,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Orientation {
+    roll_degrees: f64,
+    pitch_degrees: f64,
+    yaw_degrees: f64,
+}
+
+#[derive(Clone, Copy)]
+struct AntennaProfileSelection {
+    profile_id: u16,
+    azimuth_degrees: f64,
+    elevation_degrees: f64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FadingMode {
+    None,
+    Event,
+    Nakagami,
+    Lognormal,
+}
+
+struct NakagamiParameters {
+    distance0_meters: f64,
+    distance1_meters: f64,
+    m0: f64,
+    m1: f64,
+    m2: f64,
 }
 
 impl PhyState {
@@ -635,6 +687,33 @@ impl PhyState {
             propagation_model: PropagationModel::Precomputed,
             locations: HashMap::new(),
             pathloss: HashMap::new(),
+            antenna_profiles: HashMap::new(),
+            fading_selections: HashMap::new(),
+            fading_mode: FadingMode::None,
+            nakagami: crate::nakagami_fading_algorithm::NakagamiFadingAlgorithm::new(),
+            nakagami_parameters: NakagamiParameters {
+                distance0_meters: 100.0,
+                distance1_meters: 250.0,
+                m0: 0.75,
+                m1: 1.0,
+                m2: 200.0,
+            },
+            lognormal_states: HashMap::new(),
+            lognormal_parameters: LognormalFadingParameters {
+                dmu: 5.0,
+                dsigma: 1.0,
+                dlthresh: 0.25,
+                maxpathloss: 100.0,
+                duthresh: 0.75,
+                minpathloss: 0.0,
+                lmean: 0.005,
+                lstddev: 0.001,
+                counter: 1,
+            },
+            doppler_shift_enabled: true,
+            spectral_mask_index: 0,
+            radio_silence_enabled: false,
+            exclude_same_sub_id_from_filter: false,
             sub_id: 1,
             noise_mode: NoiseMode::All,
             noise_bin_size: 20,
@@ -666,7 +745,7 @@ impl PhyState {
             self.max_segment_duration,
             self.time_sync_threshold,
             self.noise_max_clamp,
-            false,
+            self.exclude_same_sub_id_from_filter,
         );
     }
 
@@ -700,6 +779,110 @@ impl PhyState {
             }
         }
     }
+
+    fn distance(&self, local_id: u16, source: u16) -> Option<f64> {
+        Some(distance_meters(
+            *self.locations.get(&local_id)?,
+            *self.locations.get(&source)?,
+        ))
+    }
+
+    fn profile_gain(&self, local_id: u16, source: u16) -> Option<f64> {
+        if self.fixed_antenna_gain_enabled {
+            return Some(self.fixed_antenna_gain_db);
+        }
+        let local = *self.locations.get(&local_id)?;
+        let remote = *self.locations.get(&source)?;
+        let local_profile = *self.antenna_profiles.get(&local_id)?;
+        let remote_profile = *self.antenna_profiles.get(&source)?;
+
+        let (local_reference_azimuth, local_reference_elevation) =
+            oriented_direction_angles(local, remote)?;
+        let local_gain = crate::antenna::get_manager().get_profile_gain(
+            local_profile.profile_id,
+            normalize_azimuth(local_reference_azimuth - local_profile.azimuth_degrees),
+            normalize_elevation(local_reference_elevation - local_profile.elevation_degrees),
+            local_reference_azimuth,
+            local_reference_elevation,
+        )?;
+
+        let (remote_reference_azimuth, remote_reference_elevation) =
+            oriented_direction_angles(remote, local)?;
+        let remote_gain = crate::antenna::get_manager().get_profile_gain(
+            remote_profile.profile_id,
+            normalize_azimuth(remote_reference_azimuth - remote_profile.azimuth_degrees),
+            normalize_elevation(remote_reference_elevation - remote_profile.elevation_degrees),
+            remote_reference_azimuth,
+            remote_reference_elevation,
+        )?;
+        Some(local_gain + remote_gain)
+    }
+
+    fn doppler_fraction(&self, local_id: u16, source: u16) -> f64 {
+        if !self.doppler_shift_enabled {
+            return 0.0;
+        }
+        let Some(local) = self.locations.get(&local_id).copied() else {
+            return 0.0;
+        };
+        let Some(remote) = self.locations.get(&source).copied() else {
+            return 0.0;
+        };
+        let (Some(local_velocity), Some(remote_velocity)) = (local.velocity, remote.velocity)
+        else {
+            return 0.0;
+        };
+        let Some(line_of_sight) = line_of_sight_neu(local, remote) else {
+            return 0.0;
+        };
+        let local_velocity = velocity_neu(local_velocity);
+        let remote_velocity = velocity_neu(remote_velocity);
+        let radial_velocity = line_of_sight.0 * (local_velocity.0 - remote_velocity.0)
+            + line_of_sight.1 * (local_velocity.1 - remote_velocity.1)
+            + line_of_sight.2 * (local_velocity.2 - remote_velocity.2);
+        const SPEED_OF_LIGHT: f64 = 299_792_458.0;
+        let denominator = SPEED_OF_LIGHT - radial_velocity;
+        if denominator <= 0.0 || !denominator.is_finite() {
+            0.0
+        } else {
+            SPEED_OF_LIGHT / denominator - 1.0
+        }
+    }
+
+    fn apply_fading(
+        &mut self,
+        local_id: u16,
+        source: u16,
+        power_dbm: f64,
+        now_microseconds: u64,
+    ) -> Option<f64> {
+        let mode = match self.fading_mode {
+            FadingMode::Event => *self.fading_selections.get(&source)?,
+            mode => mode,
+        };
+        let power_mw = match mode {
+            FadingMode::None => return Some(power_dbm),
+            FadingMode::Event => return None,
+            FadingMode::Nakagami => {
+                let distance = self.distance(local_id, source)?;
+                self.nakagami.compute(
+                    power_dbm,
+                    distance,
+                    self.nakagami_parameters.distance0_meters,
+                    self.nakagami_parameters.distance1_meters,
+                    self.nakagami_parameters.m0,
+                    self.nakagami_parameters.m1,
+                    self.nakagami_parameters.m2,
+                )
+            }
+            FadingMode::Lognormal => self.lognormal_states.entry(source).or_default().process(
+                power_dbm,
+                &self.lognormal_parameters,
+                now_microseconds,
+            )?,
+        };
+        (power_mw.is_finite() && power_mw > 0.0).then_some(10.0 * power_mw.log10())
+    }
 }
 
 fn distance_meters(a: Location, b: Location) -> f64 {
@@ -712,6 +895,78 @@ fn distance_meters(a: Location, b: Location) -> f64 {
         + latitude_a.cos() * latitude_b.cos() * (delta_longitude / 2.0).sin().powi(2);
     let surface = 2.0 * EARTH_RADIUS_METERS * haversine.sqrt().atan2((1.0 - haversine).sqrt());
     surface.hypot(b.altitude_meters - a.altitude_meters)
+}
+
+fn oriented_direction_angles(local: Location, remote: Location) -> Option<(f64, f64)> {
+    let (north, east, up) = relative_neu(local, remote);
+    let magnitude = north.hypot(east).hypot(up);
+    if magnitude <= f64::EPSILON || !magnitude.is_finite() {
+        return None;
+    }
+
+    // Rotate the world-space line of sight into the platform body frame.
+    // Yaw is clockwise from north, pitch is nose-up, and roll is about the
+    // forward axis. Applying the inverse platform rotations makes antenna
+    // and blockage patterns respond to all three orientation components.
+    let yaw = local.orientation.yaw_degrees.to_radians();
+    let pitch = local.orientation.pitch_degrees.to_radians();
+    let roll = local.orientation.roll_degrees.to_radians();
+    let forward_yaw = yaw.cos() * north + yaw.sin() * east;
+    let right_yaw = -yaw.sin() * north + yaw.cos() * east;
+    let forward = pitch.cos() * forward_yaw + pitch.sin() * up;
+    let up_pitch = -pitch.sin() * forward_yaw + pitch.cos() * up;
+    let right = roll.cos() * right_yaw + roll.sin() * up_pitch;
+    let body_up = -roll.sin() * right_yaw + roll.cos() * up_pitch;
+    Some((
+        normalize_azimuth(right.atan2(forward).to_degrees()),
+        normalize_elevation((body_up / magnitude).clamp(-1.0, 1.0).asin().to_degrees()),
+    ))
+}
+
+fn relative_neu(local: Location, remote: Location) -> (f64, f64, f64) {
+    const EARTH_RADIUS_METERS: f64 = 6_371_000.0;
+    let mean_latitude = ((local.latitude_degrees + remote.latitude_degrees) * 0.5).to_radians();
+    let north =
+        (remote.latitude_degrees - local.latitude_degrees).to_radians() * EARTH_RADIUS_METERS;
+    let east = (remote.longitude_degrees - local.longitude_degrees).to_radians()
+        * EARTH_RADIUS_METERS
+        * mean_latitude.cos();
+    let up = remote.altitude_meters - local.altitude_meters;
+    (north, east, up)
+}
+
+fn line_of_sight_neu(local: Location, remote: Location) -> Option<(f64, f64, f64)> {
+    let vector = relative_neu(local, remote);
+    let magnitude = vector.0.hypot(vector.1).hypot(vector.2);
+    (magnitude > f64::EPSILON && magnitude.is_finite()).then_some((
+        vector.0 / magnitude,
+        vector.1 / magnitude,
+        vector.2 / magnitude,
+    ))
+}
+
+fn velocity_neu(velocity: Velocity) -> (f64, f64, f64) {
+    let azimuth = velocity.azimuth_degrees.to_radians();
+    let elevation = velocity.elevation_degrees.to_radians();
+    let horizontal = velocity.magnitude_meters_per_second * elevation.cos();
+    (
+        horizontal * azimuth.cos(),
+        horizontal * azimuth.sin(),
+        velocity.magnitude_meters_per_second * elevation.sin(),
+    )
+}
+
+fn normalize_azimuth(value: f64) -> f64 {
+    value.rem_euclid(360.0)
+}
+
+fn normalize_elevation(value: f64) -> f64 {
+    let value = value.rem_euclid(360.0);
+    match value {
+        value if value > 270.0 => value - 360.0,
+        value if value > 90.0 => 180.0 - value,
+        value => value,
+    }
 }
 
 fn builtin_init(id: u16, framework: *const FfiFrameworkService, kind: BuiltinKind) -> *mut c_void {
@@ -853,6 +1108,72 @@ extern "C" fn builtin_configure(state: *mut c_void, request: *const c_void) -> b
         let Some(value) = values.first() else {
             return false;
         };
+        let valid_for_kind = match state.kind {
+            BuiltinKind::Phy => matches!(
+                name.as_str(),
+                "frequency"
+                    | "frequencyofinterest"
+                    | "bandwidth"
+                    | "txpower"
+                    | "fixedantennagain"
+                    | "fixedantennagainenable"
+                    | "subid"
+                    | "noisemode"
+                    | "noisebinsize"
+                    | "noisemaxsegmentoffset"
+                    | "noisemaxmessagepropagation"
+                    | "noisemaxsegmentduration"
+                    | "timesyncthreshold"
+                    | "noisemaxclampenable"
+                    | "systemnoisefigure"
+                    | "propagationmodel"
+                    | "excludesamesubidfromfilterenable"
+                    | "compatibilitymode"
+                    | "dopplershiftenable"
+                    | "spectralmaskindex"
+                    | "radiosilenceenable"
+                    | "fading.model"
+                    | "fading.nakagami.m0"
+                    | "fading.nakagami.m1"
+                    | "fading.nakagami.m2"
+                    | "fading.nakagami.distance0"
+                    | "fading.nakagami.distance1"
+                    | "fading.lognormal.dmu"
+                    | "fading.lognormal.dsigma"
+                    | "fading.lognormal.dlthresh"
+                    | "fading.lognormal.duthresh"
+                    | "fading.lognormal.maxpathloss"
+                    | "fading.lognormal.minpathloss"
+                    | "fading.lognormal.lmean"
+                    | "fading.lognormal.lstddev"
+            ),
+            BuiltinKind::VirtualTransport => matches!(
+                name.as_str(),
+                "devicepath"
+                    | "device"
+                    | "arpmodeenable"
+                    | "broadcastmodeenable"
+                    | "arpcacheenable"
+                    | "ethernet.type.arp.priority"
+                    | "ethernet.type.unknown.priority"
+                    | "bitrate"
+                    | "flowcontrolenable"
+                    | "address"
+                    | "mask"
+            ),
+            BuiltinKind::RawTransport => matches!(
+                name.as_str(),
+                "device"
+                    | "broadcastmodeenable"
+                    | "arpcacheenable"
+                    | "ethernet.type.arp.priority"
+                    | "ethernet.type.unknown.priority"
+                    | "bitrate"
+            ),
+        };
+        if !valid_for_kind {
+            return false;
+        }
         match name.as_str() {
             "devicepath" => state.device_path.clone_from(value),
             "device" => state.device_name.clone_from(value),
@@ -1025,10 +1346,133 @@ extern "C" fn builtin_configure(state: *mut c_void, request: *const c_void) -> b
                     _ => return false,
                 };
             }
-            // These settings are consumed by higher-level services in the
-            // original transport and do not alter Ethernet frame routing.
-            "bitrate" | "flowcontrolenable" | "address" | "mask" => {}
-            _ => {}
+            "excludesamesubidfromfilterenable" => {
+                let Some(value) = parse_bool(value) else {
+                    return false;
+                };
+                state.phy.exclude_same_sub_id_from_filter = value;
+            }
+            // The v3 packet/control ABI implements the historical mode-1 PHY
+            // contract. MIMO mode 2 requires its larger antenna/control schema.
+            "compatibilitymode" => {
+                if value.parse::<u16>().ok() != Some(1) {
+                    return false;
+                }
+            }
+            "dopplershiftenable" => {
+                let Some(value) = parse_bool(value) else {
+                    return false;
+                };
+                state.phy.doppler_shift_enabled = value;
+            }
+            "spectralmaskindex" => {
+                let Ok(value) = value.parse::<u16>() else {
+                    return false;
+                };
+                state.phy.spectral_mask_index = value;
+            }
+            "radiosilenceenable" => {
+                let Some(value) = parse_bool(value) else {
+                    return false;
+                };
+                state.phy.radio_silence_enabled = value;
+            }
+            "fading.model" => {
+                state.phy.fading_mode = match value.as_str() {
+                    "none" => FadingMode::None,
+                    "event" => FadingMode::Event,
+                    "nakagami" => FadingMode::Nakagami,
+                    "lognormal" => FadingMode::Lognormal,
+                    _ => return false,
+                };
+            }
+            "fading.nakagami.m0" | "fading.nakagami.m1" | "fading.nakagami.m2" => {
+                let Ok(parsed) = value.parse::<f64>() else {
+                    return false;
+                };
+                if !parsed.is_finite() || parsed < 0.5 {
+                    return false;
+                }
+                match name.as_str() {
+                    "fading.nakagami.m0" => state.phy.nakagami_parameters.m0 = parsed,
+                    "fading.nakagami.m1" => state.phy.nakagami_parameters.m1 = parsed,
+                    _ => state.phy.nakagami_parameters.m2 = parsed,
+                }
+            }
+            "fading.nakagami.distance0" | "fading.nakagami.distance1" => {
+                let Ok(parsed) = value.parse::<f64>() else {
+                    return false;
+                };
+                if !parsed.is_finite() || parsed < 0.0 {
+                    return false;
+                }
+                if name == "fading.nakagami.distance0" {
+                    state.phy.nakagami_parameters.distance0_meters = parsed;
+                } else {
+                    state.phy.nakagami_parameters.distance1_meters = parsed;
+                }
+            }
+            "fading.lognormal.dmu"
+            | "fading.lognormal.dsigma"
+            | "fading.lognormal.dlthresh"
+            | "fading.lognormal.duthresh"
+            | "fading.lognormal.maxpathloss"
+            | "fading.lognormal.minpathloss"
+            | "fading.lognormal.lmean"
+            | "fading.lognormal.lstddev" => {
+                let Ok(parsed) = value.parse::<f64>() else {
+                    return false;
+                };
+                if !parsed.is_finite()
+                    || (matches!(
+                        name.as_str(),
+                        "fading.lognormal.dsigma"
+                            | "fading.lognormal.lmean"
+                            | "fading.lognormal.lstddev"
+                    ) && parsed < 0.0)
+                {
+                    return false;
+                }
+                match name.as_str() {
+                    "fading.lognormal.dmu" => state.phy.lognormal_parameters.dmu = parsed,
+                    "fading.lognormal.dsigma" => state.phy.lognormal_parameters.dsigma = parsed,
+                    "fading.lognormal.dlthresh" => state.phy.lognormal_parameters.dlthresh = parsed,
+                    "fading.lognormal.duthresh" => state.phy.lognormal_parameters.duthresh = parsed,
+                    "fading.lognormal.maxpathloss" => {
+                        state.phy.lognormal_parameters.maxpathloss = parsed
+                    }
+                    "fading.lognormal.minpathloss" => {
+                        state.phy.lognormal_parameters.minpathloss = parsed
+                    }
+                    "fading.lognormal.lmean" => state.phy.lognormal_parameters.lmean = parsed,
+                    _ => state.phy.lognormal_parameters.lstddev = parsed,
+                }
+                state.phy.lognormal_parameters.counter =
+                    state.phy.lognormal_parameters.counter.wrapping_add(1);
+            }
+            // The native transport currently has no pacing queue. A zero
+            // bitrate retains the historical unlimited-rate behavior; a
+            // nonzero request must not be accepted and silently ignored.
+            "bitrate" => {
+                if parse_scaled_u64(value) != Some(0) {
+                    return false;
+                }
+            }
+            // Flow control requires the corresponding MAC token protocol.
+            // Accepting only the disabled value is explicit and safe.
+            "flowcontrolenable" => {
+                if parse_bool(value) != Some(false) {
+                    return false;
+                }
+            }
+            // These were retained for configuration compatibility by the
+            // historical virtual transport but were not applied to the TUN.
+            "address" | "mask" => {
+                if value.parse::<IpAddr>().is_err() {
+                    return false;
+                }
+            }
+            _ => return false,
         }
     }
     if state.kind == BuiltinKind::Phy {
@@ -1040,6 +1484,11 @@ extern "C" fn builtin_configure(state: *mut c_void, request: *const c_void) -> b
                 .saturating_add(state.phy.max_segment_duration.saturating_mul(2))
                 % state.phy.noise_bin_size
                 != 0
+            || state.phy.nakagami_parameters.distance0_meters
+                >= state.phy.nakagami_parameters.distance1_meters
+            || state.phy.lognormal_parameters.dlthresh > state.phy.lognormal_parameters.duthresh
+            || state.phy.lognormal_parameters.minpathloss
+                >= state.phy.lognormal_parameters.maxpathloss
         {
             return false;
         }
@@ -1213,14 +1662,22 @@ extern "C" fn builtin_upstream(
             };
 
             let now = unix_time_microseconds();
+            let Some(antenna_gain_db) = state.phy.profile_gain(state.id, packet.info.source) else {
+                return;
+            };
+            let unfaded_power_dbm = tx.tx_power_dbm - pathloss_db + antenna_gain_db;
+            let Some(rx_power_dbm) = state.phy.apply_fading(
+                state.id,
+                packet.info.source,
+                unfaded_power_dbm,
+                now.max(0) as u64,
+            ) else {
+                return;
+            };
+            let doppler_fraction = state.phy.doppler_fraction(state.id, packet.info.source);
             let segment = FfiFrequencySegment {
                 frequency_hz: tx.frequency_hz,
-                rx_power_dbm: tx.tx_power_dbm - pathloss_db
-                    + if state.phy.fixed_antenna_gain_enabled {
-                        state.phy.fixed_antenna_gain_db
-                    } else {
-                        0.0
-                    },
+                rx_power_dbm,
                 duration_microsec: i64::try_from(tx.duration_microseconds).unwrap_or(i64::MAX),
                 offset_microsec: i64::try_from(tx.offset_microseconds).unwrap_or(i64::MAX),
             };
@@ -1233,7 +1690,7 @@ extern "C" fn builtin_upstream(
                     now,
                     tx.tx_time_microseconds,
                     propagation_microseconds,
-                    0.0,
+                    doppler_fraction,
                     std::slice::from_ref(&segment),
                     tx.bandwidth_hz,
                     std::slice::from_ref(&rx_power_mw),
@@ -1345,6 +1802,9 @@ extern "C" fn builtin_downstream(
         if packet.is_null() {
             return;
         }
+        if state.phy.radio_silence_enabled {
+            return;
+        }
         let packet = unsafe { &*packet };
         let now = unix_time_microseconds();
         let mut tx = find_tx_properties(incoming).unwrap_or(TxProperties {
@@ -1379,6 +1839,7 @@ extern "C" fn builtin_downstream(
         if state.phy.fixed_antenna_gain_enabled {
             tx.tx_power_dbm += state.phy.fixed_antenna_gain_db;
         }
+        tx.spectral_mask_index = state.phy.spectral_mask_index;
         let tx_bytes = tx.encode();
         let mut outgoing: Vec<_> = incoming
             .iter()
@@ -1457,7 +1918,10 @@ extern "C" fn builtin_event(state: *mut c_void, event_id: u16, data: *const u8, 
     } else {
         unsafe { std::slice::from_raw_parts(data, len) }
     };
-    use crate::protobufs::emane_message::{LocationEvent, PathlossEvent, PathlossExEvent};
+    use crate::protobufs::emane_message::{
+        fading_selection_event, AntennaProfileEvent, FadingSelectionEvent, LocationEvent,
+        PathlossEvent, PathlossExEvent,
+    };
     match event_id {
         100 => {
             let Ok(event) = LocationEvent::decode(bytes) else {
@@ -1471,13 +1935,41 @@ extern "C" fn builtin_event(state: *mut c_void, event_id: u16, data: *const u8, 
                 if position.latitude_degrees.is_finite()
                     && position.longitude_degrees.is_finite()
                     && position.altitude_meters.is_finite()
+                    && (-90.0..=90.0).contains(&position.latitude_degrees)
+                    && (-180.0..=180.0).contains(&position.longitude_degrees)
                 {
+                    let velocity = location.velocity.and_then(|velocity| {
+                        (velocity.azimuth_degrees.is_finite()
+                            && velocity.elevation_degrees.is_finite()
+                            && velocity.magnitude_meters_per_second.is_finite()
+                            && velocity.magnitude_meters_per_second >= 0.0)
+                            .then_some(Velocity {
+                                azimuth_degrees: velocity.azimuth_degrees,
+                                elevation_degrees: velocity.elevation_degrees,
+                                magnitude_meters_per_second: velocity.magnitude_meters_per_second,
+                            })
+                    });
+                    let orientation = location
+                        .orientation
+                        .and_then(|orientation| {
+                            (orientation.roll_degrees.is_finite()
+                                && orientation.pitch_degrees.is_finite()
+                                && orientation.yaw_degrees.is_finite())
+                            .then_some(Orientation {
+                                roll_degrees: orientation.roll_degrees,
+                                pitch_degrees: orientation.pitch_degrees,
+                                yaw_degrees: orientation.yaw_degrees,
+                            })
+                        })
+                        .unwrap_or_default();
                     state.phy.locations.insert(
                         nem_id,
                         Location {
                             latitude_degrees: position.latitude_degrees,
                             longitude_degrees: position.longitude_degrees,
                             altitude_meters: position.altitude_meters,
+                            velocity,
+                            orientation,
                         },
                     );
                 }
@@ -1517,6 +2009,49 @@ extern "C" fn builtin_event(state: *mut c_void, event_id: u16, data: *const u8, 
                         values.insert(entry.frequency_hz, value);
                     }
                 }
+            }
+        }
+        102 => {
+            let Ok(event) = AntennaProfileEvent::decode(bytes) else {
+                return;
+            };
+            for profile in event.profiles {
+                let (Ok(nem_id), Ok(profile_id)) = (
+                    u16::try_from(profile.nem_id),
+                    u16::try_from(profile.profile_id),
+                ) else {
+                    continue;
+                };
+                if profile.antenna_azimuth_degrees.is_finite()
+                    && profile.antenna_elevation_degrees.is_finite()
+                {
+                    state.phy.antenna_profiles.insert(
+                        nem_id,
+                        AntennaProfileSelection {
+                            profile_id,
+                            azimuth_degrees: profile.antenna_azimuth_degrees,
+                            elevation_degrees: profile.antenna_elevation_degrees,
+                        },
+                    );
+                }
+            }
+        }
+        106 => {
+            let Ok(event) = FadingSelectionEvent::decode(bytes) else {
+                return;
+            };
+            for entry in event.entries {
+                let Ok(nem_id) = u16::try_from(entry.nem_id) else {
+                    continue;
+                };
+                let mode = match fading_selection_event::Model::try_from(entry.model) {
+                    Ok(fading_selection_event::Model::TypeNone) => FadingMode::None,
+                    Ok(fading_selection_event::Model::TypeNakagami) => FadingMode::Nakagami,
+                    Ok(fading_selection_event::Model::TypeLognormal) => FadingMode::Lognormal,
+                    Err(_) => continue,
+                };
+                state.phy.fading_selections.insert(nem_id, mode);
+                state.phy.lognormal_states.remove(&nem_id);
             }
         }
         _ => {}
@@ -1876,6 +2411,13 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     static LOCAL_OTA_HITS: AtomicUsize = AtomicUsize::new(0);
+    static BYPASS_STACK_HITS: AtomicUsize = AtomicUsize::new(0);
+    static BYPASS_STACK_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+    struct CaptureTransport {
+        id: u16,
+        framework: FfiFrameworkService,
+    }
 
     extern "C" fn test_init(_: u16, _: *const FfiFrameworkService) -> *mut c_void {
         std::ptr::dangling_mut::<u8>().cast()
@@ -1904,6 +2446,121 @@ mod tests {
     }
     extern "C" fn test_timed(_: *mut c_void, _: u64, _: u32, _: *const u8, _: usize) {}
     extern "C" fn test_event(_: *mut c_void, _: u16, _: *const u8, _: usize) {}
+
+    extern "C" fn capture_init(id: u16, framework: *const FfiFrameworkService) -> *mut c_void {
+        let Some(framework) = (unsafe { framework.as_ref() }) else {
+            return std::ptr::null_mut();
+        };
+        Box::into_raw(Box::new(CaptureTransport {
+            id,
+            framework: *framework,
+        }))
+        .cast()
+    }
+
+    extern "C" fn capture_destroy(plugin: *mut c_void) {
+        if !plugin.is_null() {
+            unsafe { drop(Box::from_raw(plugin as *mut CaptureTransport)) };
+        }
+    }
+
+    extern "C" fn capture_upstream(
+        plugin: *mut c_void,
+        packet: *const FfiPacket,
+        _: *const FfiControlMessage,
+        _: usize,
+    ) {
+        if plugin.is_null() || packet.is_null() {
+            return;
+        }
+        let packet = unsafe { &*packet };
+        if packet.payload.len != 0 && !packet.payload.data.is_null() {
+            let payload =
+                unsafe { std::slice::from_raw_parts(packet.payload.data, packet.payload.len) };
+            BYPASS_STACK_BYTES.store(
+                payload.iter().map(|value| *value as usize).sum(),
+                Ordering::Relaxed,
+            );
+            BYPASS_STACK_HITS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    extern "C" fn capture_downstream(
+        plugin: *mut c_void,
+        packet: *const FfiPacket,
+        messages: *const FfiControlMessage,
+        count: usize,
+    ) {
+        let Some(state) = (unsafe { (plugin as *const CaptureTransport).as_ref() }) else {
+            return;
+        };
+        (state.framework.send_downstream_packet)(
+            state.framework.framework_ctx,
+            state.id,
+            packet,
+            messages,
+            count,
+        );
+    }
+
+    fn capture_api() -> &'static PluginApi {
+        static API: OnceLock<PluginApi> = OnceLock::new();
+        API.get_or_init(|| PluginApi {
+            abi_version: PLUGIN_ABI_VERSION,
+            struct_size: std::mem::size_of::<PluginApi>(),
+            name: c"capture-transport".as_ptr(),
+            plugin_type: 4,
+            init: capture_init,
+            configure: test_configure,
+            start: test_start,
+            post_start: test_lifecycle,
+            stop: test_lifecycle,
+            destroy: capture_destroy,
+            process_upstream: capture_upstream,
+            process_downstream: capture_downstream,
+            process_timed_event: test_timed,
+            process_event: test_event,
+        })
+    }
+
+    fn add_capture_transport(manager: &mut NemManager, nem_id: u16) {
+        let mut framework_context = Box::new(FrameworkContext {
+            runtime: Arc::downgrade(&manager.runtime),
+            nem_id,
+            layer_index: 0,
+        });
+        let framework = FfiFrameworkService {
+            framework_ctx: framework_context.as_mut() as *mut FrameworkContext as *mut c_void,
+            send_downstream_packet,
+            send_upstream_packet,
+            send_downstream_control,
+            send_upstream_control,
+            schedule_timed_event,
+            cancel_timed_event,
+            log,
+        };
+        let context = (capture_api().init)(nem_id, &framework);
+        let invocation = Invocation {
+            api: capture_api() as *const PluginApi as usize,
+            plugin_ctx: context as usize,
+        };
+        manager.layers.entry(nem_id).or_default().push(NemLayer {
+            _library: None,
+            invocation,
+            _framework_context: framework_context,
+            event_build_id: next_event_build_id(),
+            started: false,
+            destroyed: false,
+        });
+        manager
+            .runtime
+            .invocations
+            .write()
+            .unwrap()
+            .entry(nem_id)
+            .or_default()
+            .push(invocation);
+    }
 
     fn test_api() -> &'static PluginApi {
         static API: OnceLock<PluginApi> = OnceLock::new();
@@ -1935,6 +2592,47 @@ mod tests {
     }
 
     #[test]
+    fn builtin_configuration_rejects_unknown_cross_layer_and_unimplemented_values() {
+        let mut manager = NemManager::new([11; 16]);
+        assert!(manager
+            .add_layer_configured(
+                1,
+                "emanephy",
+                2,
+                &[("frequncy".to_string(), vec!["2.4G".to_string()])],
+            )
+            .is_err());
+        assert!(manager
+            .add_layer_configured(
+                2,
+                "virtualtransport",
+                4,
+                &[("frequency".to_string(), vec!["2.4G".to_string()])],
+            )
+            .is_err());
+        assert!(manager
+            .add_layer_configured(
+                3,
+                "virtualtransport",
+                4,
+                &[("bitrate".to_string(), vec!["1M".to_string()])],
+            )
+            .is_err());
+        manager
+            .add_layer_configured(
+                4,
+                "virtualtransport",
+                4,
+                &[
+                    ("bitrate".to_string(), vec!["0.0".to_string()]),
+                    ("address".to_string(), vec!["172.30.1.1".to_string()]),
+                    ("mask".to_string(), vec!["255.255.0.0".to_string()]),
+                ],
+            )
+            .unwrap();
+    }
+
+    #[test]
     fn precomputed_propagation_prefers_frequency_specific_pathloss() {
         let mut phy = PhyState::new();
         phy.pathloss
@@ -1953,6 +2651,8 @@ mod tests {
                 latitude_degrees: 40.0,
                 longitude_degrees: -74.0,
                 altitude_meters: 10.0,
+                velocity: None,
+                orientation: Orientation::default(),
             },
         );
         phy.locations.insert(
@@ -1961,6 +2661,8 @@ mod tests {
                 latitude_degrees: 40.001,
                 longitude_degrees: -74.0,
                 altitude_meters: 20.0,
+                velocity: None,
+                orientation: Orientation::default(),
             },
         );
         phy.propagation_model = PropagationModel::FreeSpace;
@@ -1969,6 +2671,112 @@ mod tests {
         assert!(delay >= 0);
         phy.propagation_model = PropagationModel::TwoRay;
         assert!(phy.propagation(1, 2, 2_347_000_000).unwrap().0 >= 0.0);
+    }
+
+    #[test]
+    fn doppler_uses_relative_velocity_and_can_be_disabled() {
+        let mut phy = PhyState::new();
+        phy.locations.insert(
+            1,
+            Location {
+                latitude_degrees: 40.0,
+                longitude_degrees: -74.0,
+                altitude_meters: 10.0,
+                velocity: Some(Velocity {
+                    azimuth_degrees: 0.0,
+                    elevation_degrees: 0.0,
+                    magnitude_meters_per_second: 30.0,
+                }),
+                orientation: Orientation::default(),
+            },
+        );
+        phy.locations.insert(
+            2,
+            Location {
+                latitude_degrees: 40.01,
+                longitude_degrees: -74.0,
+                altitude_meters: 10.0,
+                velocity: Some(Velocity {
+                    azimuth_degrees: 0.0,
+                    elevation_degrees: 0.0,
+                    magnitude_meters_per_second: 0.0,
+                }),
+                orientation: Orientation::default(),
+            },
+        );
+        assert!(phy.doppler_fraction(1, 2) > 0.0);
+        phy.doppler_shift_enabled = false;
+        assert_eq!(phy.doppler_fraction(1, 2), 0.0);
+    }
+
+    #[test]
+    fn antenna_body_frame_applies_roll_pitch_and_yaw() {
+        let local = Location {
+            latitude_degrees: 0.0,
+            longitude_degrees: 0.0,
+            altitude_meters: 0.0,
+            velocity: None,
+            orientation: Orientation::default(),
+        };
+        let east = Location {
+            longitude_degrees: 0.001,
+            ..local
+        };
+        let (azimuth, elevation) = oriented_direction_angles(local, east).unwrap();
+        assert!((azimuth - 90.0).abs() < 1.0e-9);
+        assert!(elevation.abs() < 1.0e-9);
+
+        let rolled = Location {
+            orientation: Orientation {
+                roll_degrees: 90.0,
+                ..Orientation::default()
+            },
+            ..local
+        };
+        let (_, elevation) = oriented_direction_angles(rolled, east).unwrap();
+        assert!((elevation + 90.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn event_fading_requires_a_source_selection() {
+        let mut phy = PhyState::new();
+        phy.fading_mode = FadingMode::Event;
+        assert_eq!(phy.apply_fading(1, 2, -50.0, 1), None);
+        phy.fading_selections.insert(2, FadingMode::None);
+        assert_eq!(phy.apply_fading(1, 2, -50.0, 1), Some(-50.0));
+    }
+
+    #[test]
+    fn phy_configuration_accepts_ported_features_and_rejects_mimo_mode() {
+        let mut manager = NemManager::new([12; 16]);
+        manager
+            .add_layer_configured(
+                1,
+                "emanephy",
+                2,
+                &[
+                    ("compatibilitymode".to_string(), vec!["1".to_string()]),
+                    ("dopplershiftenable".to_string(), vec!["true".to_string()]),
+                    ("fading.model".to_string(), vec!["nakagami".to_string()]),
+                    (
+                        "fading.nakagami.distance0".to_string(),
+                        vec!["100".to_string()],
+                    ),
+                    (
+                        "fading.nakagami.distance1".to_string(),
+                        vec!["250".to_string()],
+                    ),
+                ],
+            )
+            .unwrap();
+        assert!(manager
+            .add_layer_configured(
+                2,
+                "emanephy",
+                2,
+                &[("compatibilitymode".to_string(), vec!["2".to_string()])],
+            )
+            .is_err());
     }
 
     #[test]
@@ -2051,6 +2859,55 @@ mod tests {
         manager.add_layer_configured(1, "emanephy", 2, &[]).unwrap();
         manager.start().unwrap();
         manager.post_start();
+        manager.stop();
+    }
+
+    #[test]
+    fn dynamic_bypass_stack_delivers_between_two_nems() {
+        let (Ok(mac), Ok(phy)) = (
+            resolve_plugin_path("bypassmaclayer"),
+            resolve_plugin_path("bypassphylayer"),
+        ) else {
+            return;
+        };
+        if !mac.exists() || !phy.exists() {
+            return;
+        }
+        BYPASS_STACK_HITS.store(0, Ordering::Relaxed);
+        BYPASS_STACK_BYTES.store(0, Ordering::Relaxed);
+        let mut manager = NemManager::new([13; 16]);
+        for nem_id in [1, 2] {
+            add_capture_transport(&mut manager, nem_id);
+            if let Err(error) = manager.add_layer_configured(nem_id, mac.to_str().unwrap(), 1, &[])
+            {
+                if error.contains("plugin ABI mismatch") {
+                    return;
+                }
+                panic!("{error}");
+            }
+            manager
+                .add_layer_configured(nem_id, phy.to_str().unwrap(), 2, &[])
+                .unwrap();
+        }
+        manager.start().unwrap();
+        manager.post_start();
+        let payload = [4u8, 5, 6];
+        let packet = FfiPacket {
+            info: FfiPacketInfo {
+                source: 1,
+                destination: 2,
+                priority: 0,
+                creation_time_sec: 0,
+                creation_time_usec: 0,
+            },
+            payload: FfiSlice {
+                data: payload.as_ptr(),
+                len: payload.len(),
+            },
+        };
+        manager.process_downstream(1, &packet, &[]).unwrap();
+        assert_eq!(BYPASS_STACK_HITS.load(Ordering::Relaxed), 1);
+        assert_eq!(BYPASS_STACK_BYTES.load(Ordering::Relaxed), 15);
         manager.stop();
     }
 }

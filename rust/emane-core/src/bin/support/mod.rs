@@ -144,7 +144,7 @@ impl Drop for EventNetworkGuard {
 }
 
 struct AgentRuntime {
-    agents: Vec<Box<Mutex<GpsdLocationAgent>>>,
+    agents: Vec<Arc<Mutex<GpsdLocationAgent>>>,
     build_ids: Vec<u16>,
 }
 
@@ -323,7 +323,7 @@ fn run_agents(
         }
         let pseudo_terminal = single(&params, "pseudoterminalfile")
             .ok_or_else(|| "gpsdlocationagent requires pseudoterminalfile".to_string())?;
-        let mut agent = Box::new(Mutex::new(GpsdLocationAgent::new(nem_id)));
+        let agent = Arc::new(Mutex::new(GpsdLocationAgent::new(nem_id)));
         agent.lock().unwrap().start(pseudo_terminal)?;
         let build_id = 50_000u16
             .checked_add(u16::try_from(index).map_err(|_| "too many agents".to_string())?)
@@ -331,7 +331,7 @@ fn run_agents(
         register_native_user(
             build_id,
             nem_id,
-            agent.as_mut() as *mut Mutex<GpsdLocationAgent> as *mut c_void,
+            Arc::as_ptr(&agent) as *mut Mutex<GpsdLocationAgent> as *mut c_void,
             gps_location_event,
         );
         runtime.build_ids.push(build_id);

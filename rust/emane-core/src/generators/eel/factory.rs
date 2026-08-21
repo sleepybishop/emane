@@ -17,8 +17,7 @@ impl EelLoaderPluginFactory {
             return Err(err.to_string_lossy().into_owned());
         }
 
-        let c_create = b"create\0".as_ptr() as *const c_char;
-        let create_ptr = unsafe { libc::dlsym(handle, c_create) };
+        let create_ptr = unsafe { libc::dlsym(handle, c"create".as_ptr()) };
         if create_ptr.is_null() {
             unsafe { libc::dlclose(handle) };
             return Err(format!(
@@ -27,8 +26,7 @@ impl EelLoaderPluginFactory {
             ));
         }
 
-        let c_destroy = b"destroy\0".as_ptr() as *const c_char;
-        let destroy_ptr = unsafe { libc::dlsym(handle, c_destroy) };
+        let destroy_ptr = unsafe { libc::dlsym(handle, c"destroy".as_ptr()) };
         if destroy_ptr.is_null() {
             unsafe { libc::dlclose(handle) };
             return Err(format!(
@@ -39,8 +37,12 @@ impl EelLoaderPluginFactory {
 
         Ok(EelLoaderPluginFactory {
             handle,
-            create_func: unsafe { std::mem::transmute(create_ptr) },
-            destroy_func: unsafe { std::mem::transmute(destroy_ptr) },
+            create_func: unsafe {
+                std::mem::transmute::<*mut c_void, extern "C" fn() -> *mut c_void>(create_ptr)
+            },
+            destroy_func: unsafe {
+                std::mem::transmute::<*mut c_void, extern "C" fn(*mut c_void)>(destroy_ptr)
+            },
         })
     }
 

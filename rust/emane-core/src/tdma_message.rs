@@ -115,19 +115,23 @@ pub extern "C" fn emane_rs_tdma_message_serialize(
     }
     let msg = unsafe { &*ptr };
 
-    let mut pb = TdmaBaseModelMessage::default();
-    pb.abs_slot_index = msg.abs_slot_index;
-    pb.data_ratebps = msg.data_rate_bps;
+    let mut pb = TdmaBaseModelMessage {
+        abs_slot_index: msg.abs_slot_index,
+        data_ratebps: msg.data_rate_bps,
+        ..Default::default()
+    };
 
     for comp in &msg.messages {
-        let mut pb_msg = Message::default();
-        pb_msg.r#type = match comp.msg_type {
-            FfiTdmaMessageType::Data => MessageType::Data as i32,
-            FfiTdmaMessageType::Control => MessageType::Control as i32,
+        let mut pb_msg = Message {
+            r#type: match comp.msg_type {
+                FfiTdmaMessageType::Data => MessageType::Data as i32,
+                FfiTdmaMessageType::Control => MessageType::Control as i32,
+            },
+            destination: comp.destination as u32,
+            priority: comp.priority as u32,
+            data: comp.data.clone(),
+            ..Default::default()
         };
-        pb_msg.destination = comp.destination as u32;
-        pb_msg.priority = comp.priority as u32;
-        pb_msg.data = comp.data.clone();
 
         if comp.is_fragment {
             pb_msg.fragment = Some(Fragment {

@@ -1,6 +1,6 @@
 use emane_core::nem_manager::NemManager;
 use emane_core::xml_parser::{parse_platform, ParamMap};
-use emane_core::{event_service, ota_manager, spectral_mask};
+use emane_core::{antenna, event_service, ota_manager, spectral_mask};
 use std::collections::HashSet;
 use std::env;
 use std::ffi::CString;
@@ -40,6 +40,10 @@ struct NetworkServices {
 
 impl NetworkServices {
     fn start(params: &ParamMap, uuid: [u8; 16]) -> Result<Self, String> {
+        if let Some(uri) = parameter(params, "antennaprofilemanifesturi") {
+            antenna::load_global(uri)
+                .map_err(|error| format!("failed to load antenna profile manifest: {error}"))?;
+        }
         if let Some(uri) = parameter(params, "spectralmaskmanifesturi") {
             spectral_mask::load_global(uri)
                 .map_err(|error| format!("failed to load spectral mask manifest: {error}"))?;

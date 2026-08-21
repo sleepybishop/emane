@@ -298,14 +298,16 @@ impl NoiseRecorder {
 
         if self.u64_bandwidth_bin_size_hz > 0 {
             if u64_start_frequency_hz > self.u64_band_start_frequency_hz {
-                sub_band_bin_start = ((u64_start_frequency_hz - self.u64_band_start_frequency_hz)
-                    / self.u64_bandwidth_bin_size_hz) as usize;
+                sub_band_bin_start = (u64_start_frequency_hz - self.u64_band_start_frequency_hz)
+                    .checked_div(self.u64_bandwidth_bin_size_hz)
+                    .unwrap_or(0) as usize;
             }
             if u64_end_frequency_hz < self.u64_band_end_frequency_hz {
                 sub_band_bin_end = self.total_sub_band_bins
                     - 1
-                    - ((self.u64_band_end_frequency_hz - u64_end_frequency_hz)
-                        / self.u64_bandwidth_bin_size_hz) as usize;
+                    - (self.u64_band_end_frequency_hz - u64_end_frequency_hz)
+                        .checked_div(self.u64_bandwidth_bin_size_hz)
+                        .unwrap_or(0) as usize;
             }
 
             sub_band_bins = sub_band_bin_end - sub_band_bin_start + 1;
@@ -314,7 +316,6 @@ impl NoiseRecorder {
             if !self.bin_power_apply_map.contains_key(&key) {
                 let mut bin_power_applies = Vec::new();
                 let mut pending_start = 0;
-                let mut pending_end = 0;
                 let mut pending_multi = 0.0;
                 let mut is_pending = false;
 
@@ -332,8 +333,7 @@ impl NoiseRecorder {
 
                     if d_overlap_ratio > 0.0 && d_overlap_ratio < 1.0 {
                         if is_pending {
-                            pending_end = bin - 1;
-                            bin_power_applies.push((pending_start, pending_end, pending_multi));
+                            bin_power_applies.push((pending_start, bin - 1, pending_multi));
                             is_pending = false;
                         }
                         bin_power_applies.push((bin, bin, d_overlap_ratio));
@@ -345,15 +345,13 @@ impl NoiseRecorder {
                         }
                     } else {
                         if is_pending {
-                            pending_end = bin - 1;
-                            bin_power_applies.push((pending_start, pending_end, pending_multi));
+                            bin_power_applies.push((pending_start, bin - 1, pending_multi));
                             is_pending = false;
                         }
                     }
                 }
                 if is_pending {
-                    pending_end = sub_band_bin_end;
-                    bin_power_applies.push((pending_start, pending_end, pending_multi));
+                    bin_power_applies.push((pending_start, sub_band_bin_end, pending_multi));
                 }
 
                 self.bin_power_apply_map.insert(key, bin_power_applies);

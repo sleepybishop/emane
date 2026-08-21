@@ -273,16 +273,14 @@ fn generate(
                     let c_args_ptrs: Vec<*const c_char> =
                         c_args.iter().map(|s| s.as_ptr()).collect();
 
-                    unsafe {
-                        (callbacks.plugin_load)(
-                            plugin_ptr_usize as *mut c_void,
-                            c_module_type.as_ptr(),
-                            u16_module_id,
-                            c_event_type.as_ptr(),
-                            c_args_ptrs.as_ptr(),
-                            c_args_ptrs.len(),
-                        );
-                    }
+                    (callbacks.plugin_load)(
+                        plugin_ptr_usize as *mut c_void,
+                        c_module_type.as_ptr(),
+                        u16_module_id,
+                        c_event_type.as_ptr(),
+                        c_args_ptrs.as_ptr(),
+                        c_args_ptrs.len(),
+                    );
                 }
             }
         }
@@ -326,16 +324,11 @@ fn wait_and_send_events(
     for &(p_usize, _publish_mode) in plugins {
         let p = p_usize as *mut c_void;
         if !p.is_null() {
-            unsafe {
-                let mut ctx = EventContext {
-                    c_generator,
-                    send_event: callbacks.send_event,
-                };
-                // Actually the callback plugin_get_events gets the pair, wait in C++ it was getting a pair.
-                // We'll have to adjust the C++ plugin_get_events to take a plugin pointer and publish_mode.
-                // Wait! We can just pass the plugin pointer to a Rust wrapper that calls C++.
-                (callbacks.plugin_get_events)(p, on_event, &mut ctx as *mut _ as *mut c_void);
-            }
+            let mut ctx = EventContext {
+                c_generator,
+                send_event: callbacks.send_event,
+            };
+            (callbacks.plugin_get_events)(p, on_event, &mut ctx as *mut _ as *mut c_void);
         }
     }
 

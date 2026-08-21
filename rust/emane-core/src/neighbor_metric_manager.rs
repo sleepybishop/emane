@@ -18,7 +18,7 @@ pub struct R2RINeighborMetric {
 
 #[derive(Clone, Default)]
 struct NeighborData {
-    nem_id: u16,
+    _nem_id: u16,
     last_rx_seq_num: u64,
     have_ever_had_rx_activity: bool,
     last_rx_time: Duration,
@@ -43,7 +43,7 @@ struct NeighborData {
 impl NeighborData {
     fn new(nem_id: u16) -> Self {
         Self {
-            nem_id,
+            _nem_id: nem_id,
             uuid: [0; 16],
             ..Default::default()
         }
@@ -68,21 +68,21 @@ impl NeighborData {
 }
 
 pub struct NeighborMetricManager {
-    nem_id: u16,
+    _nem_id: u16,
     r2ri_metric_table: HashMap<u16, Box<NeighborData>>,
     neighbor_data_table: HashMap<u16, (Box<NeighborData>, Box<NeighborData>)>,
     neighbor_delete_age_microseconds: Duration,
-    last_neighbor_status_update_time: Duration,
+    _last_neighbor_status_update_time: Duration,
 }
 
 impl NeighborMetricManager {
     pub fn new(nem_id: u16) -> Self {
         Self {
-            nem_id,
+            _nem_id: nem_id,
             r2ri_metric_table: HashMap::new(),
             neighbor_data_table: HashMap::new(),
             neighbor_delete_age_microseconds: Duration::from_secs(60),
-            last_neighbor_status_update_time: Duration::default(),
+            _last_neighbor_status_update_time: Duration::default(),
         }
     }
 

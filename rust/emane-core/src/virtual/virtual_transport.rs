@@ -98,16 +98,14 @@ pub extern "C" fn emane_rs_virtual_transport_start(
                     if ready < 0 || descriptor.revents & libc::POLLIN == 0 {
                         break;
                     }
-                    let mut iov = iovec {
+                    let iov = iovec {
                         iov_base: buf.as_mut_ptr() as *mut c_void,
                         iov_len: buf.len(),
                     };
                     let len = unsafe { readv(tun_arc.fd, &iov, 1) };
                     if len > 0 {
-                        unsafe {
-                            let cpp_obj = cpp_obj_usize as *mut c_void;
-                            cb(cpp_obj, buf.as_ptr(), len as usize);
-                        }
+                        let cpp_obj = cpp_obj_usize as *mut c_void;
+                        cb(cpp_obj, buf.as_ptr(), len as usize);
                     } else if len < 0 {
                         break;
                     }
@@ -153,7 +151,7 @@ pub extern "C" fn emane_rs_virtual_transport_process_upstream_packet(
     }
     let vt = unsafe { &*ptr };
     if let Some(tun) = &vt.tun_tap {
-        let mut iov = iovec {
+        let iov = iovec {
             iov_base: buf as *const _ as *mut c_void,
             iov_len: len,
         };

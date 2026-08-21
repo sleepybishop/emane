@@ -15,6 +15,12 @@ pub struct PathlossLoader {
     delta_cache: HashMap<u16, HashMap<u16, PathlossEntry>>,
 }
 
+impl Default for PathlossLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PathlossLoader {
     pub fn new() -> Self {
         Self {

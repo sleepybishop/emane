@@ -35,14 +35,14 @@ impl QueueData {
 }
 
 pub struct QueueMetricManager {
-    nem_id: u16,
+    _nem_id: u16,
     queue_data_map: HashMap<u16, QueueData>,
 }
 
 impl QueueMetricManager {
     pub fn new(nem_id: u16) -> Self {
         Self {
-            nem_id,
+            _nem_id: nem_id,
             queue_data_map: HashMap::new(),
         }
     }

@@ -4,8 +4,6 @@ use std::os::unix::io::RawFd;
 // TUNSETIFF is 0x400454ca on Linux
 const TUNSETIFF: u64 = 0x400454ca;
 const SIOCGIFINDEX: u64 = 0x8933;
-const SIOCSIFADDR: u64 = 0x8916;
-const SIOCSIFNETMASK: u64 = 0x891c;
 const SIOCSIFHWADDR: u64 = 0x8924;
 const SIOCGIFFLAGS: u64 = 0x8913;
 const SIOCSIFFLAGS: u64 = 0x8914;
@@ -29,12 +27,10 @@ impl TunTap {
         let mut ifr: ifreq = unsafe { std::mem::zeroed() };
         let name_bytes = name.as_bytes();
         let len = std::cmp::min(name_bytes.len(), 15);
-        for i in 0..len {
-            ifr.ifr_name[i] = name_bytes[i] as libc::c_char;
+        for (index, byte) in name_bytes.iter().copied().enumerate().take(len) {
+            ifr.ifr_name[index] = byte as libc::c_char;
         }
-        unsafe {
-            ifr.ifr_ifru.ifru_flags = (IFF_NO_PI | IFF_TAP) as libc::c_short;
-        }
+        ifr.ifr_ifru.ifru_flags = (IFF_NO_PI | IFF_TAP) as libc::c_short;
 
         if unsafe { libc::ioctl(fd, TUNSETIFF, &ifr) } < 0 {
             let err = std::io::Error::last_os_error();
@@ -90,8 +86,8 @@ impl TunTap {
         let mut ifr: ifreq = unsafe { std::mem::zeroed() };
         let name_bytes = self.name.as_bytes();
         let len = std::cmp::min(name_bytes.len(), 15);
-        for i in 0..len {
-            ifr.ifr_name[i] = name_bytes[i] as libc::c_char;
+        for (index, byte) in name_bytes.iter().copied().enumerate().take(len) {
+            ifr.ifr_name[index] = byte as libc::c_char;
         }
         if unsafe { libc::ioctl(ctrl_sock, SIOCGIFFLAGS, &ifr) } < 0 {
             let err = std::io::Error::last_os_error();
@@ -114,8 +110,8 @@ impl TunTap {
         let mut ifr: ifreq = unsafe { std::mem::zeroed() };
         let name_bytes = self.name.as_bytes();
         let len = std::cmp::min(name_bytes.len(), 15);
-        for i in 0..len {
-            ifr.ifr_name[i] = name_bytes[i] as libc::c_char;
+        for (index, byte) in name_bytes.iter().copied().enumerate().take(len) {
+            ifr.ifr_name[index] = byte as libc::c_char;
         }
         let current_flags = match self.get_flags() {
             Ok(flags) => flags,
@@ -124,15 +120,13 @@ impl TunTap {
                 return Err(error);
             }
         };
-        unsafe {
-            ifr.ifr_ifru.ifru_flags = if cmd > 0 {
-                (current_flags | newflags) as libc::c_short
-            } else if cmd < 0 {
-                (current_flags & !newflags) as libc::c_short
-            } else {
-                newflags as libc::c_short
-            };
-        }
+        ifr.ifr_ifru.ifru_flags = if cmd > 0 {
+            (current_flags | newflags) as libc::c_short
+        } else if cmd < 0 {
+            (current_flags & !newflags) as libc::c_short
+        } else {
+            newflags as libc::c_short
+        };
 
         if unsafe { libc::ioctl(ctrl_sock, SIOCSIFFLAGS, &ifr) } < 0 {
             let err = std::io::Error::last_os_error();
@@ -151,8 +145,8 @@ impl TunTap {
         let mut ifr: ifreq = unsafe { std::mem::zeroed() };
         let name_bytes = self.name.as_bytes();
         let len = std::cmp::min(name_bytes.len(), 15);
-        for i in 0..len {
-            ifr.ifr_name[i] = name_bytes[i] as libc::c_char;
+        for (index, byte) in name_bytes.iter().copied().enumerate().take(len) {
+            ifr.ifr_name[index] = byte as libc::c_char;
         }
 
         let mut hwaddr = [0u8; 14];
@@ -165,8 +159,8 @@ impl TunTap {
 
         unsafe {
             ifr.ifr_ifru.ifru_hwaddr.sa_family = 1; // ARPHRD_ETHER
-            for i in 0..14 {
-                ifr.ifr_ifru.ifru_hwaddr.sa_data[i] = hwaddr[i] as libc::c_char;
+            for (index, byte) in hwaddr.iter().copied().enumerate() {
+                ifr.ifr_ifru.ifru_hwaddr.sa_data[index] = byte as libc::c_char;
             }
         }
 

@@ -9,6 +9,12 @@ pub struct PathlossExLoader {
     delta_cache: HashMap<u16, HashMap<u16, HashMap<u64, f32>>>,
 }
 
+impl Default for PathlossExLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PathlossExLoader {
     pub fn new() -> Self {
         Self {
@@ -48,8 +54,8 @@ impl PathlossExLoader {
 
             let src_nem = module_id;
 
-            for i in 1..params.len() {
-                let pathloss_params: Vec<&str> = params[i].split(':').collect();
+            for parameter in params.iter().skip(1) {
+                let pathloss_params: Vec<&str> = parameter.split(':').collect();
                 if pathloss_params.len() == 2 || pathloss_params.len() == 3 {
                     let freq_hz: u64 = pathloss_params[0].parse().map_err(|e| {
                         format!("LoaderPathlossEx loader: Parameter conversion error. {}", e)

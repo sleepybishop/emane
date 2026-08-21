@@ -13,6 +13,12 @@ pub struct CommEffectLoader {
     delta_cache: HashMap<u16, HashMap<u16, EmaneRsCommEffect>>,
 }
 
+impl Default for CommEffectLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CommEffectLoader {
     pub fn new() -> Self {
         Self {

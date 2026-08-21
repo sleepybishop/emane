@@ -165,7 +165,7 @@ pub extern "C" fn emane_rs_eel_input_parser_free_strings(
                     drop(CString::from_raw(ptr));
                 }
             }
-            drop(Box::from_raw(slice as *mut _ as *mut [*mut c_char]));
+            drop(Box::from_raw(slice as *mut _));
         }
     }
 }

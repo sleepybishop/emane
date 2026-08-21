@@ -121,8 +121,8 @@ impl GpsdLocationAgent {
         let bytes = buf.as_bytes();
 
         if bytes.len() > 1 && bytes[0] == b'$' {
-            for i in 1..bytes.len() {
-                chksum ^= bytes[i];
+            for byte in bytes.iter().skip(1) {
+                chksum ^= byte;
             }
         }
 

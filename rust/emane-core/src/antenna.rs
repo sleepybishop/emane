@@ -2,7 +2,34 @@ use roxmltree::Document;
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+
+fn file_uri_path(uri: &str) -> Result<PathBuf, String> {
+    if let Some(path) = uri.strip_prefix("file://") {
+        if path.starts_with('/') {
+            Ok(PathBuf::from(path))
+        } else if let Some(path) = path.strip_prefix("localhost/") {
+            Ok(PathBuf::from(format!("/{path}")))
+        } else {
+            Err(format!("unsupported non-local file URI: {uri}"))
+        }
+    } else {
+        Ok(PathBuf::from(uri))
+    }
+}
+
+fn resolve_uri(uri: &str, manifest_path: &Path) -> Result<PathBuf, String> {
+    let path = file_uri_path(uri)?;
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(manifest_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(path))
+    }
+}
 
 pub struct AntennaPattern {
     elevation_bearing_gain: BTreeMap<i16, Option<BTreeMap<i16, f64>>>,
@@ -11,12 +38,16 @@ pub struct AntennaPattern {
 
 impl AntennaPattern {
     pub fn new(uri: &str, sub_root_name: &str, missing_value: f64) -> Result<Self, String> {
-        let content =
-            std::fs::read_to_string(uri).map_err(|e| format!("Unable to read {}: {}", uri, e))?;
+        let path = file_uri_path(uri)?;
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Unable to read {}: {}", path.display(), e))?;
         let doc =
             Document::parse(&content).map_err(|e| format!("Validation failure {}: {}", uri, e))?;
 
         let root = doc.root_element();
+        if root.tag_name().name() != "antennaprofile" {
+            return Err(format!("Invalid antenna pattern root {}", uri));
+        }
 
         let mut pattern = AntennaPattern {
             elevation_bearing_gain: BTreeMap::new(),
@@ -114,6 +145,9 @@ impl AntennaPattern {
                         let gain: f64 = gain_str
                             .parse()
                             .map_err(|_| format!("Bad entry {}: gain value parse", uri))?;
+                        if !gain.is_finite() {
+                            return Err(format!("Bad entry {}: gain must be finite", uri));
+                        }
 
                         let Some(preceding_bearing) = bearing_min.checked_sub(1) else {
                             return Err(format!(
@@ -142,6 +176,10 @@ impl AntennaPattern {
                     .elevation_bearing_gain
                     .insert(elevation_max, Some(bearing_gain_map));
             }
+        }
+
+        if pattern.elevation_bearing_gain.is_empty() {
+            return Err(format!("Bad entry {}: missing {}", uri, sub_root_name));
         }
 
         Ok(pattern)
@@ -203,14 +241,18 @@ impl AntennaProfileManifest {
     }
 
     pub fn load(&mut self, uri: &str) -> Result<(), String> {
-        let content =
-            std::fs::read_to_string(uri).map_err(|e| format!("Unable to read {}: {}", uri, e))?;
+        let manifest_path = file_uri_path(uri)?;
+        let content = std::fs::read_to_string(&manifest_path)
+            .map_err(|e| format!("Unable to read {}: {}", manifest_path.display(), e))?;
         let doc =
             Document::parse(&content).map_err(|e| format!("Validation failure {}: {}", uri, e))?;
 
         let root = doc.root_element();
-        if root.tag_name().name() != "antennaprofilemanifest" {
-            // It might not be strict about root tag name in C++, but it checks for "profile" children.
+        if root.tag_name().name() != "profiles" {
+            return Err(format!(
+                "Invalid antenna profile manifest root {}",
+                manifest_path.display()
+            ));
         }
 
         for node in root
@@ -227,34 +269,60 @@ impl AntennaProfileManifest {
                 .ok_or_else(|| "profile missing antennapatternuri".to_string())?;
             let blockage_uri = node.attribute("blockagepatternuri");
 
-            let mut north = 0.0;
-            let mut east = 0.0;
-            let mut up = 0.0;
+            let mut north: f64 = 0.0;
+            let mut east: f64 = 0.0;
+            let mut up: f64 = 0.0;
 
+            let mut placements = 0usize;
             for child in node
                 .children()
                 .filter(|n| n.is_element() && n.tag_name().name() == "placement")
             {
+                placements += 1;
+                if placements > 1 {
+                    return Err(format!("profile {id} has multiple placements"));
+                }
                 north = child
                     .attribute("north")
-                    .unwrap_or("0")
+                    .ok_or_else(|| format!("profile {id} placement missing north"))?
                     .parse()
-                    .unwrap_or(0.0);
+                    .map_err(|_| format!("profile {id} placement north parse"))?;
                 east = child
                     .attribute("east")
-                    .unwrap_or("0")
+                    .ok_or_else(|| format!("profile {id} placement missing east"))?
                     .parse()
-                    .unwrap_or(0.0);
-                up = child.attribute("up").unwrap_or("0").parse().unwrap_or(0.0);
+                    .map_err(|_| format!("profile {id} placement east parse"))?;
+                up = child
+                    .attribute("up")
+                    .ok_or_else(|| format!("profile {id} placement missing up"))?
+                    .parse()
+                    .map_err(|_| format!("profile {id} placement up parse"))?;
+                if !north.is_finite() || !east.is_finite() || !up.is_finite() {
+                    return Err(format!("profile {id} placement must be finite"));
+                }
             }
 
-            let ant_idx =
-                self.get_or_load_pattern(antenna_uri, "antennapattern", -300.0 /* DBM_MIN */)?;
+            let antenna_path = resolve_uri(antenna_uri, &manifest_path)?;
+            let antenna_path = antenna_path.to_str().ok_or_else(|| {
+                format!("non-UTF-8 antenna pattern path: {}", antenna_path.display())
+            })?;
+            let ant_idx = self.get_or_load_pattern(
+                antenna_path,
+                "antennapattern",
+                -300.0, /* DBM_MIN */
+            )?;
 
             let mut blk_idx = usize::MAX;
             if let Some(uri) = blockage_uri {
                 if !uri.is_empty() {
-                    blk_idx = self.get_or_load_pattern(uri, "blockagepattern", 0.0)?;
+                    let blockage_path = resolve_uri(uri, &manifest_path)?;
+                    let blockage_path = blockage_path.to_str().ok_or_else(|| {
+                        format!(
+                            "non-UTF-8 blockage pattern path: {}",
+                            blockage_path.display()
+                        )
+                    })?;
+                    blk_idx = self.get_or_load_pattern(blockage_path, "blockagepattern", 0.0)?;
                 }
             }
 
@@ -284,6 +352,26 @@ impl AntennaProfileManifest {
             None
         }
     }
+
+    pub fn get_profile_gain(
+        &self,
+        id: u16,
+        bearing_degrees: f64,
+        elevation_degrees: f64,
+        blockage_bearing_degrees: f64,
+        blockage_elevation_degrees: f64,
+    ) -> Option<f64> {
+        let &(antenna_index, blockage_index, _, _, _) = self.profiles.get(&id)?;
+        let bearing = bearing_degrees.round().clamp(0.0, 360.0) as i16;
+        let elevation = elevation_degrees.round().clamp(-90.0, 90.0) as i16;
+        let mut gain = self.patterns[antenna_index].get_gain(bearing, elevation);
+        if blockage_index != usize::MAX {
+            let blockage_bearing = blockage_bearing_degrees.round().clamp(0.0, 360.0) as i16;
+            let blockage_elevation = blockage_elevation_degrees.round().clamp(-90.0, 90.0) as i16;
+            gain += self.patterns[blockage_index].get_gain(blockage_bearing, blockage_elevation);
+        }
+        Some(gain)
+    }
 }
 
 static MANAGER: OnceLock<AntennaProfileManifest> = OnceLock::new();
@@ -293,6 +381,14 @@ pub fn get_manager() -> &'static AntennaProfileManifest {
     MANAGER
         .get()
         .unwrap_or_else(|| EMPTY_MANAGER.get_or_init(AntennaProfileManifest::new))
+}
+
+pub fn load_global(uri: &str) -> Result<(), String> {
+    let mut manager = AntennaProfileManifest::new();
+    manager.load(uri)?;
+    MANAGER
+        .set(manager)
+        .map_err(|_| "antenna profiles already loaded".to_string())
 }
 
 #[no_mangle]
@@ -306,12 +402,7 @@ pub extern "C" fn emane_rs_antenna_profile_load(
         return;
     }
     let uri_str = unsafe { CStr::from_ptr(uri).to_string_lossy() };
-    let mut manager = AntennaProfileManifest::new();
-    let result = manager.load(&uri_str).and_then(|_| {
-        MANAGER
-            .set(manager)
-            .map_err(|_| "antenna profiles already loaded".to_string())
-    });
+    let result = load_global(&uri_str);
     match result {
         Ok(_) => {
             if !error_buf.is_null() && error_buf_len > 0 {
@@ -382,4 +473,59 @@ pub extern "C" fn emane_rs_antenna_pattern_get_gain(
         return -300.0; // Fallback
     }
     unsafe { (*pattern).get_gain(bearing, elevation) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn loads_file_uri_and_resolves_patterns_relative_to_manifest() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("emane-antenna-{unique}"));
+        std::fs::create_dir(&directory).unwrap();
+        let pattern = directory.join("pattern.xml");
+        let manifest = directory.join("manifest.xml");
+        std::fs::write(
+            &pattern,
+            r#"<antennaprofile><antennapattern><elevation min="-90" max="90"><bearing min="0" max="359"><gain value="7.5"/></bearing></elevation></antennapattern></antennaprofile>"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &manifest,
+            r#"<profiles><profile id="3" antennapatternuri="pattern.xml"><placement north="1" east="2" up="3"/></profile></profiles>"#,
+        )
+        .unwrap();
+
+        let mut profiles = AntennaProfileManifest::new();
+        profiles
+            .load(&format!("file://{}", manifest.display()))
+            .unwrap();
+        assert_eq!(
+            profiles.get_profile_gain(3, 10.0, 0.0, 10.0, 0.0),
+            Some(7.5)
+        );
+        assert!(profiles.get_profile_info(3).is_some());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn rejects_invalid_manifest_root_and_non_finite_placement() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("emane-antenna-invalid-{unique}"));
+        std::fs::create_dir(&directory).unwrap();
+        let manifest = directory.join("manifest.xml");
+        std::fs::write(&manifest, "<antennaprofilemanifest/>").unwrap();
+        assert!(AntennaProfileManifest::new()
+            .load(manifest.to_str().unwrap())
+            .is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }

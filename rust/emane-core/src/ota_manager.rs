@@ -602,17 +602,17 @@ pub extern "C" fn emane_rs_ota_manager_send_ota_packet(
     };
     drop(manager);
 
-    let mut ota_header = ota::OtaHeader::default();
-    ota_header.source = source as u32;
-    ota_header.destination = destination as u32;
-    ota_header.sequence = seq;
-    ota_header.uuid = uuid.to_vec();
-
-    let mut payload_info = ota::ota_header::PayloadInfo::default();
-    payload_info.data_length = packet_len as u32;
-    payload_info.control_length = controls_len as u32;
-    payload_info.event_length = events_len as u32;
-    ota_header.payload_info = Some(payload_info);
+    let ota_header = ota::OtaHeader {
+        source: source as u32,
+        destination: destination as u32,
+        sequence: seq,
+        uuid: uuid.to_vec(),
+        payload_info: Some(ota::ota_header::PayloadInfo {
+            data_length: packet_len as u32,
+            control_length: controls_len as u32,
+            event_length: events_len as u32,
+        }),
+    };
 
     let ota_header_bytes = ota_header.encode_to_vec();
     let header_len = ota_header_bytes.len();
@@ -731,6 +731,11 @@ mod tests {
 
     static EVENTS_DELIVERED: AtomicUsize = AtomicUsize::new(0);
     static PACKETS_PROCESSED: AtomicUsize = AtomicUsize::new(0);
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn test_guard() -> std::sync::MutexGuard<'static, ()> {
+        TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner())
+    }
 
     extern "C" fn event_callback(
         _context: *mut c_void,
@@ -762,6 +767,7 @@ mod tests {
 
     #[test]
     fn test_ota_nem_states() {
+        let _guard = test_guard();
         let manager = get_ota_manager();
         let id = 123;
         let p_user = 456 as *mut c_void;
@@ -771,11 +777,12 @@ mod tests {
             p_user as usize
         );
         emane_rs_ota_manager_unregister_user(id);
-        assert!(manager.lock().unwrap().nem_users.get(&id).is_none());
+        assert!(!manager.lock().unwrap().nem_users.contains_key(&id));
     }
 
     #[test]
     fn test_handle_ota_message() {
+        let _guard = test_guard();
         reset_mocks();
         let uuid = [0u8; 16];
         // event data: mock an event
@@ -827,6 +834,7 @@ mod tests {
 
     #[test]
     fn test_ota_open_and_send() {
+        let _guard = test_guard();
         reset_mocks();
         let Ok(reservation) = UdpSocket::bind("127.0.0.1:0") else {
             // Some hermetic test runners prohibit even loopback sockets.
@@ -849,7 +857,7 @@ mod tests {
             5,
         );
         assert!(success);
-        let packet_data = vec![1, 2, 3];
+        let packet_data = [1, 2, 3];
         let empty: Vec<u8> = vec![];
         let sent = emane_rs_ota_manager_send_ota_packet(
             1,
@@ -867,6 +875,7 @@ mod tests {
 
     #[test]
     fn rejects_malformed_payload_lengths_and_null_inputs() {
+        let _guard = test_guard();
         reset_mocks();
         let uuid = [1u8; 16];
         assert!(!handle_ota_message(1, 2, &uuid, 4, 0, 0, &[1, 2, 3]));
@@ -887,14 +896,17 @@ mod tests {
 
     #[test]
     fn rejects_datagram_with_non_uuid_identifier() {
-        let mut header = ota::OtaHeader::default();
-        header.source = 1;
-        header.destination = 2;
-        header.uuid = vec![1, 2, 3];
-        header.payload_info = Some(ota::ota_header::PayloadInfo {
-            data_length: 1,
+        let _guard = test_guard();
+        let header = ota::OtaHeader {
+            source: 1,
+            destination: 2,
+            uuid: vec![1, 2, 3],
+            payload_info: Some(ota::ota_header::PayloadInfo {
+                data_length: 1,
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         assert!(parse_uuid(&header.uuid).is_none());
     }
 }

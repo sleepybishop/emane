@@ -35,7 +35,7 @@ impl RFSignalCacheEntry {
 }
 
 pub struct RFSignalTable {
-    nem_id: u16,
+    _nem_id: u16,
     average_all_antennas: bool,
     average_all_frequencies: bool,
     rf_receive_metric_cache: HashMap<String, RFSignalCacheEntry>,
@@ -45,7 +45,7 @@ pub struct RFSignalTable {
 impl RFSignalTable {
     pub fn new(nem_id: u16) -> Self {
         Self {
-            nem_id,
+            _nem_id: nem_id,
             average_all_antennas: false,
             average_all_frequencies: false,
             rf_receive_metric_cache: HashMap::new(),
@@ -173,12 +173,12 @@ pub extern "C" fn emane_rs_rf_signal_table_update(
     let table = unsafe { &mut *ptr };
     let mut adj_antenna = rx_antenna_id;
     if table.average_all_antennas {
-        adj_antenna = std::u16::MAX;
+        adj_antenna = u16::MAX;
     }
 
     let mut adj_freq = frequency_hz;
     if table.average_all_frequencies {
-        adj_freq = std::u64::MAX;
+        adj_freq = u64::MAX;
     }
 
     let key = format!("{}:{}:{}", src, adj_antenna, adj_freq);
@@ -234,7 +234,7 @@ pub extern "C" fn emane_rs_rf_signal_table_reset(
     let table = unsafe { &mut *ptr };
     let mut adj_antenna = rx_antenna_id;
     if table.average_all_antennas {
-        adj_antenna = std::u16::MAX;
+        adj_antenna = u16::MAX;
     }
 
     let mut keys_to_delete = Vec::new();

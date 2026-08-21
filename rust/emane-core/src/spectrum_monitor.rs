@@ -95,7 +95,7 @@ pub struct SpectrumMonitor {
     time_sync_threshold: i64,
 
     transmitter_bandwidth_cache: HashMap<u64, (HashMap<u64, Vec<NoiseRecord>>, HashSet<u64>)>,
-    transmitter_spectral_mask_cache: HashMap<u64, (HashMap<u64, Vec<NoiseRecord>>, HashSet<u64>)>,
+    _transmitter_spectral_mask_cache: HashMap<u64, (HashMap<u64, Vec<NoiseRecord>>, HashSet<u64>)>,
 
     noise_recorder_map: HashMap<u64, Box<NoiseRecorder>>,
 
@@ -108,7 +108,7 @@ pub struct SpectrumMonitor {
     filter_noise_recorder_map: HashMap<u16, (u64, u64, Box<NoiseRecorder>, *const c_void)>,
     filter_transmitter_bandwidth_cache:
         HashMap<u64, (HashMap<u64, Vec<FilterRecord>>, HashSet<u64>)>,
-    filter_transmitter_spectral_mask_cache:
+    _filter_transmitter_spectral_mask_cache:
         HashMap<u64, (HashMap<u64, Vec<FilterRecord>>, HashSet<u64>)>,
 }
 
@@ -142,7 +142,7 @@ impl SpectrumMonitor {
             b_exclude_same_sub_id_from_filter: false,
             time_sync_threshold: 0,
             transmitter_bandwidth_cache: HashMap::new(),
-            transmitter_spectral_mask_cache: HashMap::new(),
+            _transmitter_spectral_mask_cache: HashMap::new(),
             noise_recorder_map: HashMap::new(),
             u64_receiver_bandwidth_hz: 0,
             mode: NoiseMode::None,
@@ -151,7 +151,7 @@ impl SpectrumMonitor {
             foi: HashSet::new(),
             filter_noise_recorder_map: HashMap::new(),
             filter_transmitter_bandwidth_cache: HashMap::new(),
-            filter_transmitter_spectral_mask_cache: HashMap::new(),
+            _filter_transmitter_spectral_mask_cache: HashMap::new(),
         }
     }
 

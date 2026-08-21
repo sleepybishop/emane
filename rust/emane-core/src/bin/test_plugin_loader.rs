@@ -1,10 +1,10 @@
 use emane_core::nem_manager::resolve_plugin_path;
 use emane_core::plugin_interface::{
-    FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket, PluginApi,
-    PluginEntryFunc, PLUGIN_ABI_VERSION,
+    FfiConfigItem, FfiConfigRequest, FfiConfigStringArray, FfiControlMessage, FfiFrameworkService,
+    FfiPacket, PluginApi, PluginEntryFunc, PLUGIN_ABI_VERSION,
 };
 use libloading::{Library, Symbol};
-use std::ffi::{c_void, CStr};
+use std::ffi::{c_void, CStr, CString};
 
 extern "C" fn packet(
     _: *mut c_void,
@@ -30,8 +30,10 @@ extern "C" fn cancel(_: *mut c_void, _: u16, _: u64) {}
 extern "C" fn log(_: *mut c_void, _: u32, _: *const std::os::raw::c_char) {}
 
 fn main() -> Result<(), String> {
-    let plugin = std::env::args()
-        .nth(1)
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    let plugin = args
+        .first()
+        .cloned()
         .unwrap_or_else(|| "dummy-mac".to_string());
     let path = resolve_plugin_path(&plugin)?;
     let library = unsafe { Library::new(&path) }
@@ -60,16 +62,44 @@ fn main() -> Result<(), String> {
     if instance.is_null() {
         return Err("plugin failed to initialize".to_string());
     }
+    let config: Vec<_> = args
+        .iter()
+        .skip(1)
+        .map(|argument| {
+            let (name, value) = argument
+                .split_once('=')
+                .ok_or_else(|| format!("invalid configuration argument: {argument}"))?;
+            Ok((
+                CString::new(name).map_err(|_| "configuration name contains NUL")?,
+                CString::new(value).map_err(|_| "configuration value contains NUL")?,
+            ))
+        })
+        .collect::<Result<_, String>>()?;
+    let value_pointers: Vec<_> = config
+        .iter()
+        .map(|(_, value)| vec![value.as_ptr()])
+        .collect();
+    let items: Vec<_> = config
+        .iter()
+        .zip(&value_pointers)
+        .map(|((name, _), values)| FfiConfigItem {
+            name: name.as_ptr(),
+            values: FfiConfigStringArray {
+                data: values.as_ptr(),
+                len: values.len(),
+            },
+        })
+        .collect();
     let request = FfiConfigRequest {
-        data: std::ptr::null(),
-        len: 0,
+        data: items.as_ptr(),
+        len: items.len(),
     };
     if !(api.configure)(
         instance,
         &request as *const FfiConfigRequest as *const c_void,
     ) {
         (api.destroy)(instance);
-        return Err("plugin rejected an empty configuration".to_string());
+        return Err("plugin rejected its configuration".to_string());
     }
     if !(api.start)(instance) {
         (api.destroy)(instance);
