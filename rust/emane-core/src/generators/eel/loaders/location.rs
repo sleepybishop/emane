@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use std::os::raw::{c_char, c_void};
-use std::ffi::CStr;
 use prost::Message;
+use std::collections::HashMap;
+use std::ffi::CStr;
+use std::os::raw::{c_char, c_void};
 
 use crate::protobufs::emane_message;
 
@@ -34,7 +34,13 @@ impl LocationLoader {
         }
     }
 
-    pub fn load(&mut self, module_type: &str, module_id: u16, event_type: &str, args: &[String]) -> Result<(), String> {
+    pub fn load(
+        &mut self,
+        module_type: &str,
+        module_id: u16,
+        event_type: &str,
+        args: &[String],
+    ) -> Result<(), String> {
         if module_type != "nem" {
             return Ok(());
         }
@@ -50,14 +56,20 @@ impl LocationLoader {
             if params.len() != 4 {
                 return Err("LoaderLocation gps expected 4 params".to_string());
             }
-            let lat: f64 = params[0].parse().map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
-            let lon: f64 = params[1].parse().map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
-            let alt: f64 = params[2].parse().map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
+            let lat: f64 = params[0]
+                .parse()
+                .map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
+            let lon: f64 = params[1]
+                .parse()
+                .map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
+            let alt: f64 = params[2]
+                .parse()
+                .map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
             let alt_type = params[3];
             if alt_type != "msl" && alt_type != "agl" {
                 return Err("LoaderLocation gps unkown altitude type".to_string());
             }
-            
+
             let entry = self.cache.entry(module_id).or_default();
             entry.has_position = true;
             entry.lat = lat;
@@ -69,7 +81,6 @@ impl LocationLoader {
             delta_entry.lat = lat;
             delta_entry.lon = lon;
             delta_entry.alt = alt;
-
         } else if event_type == "orientation" {
             if args.is_empty() {
                 return Err("EELLoaderLocation orientation missing arguments".to_string());
@@ -78,9 +89,15 @@ impl LocationLoader {
             if params.len() != 4 {
                 return Err("EELLoaderLocation orientation expects 4 params".to_string());
             }
-            let pitch: f64 = params[0].parse().map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
-            let roll: f64 = params[1].parse().map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
-            let yaw: f64 = params[2].parse().map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
+            let pitch: f64 = params[0]
+                .parse()
+                .map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
+            let roll: f64 = params[1]
+                .parse()
+                .map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
+            let yaw: f64 = params[2]
+                .parse()
+                .map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
             let type_str = params[3];
             if type_str != "degrees" && type_str != "relative" {
                 return Err("EELLoaderLocation orientation unkown or unsupported keyword. Only degrees and relative keywords supported.".to_string());
@@ -97,7 +114,6 @@ impl LocationLoader {
             delta_entry.roll = roll;
             delta_entry.pitch = pitch;
             delta_entry.yaw = yaw;
-
         } else if event_type == "velocity" {
             if args.is_empty() {
                 return Err("EELLoaderLocation velocity missing arguments".to_string());
@@ -106,11 +122,21 @@ impl LocationLoader {
             if params.len() != 4 {
                 return Err("EELLoaderLocation velocity expects 4 params".to_string());
             }
-            let azimuth: f64 = params[0].parse().map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
-            let elevation: f64 = params[1].parse().map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
-            let magnitude: f64 = params[2].parse().map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
+            let azimuth: f64 = params[0]
+                .parse()
+                .map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
+            let elevation: f64 = params[1]
+                .parse()
+                .map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
+            let magnitude: f64 = params[2]
+                .parse()
+                .map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
             let type_str = params[3];
-            if type_str != "degrees" && type_str != "mps" && type_str != "azimuth" && type_str != "relative" {
+            if type_str != "degrees"
+                && type_str != "mps"
+                && type_str != "azimuth"
+                && type_str != "relative"
+            {
                 return Err("EELLoaderLocation velocity unkown or unsupported keyword. Only degrees, relative, mps and azimuth keywords supported.".to_string());
             }
 
@@ -130,14 +156,21 @@ impl LocationLoader {
         Ok(())
     }
 
-    pub fn get_events(&mut self, mode: i32, callback_data: *mut c_void, cb: extern "C" fn(*mut c_void, u16, u16, *const u8, usize)) {
+    pub fn get_events(
+        &mut self,
+        mode: i32,
+        callback_data: *mut c_void,
+        cb: extern "C" fn(*mut c_void, u16, u16, *const u8, usize),
+    ) {
         if self.delta_cache.is_empty() {
             return;
         }
 
-        let cache = if mode == 0 { // DELTA
+        let cache = if mode == 0 {
+            // DELTA
             &self.delta_cache
-        } else { // FULL
+        } else {
+            // FULL
             &self.cache
         };
 
@@ -195,7 +228,9 @@ pub extern "C" fn emane_location_loader_create() -> *mut LocationLoader {
 #[no_mangle]
 pub extern "C" fn emane_location_loader_destroy(ptr: *mut LocationLoader) {
     if !ptr.is_null() {
-        unsafe { drop(Box::from_raw(ptr)); }
+        unsafe {
+            drop(Box::from_raw(ptr));
+        }
     }
 }
 
@@ -211,7 +246,7 @@ pub extern "C" fn emane_location_loader_load(
     let loader = unsafe { &mut *ptr };
     let m_type = unsafe { CStr::from_ptr(module_type).to_string_lossy().into_owned() };
     let e_type = unsafe { CStr::from_ptr(event_type).to_string_lossy().into_owned() };
-    
+
     let mut args_vec = Vec::with_capacity(argc);
     let args_slice = unsafe { std::slice::from_raw_parts(args, argc) };
     for &arg_ptr in args_slice {

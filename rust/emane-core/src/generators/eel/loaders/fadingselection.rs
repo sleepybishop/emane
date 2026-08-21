@@ -1,7 +1,7 @@
-use std::collections::{HashMap, BTreeMap};
-use std::os::raw::{c_char, c_void};
-use std::ffi::CStr;
 use prost::Message;
+use std::collections::HashMap;
+use std::ffi::CStr;
+use std::os::raw::{c_char, c_void};
 
 use crate::protobufs::emane_message;
 
@@ -18,7 +18,13 @@ impl FadingSelectionLoader {
         }
     }
 
-    pub fn load(&mut self, module_type: &str, target_nem: u16, _event_type: &str, args: &[String]) -> Result<(), String> {
+    pub fn load(
+        &mut self,
+        module_type: &str,
+        target_nem: u16,
+        _event_type: &str,
+        args: &[String],
+    ) -> Result<(), String> {
         if module_type != "nem" {
             return Ok(());
         }
@@ -34,7 +40,12 @@ impl FadingSelectionLoader {
 
             let tx_nem_str = params[0];
             let tx_nem = if let Some(stripped) = tx_nem_str.strip_prefix("nem:") {
-                stripped.parse::<u16>().map_err(|e| format!("LoaderFadingSelection loader: Parameter conversion error. {}", e))?
+                stripped.parse::<u16>().map_err(|e| {
+                    format!(
+                        "LoaderFadingSelection loader: Parameter conversion error. {}",
+                        e
+                    )
+                })?
             } else {
                 return Err("LoaderFadingSelection only supports 'nem' module type".to_string());
             };
@@ -44,20 +55,38 @@ impl FadingSelectionLoader {
                 "none" => 1,
                 "nakagami" => 2,
                 "lognormal" => 3,
-                _ => return Err(format!("LoaderFadingSelection loader unknown fading model: {}", s_model)),
+                _ => {
+                    return Err(format!(
+                        "LoaderFadingSelection loader unknown fading model: {}",
+                        s_model
+                    ))
+                }
             };
 
-            self.cache.entry(target_nem).or_default().insert(tx_nem, model);
-            self.delta_cache.entry(target_nem).or_default().insert(tx_nem, model);
+            self.cache
+                .entry(target_nem)
+                .or_default()
+                .insert(tx_nem, model);
+            self.delta_cache
+                .entry(target_nem)
+                .or_default()
+                .insert(tx_nem, model);
         }
 
         Ok(())
     }
 
-    pub fn get_events(&mut self, mode: i32, callback_data: *mut c_void, cb: extern "C" fn(*mut c_void, u16, u16, *const u8, usize)) {
-        let cache = if mode == 0 { // DELTA
+    pub fn get_events(
+        &mut self,
+        mode: i32,
+        callback_data: *mut c_void,
+        cb: extern "C" fn(*mut c_void, u16, u16, *const u8, usize),
+    ) {
+        let cache = if mode == 0 {
+            // DELTA
             &self.delta_cache
-        } else { // FULL
+        } else {
+            // FULL
             &self.cache
         };
 
@@ -72,10 +101,11 @@ impl FadingSelectionLoader {
 
             let mut msg = emane_message::FadingSelectionEvent::default();
             for &tx_nem in sorted_tx_nems {
-                msg.entries.push(emane_message::fading_selection_event::Entry {
-                    nem_id: tx_nem as u32,
-                    model: *entries.get(&tx_nem).unwrap(),
-                });
+                msg.entries
+                    .push(emane_message::fading_selection_event::Entry {
+                        nem_id: tx_nem as u32,
+                        model: *entries.get(&tx_nem).unwrap(),
+                    });
             }
 
             let mut buf = Vec::with_capacity(msg.encoded_len());
@@ -96,7 +126,9 @@ pub extern "C" fn emane_fadingselection_loader_create() -> *mut FadingSelectionL
 #[no_mangle]
 pub extern "C" fn emane_fadingselection_loader_destroy(ptr: *mut FadingSelectionLoader) {
     if !ptr.is_null() {
-        unsafe { drop(Box::from_raw(ptr)); }
+        unsafe {
+            drop(Box::from_raw(ptr));
+        }
     }
 }
 
@@ -112,7 +144,7 @@ pub extern "C" fn emane_fadingselection_loader_load(
     let loader = unsafe { &mut *ptr };
     let m_type = unsafe { CStr::from_ptr(module_type).to_string_lossy().into_owned() };
     let e_type = unsafe { CStr::from_ptr(event_type).to_string_lossy().into_owned() };
-    
+
     let mut args_vec = Vec::with_capacity(argc);
     let args_slice = unsafe { std::slice::from_raw_parts(args, argc) };
     for &arg_ptr in args_slice {

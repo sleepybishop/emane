@@ -4,7 +4,7 @@ use std::os::raw::{c_char, c_void};
 use std::slice;
 
 use crate::events::{
-    emane_rs_commeffect_event_serialize, emane_rs_commeffect_event_free_serialize,
+    emane_rs_commeffect_event_free_serialize, emane_rs_commeffect_event_serialize,
     EmaneRsCommEffect,
 };
 
@@ -37,20 +37,37 @@ impl CommEffectLoader {
                 let dst_nem: u16;
                 if let Some(idx) = dst_nem_str.find(':') {
                     if &dst_nem_str[..idx] == "nem" {
-                        dst_nem = dst_nem_str[idx + 1..].parse::<u16>().map_err(|e| format!("LoaderCommEffect loader: Parameter conversion error. {}", e))?;
+                        dst_nem = dst_nem_str[idx + 1..].parse::<u16>().map_err(|e| {
+                            format!("LoaderCommEffect loader: Parameter conversion error. {}", e)
+                        })?;
                     } else {
                         return Err("LoaderCommEffect only supports 'nem' module type".to_string());
                     }
                 } else {
-                    return Err("LoaderCommEffect loader: Parameter conversion error. Invalid format".to_string());
+                    return Err(
+                        "LoaderCommEffect loader: Parameter conversion error. Invalid format"
+                            .to_string(),
+                    );
                 }
 
-                let latency = params[1].parse::<f32>().map_err(|e| format!("LoaderCommEffect loader: Parameter conversion error. {}", e))?;
-                let jitter = params[2].parse::<f32>().map_err(|e| format!("LoaderCommEffect loader: Parameter conversion error. {}", e))?;
-                let loss = params[3].parse::<f32>().map_err(|e| format!("LoaderCommEffect loader: Parameter conversion error. {}", e))?;
-                let duplicates = params[4].parse::<f32>().map_err(|e| format!("LoaderCommEffect loader: Parameter conversion error. {}", e))?;
-                let unicast = params[5].parse::<u64>().map_err(|e| format!("LoaderCommEffect loader: Parameter conversion error. {}", e))?;
-                let broadcast = params[6].parse::<u64>().map_err(|e| format!("LoaderCommEffect loader: Parameter conversion error. {}", e))?;
+                let latency = params[1].parse::<f32>().map_err(|e| {
+                    format!("LoaderCommEffect loader: Parameter conversion error. {}", e)
+                })?;
+                let jitter = params[2].parse::<f32>().map_err(|e| {
+                    format!("LoaderCommEffect loader: Parameter conversion error. {}", e)
+                })?;
+                let loss = params[3].parse::<f32>().map_err(|e| {
+                    format!("LoaderCommEffect loader: Parameter conversion error. {}", e)
+                })?;
+                let duplicates = params[4].parse::<f32>().map_err(|e| {
+                    format!("LoaderCommEffect loader: Parameter conversion error. {}", e)
+                })?;
+                let unicast = params[5].parse::<u64>().map_err(|e| {
+                    format!("LoaderCommEffect loader: Parameter conversion error. {}", e)
+                })?;
+                let broadcast = params[6].parse::<u64>().map_err(|e| {
+                    format!("LoaderCommEffect loader: Parameter conversion error. {}", e)
+                })?;
 
                 let effect = EmaneRsCommEffect {
                     nem_id: module_id as u32,
@@ -62,8 +79,22 @@ impl CommEffectLoader {
                     broadcast_bit_rate_bps: broadcast,
                 };
 
-                self.full_cache.entry(dst_nem).or_default().insert(module_id, EmaneRsCommEffect { nem_id: effect.nem_id, latency_seconds: effect.latency_seconds, jitter_seconds: effect.jitter_seconds, probability_loss: effect.probability_loss, probability_duplicate: effect.probability_duplicate, unicast_bit_rate_bps: effect.unicast_bit_rate_bps, broadcast_bit_rate_bps: effect.broadcast_bit_rate_bps });
-                self.delta_cache.entry(dst_nem).or_default().insert(module_id, effect);
+                self.full_cache.entry(dst_nem).or_default().insert(
+                    module_id,
+                    EmaneRsCommEffect {
+                        nem_id: effect.nem_id,
+                        latency_seconds: effect.latency_seconds,
+                        jitter_seconds: effect.jitter_seconds,
+                        probability_loss: effect.probability_loss,
+                        probability_duplicate: effect.probability_duplicate,
+                        unicast_bit_rate_bps: effect.unicast_bit_rate_bps,
+                        broadcast_bit_rate_bps: effect.broadcast_bit_rate_bps,
+                    },
+                );
+                self.delta_cache
+                    .entry(dst_nem)
+                    .or_default()
+                    .insert(module_id, effect);
             }
         }
         Ok(())
@@ -79,8 +110,25 @@ impl CommEffectLoader {
             &self.full_cache
         };
 
-        for (&dst_nem, entries) in cache {
-            let effects: Vec<EmaneRsCommEffect> = entries.values().map(|e| EmaneRsCommEffect { nem_id: e.nem_id, latency_seconds: e.latency_seconds, jitter_seconds: e.jitter_seconds, probability_loss: e.probability_loss, probability_duplicate: e.probability_duplicate, unicast_bit_rate_bps: e.unicast_bit_rate_bps, broadcast_bit_rate_bps: e.broadcast_bit_rate_bps }).collect();
+        let mut destinations: Vec<_> = cache.keys().copied().collect();
+        destinations.sort_unstable();
+        for dst_nem in destinations {
+            let entries = &cache[&dst_nem];
+            let mut sources: Vec<_> = entries.keys().copied().collect();
+            sources.sort_unstable();
+            let effects: Vec<EmaneRsCommEffect> = sources
+                .into_iter()
+                .map(|source| &entries[&source])
+                .map(|e| EmaneRsCommEffect {
+                    nem_id: e.nem_id,
+                    latency_seconds: e.latency_seconds,
+                    jitter_seconds: e.jitter_seconds,
+                    probability_loss: e.probability_loss,
+                    probability_duplicate: e.probability_duplicate,
+                    unicast_bit_rate_bps: e.unicast_bit_rate_bps,
+                    broadcast_bit_rate_bps: e.broadcast_bit_rate_bps,
+                })
+                .collect();
             if !effects.is_empty() {
                 let mut out_len = 0;
                 let serialized = emane_rs_commeffect_event_serialize(
@@ -126,7 +174,7 @@ pub unsafe extern "C" fn emane_commeffect_loader_load(
 ) -> bool {
     let loader = &mut *ptr;
     let module_type_str = CStr::from_ptr(module_type).to_string_lossy();
-    
+
     let mut args_vec = Vec::with_capacity(num_args);
     for i in 0..num_args {
         args_vec.push(CStr::from_ptr(*args.add(i)).to_string_lossy());
@@ -151,7 +199,8 @@ pub unsafe extern "C" fn emane_commeffect_loader_free_error(err: *mut c_char) {
     }
 }
 
-pub type CommEffectEventCallback = unsafe extern "C" fn(nem_id: u16, payload: *const u8, payload_len: usize, ctx: *mut c_void);
+pub type CommEffectEventCallback =
+    unsafe extern "C" fn(nem_id: u16, payload: *const u8, payload_len: usize, ctx: *mut c_void);
 
 #[no_mangle]
 pub unsafe extern "C" fn emane_commeffect_loader_get_events(

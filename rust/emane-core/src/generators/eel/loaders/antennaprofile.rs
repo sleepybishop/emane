@@ -4,7 +4,7 @@ use std::os::raw::{c_char, c_void};
 use std::slice;
 
 use crate::events::{
-    emane_rs_antennaprofile_event_serialize, emane_rs_antennaprofile_event_free_serialize,
+    emane_rs_antennaprofile_event_free_serialize, emane_rs_antennaprofile_event_serialize,
     EmaneRsAntennaProfile,
 };
 
@@ -32,9 +32,15 @@ impl AntennaProfileLoader {
                 return Err("LoaderAntennaProfile too many arguments".to_string());
             }
 
-            let profile_id = params[0].parse::<u32>().map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
-            let azimuth = params[1].parse::<f64>().map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
-            let elevation = params[2].parse::<f64>().map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
+            let profile_id = params[0]
+                .parse::<u32>()
+                .map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
+            let azimuth = params[1]
+                .parse::<f64>()
+                .map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
+            let elevation = params[2]
+                .parse::<f64>()
+                .map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
 
             let profile = EmaneRsAntennaProfile {
                 nem_id: module_id as u32,
@@ -43,7 +49,15 @@ impl AntennaProfileLoader {
                 antenna_elevation_degrees: elevation,
             };
 
-            self.full_cache.insert(module_id, EmaneRsAntennaProfile { nem_id: profile.nem_id, profile_id: profile.profile_id, antenna_azimuth_degrees: profile.antenna_azimuth_degrees, antenna_elevation_degrees: profile.antenna_elevation_degrees });
+            self.full_cache.insert(
+                module_id,
+                EmaneRsAntennaProfile {
+                    nem_id: profile.nem_id,
+                    profile_id: profile.profile_id,
+                    antenna_azimuth_degrees: profile.antenna_azimuth_degrees,
+                    antenna_elevation_degrees: profile.antenna_elevation_degrees,
+                },
+            );
             self.delta_cache.insert(module_id, profile);
         }
         Ok(())
@@ -53,15 +67,27 @@ impl AntennaProfileLoader {
     where
         F: FnMut(u16, &[u8]),
     {
-        let cache = if mode == 0 { // DELTA
+        let cache = if mode == 0 {
+            // DELTA
             &self.delta_cache
         } else {
             &self.full_cache
         };
 
         if !cache.is_empty() {
-            let profiles: Vec<EmaneRsAntennaProfile> = cache.values().map(|p| EmaneRsAntennaProfile { nem_id: p.nem_id, profile_id: p.profile_id, antenna_azimuth_degrees: p.antenna_azimuth_degrees, antenna_elevation_degrees: p.antenna_elevation_degrees }).collect();
-            
+            let mut keys: Vec<_> = cache.keys().copied().collect();
+            keys.sort_unstable();
+            let profiles: Vec<EmaneRsAntennaProfile> = keys
+                .into_iter()
+                .map(|key| &cache[&key])
+                .map(|p| EmaneRsAntennaProfile {
+                    nem_id: p.nem_id,
+                    profile_id: p.profile_id,
+                    antenna_azimuth_degrees: p.antenna_azimuth_degrees,
+                    antenna_elevation_degrees: p.antenna_elevation_degrees,
+                })
+                .collect();
+
             let mut out_len = 0;
             let serialized = emane_rs_antennaprofile_event_serialize(
                 profiles.as_ptr(),
@@ -105,7 +131,7 @@ pub unsafe extern "C" fn emane_antennaprofile_loader_load(
 ) -> bool {
     let loader = &mut *ptr;
     let module_type_str = CStr::from_ptr(module_type).to_string_lossy();
-    
+
     let mut args_vec = Vec::with_capacity(num_args);
     for i in 0..num_args {
         args_vec.push(CStr::from_ptr(*args.add(i)).to_string_lossy());
@@ -130,7 +156,8 @@ pub unsafe extern "C" fn emane_antennaprofile_loader_free_error(err: *mut c_char
     }
 }
 
-pub type EventCallback = unsafe extern "C" fn(nem_id: u16, payload: *const u8, payload_len: usize, ctx: *mut c_void);
+pub type EventCallback =
+    unsafe extern "C" fn(nem_id: u16, payload: *const u8, payload_len: usize, ctx: *mut c_void);
 
 #[no_mangle]
 pub unsafe extern "C" fn emane_antennaprofile_loader_get_events(

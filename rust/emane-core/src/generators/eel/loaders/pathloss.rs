@@ -23,7 +23,13 @@ impl PathlossLoader {
         }
     }
 
-    pub fn load(&mut self, module_type: &str, module_id: u16, _event_type: &str, args: &[String]) -> Result<(), String> {
+    pub fn load(
+        &mut self,
+        module_type: &str,
+        module_id: u16,
+        _event_type: &str,
+        args: &[String],
+    ) -> Result<(), String> {
         if module_type != "nem" {
             return Ok(());
         }
@@ -42,15 +48,18 @@ impl PathlossLoader {
             if colon_pos.is_none() || &dest_str[..colon_pos.unwrap()] != "nem" {
                 return Err("LoaderPathloss only supports 'nem' module type".to_string());
             }
-            let dst_nem: u16 = dest_str[colon_pos.unwrap() + 1..].parse()
+            let dst_nem: u16 = dest_str[colon_pos.unwrap() + 1..]
+                .parse()
                 .map_err(|e| format!("LoaderPathloss loader: Parameter conversion error. {}", e))?;
-            
-            let fwd_db: f32 = params[1].parse()
+
+            let fwd_db: f32 = params[1]
+                .parse()
                 .map_err(|e| format!("LoaderPathloss loader: Parameter conversion error. {}", e))?;
-            
+
             let rev_db: f32 = if params.len() >= 3 {
-                params[2].parse()
-                    .map_err(|e| format!("LoaderPathloss loader: Parameter conversion error. {}", e))?
+                params[2].parse().map_err(|e| {
+                    format!("LoaderPathloss loader: Parameter conversion error. {}", e)
+                })?
             } else {
                 fwd_db
             };
@@ -61,28 +70,48 @@ impl PathlossLoader {
 
             let src_nem = module_id;
 
-            self.update_cache(&mut self.cache, dst_nem, src_nem, fwd_db, rev_db);
-            self.update_cache(&mut self.delta_cache, dst_nem, src_nem, fwd_db, rev_db);
+            Self::update_cache(&mut self.cache, dst_nem, src_nem, fwd_db, rev_db);
+            Self::update_cache(&mut self.delta_cache, dst_nem, src_nem, fwd_db, rev_db);
         }
         Ok(())
     }
 
-    fn update_cache(&mut self, cache: &mut HashMap<u16, HashMap<u16, PathlossEntry>>, dst_nem: u16, src_nem: u16, fwd: f32, rev: f32) {
-        let entry = cache.entry(dst_nem).or_default().entry(src_nem).or_default();
+    fn update_cache(
+        cache: &mut HashMap<u16, HashMap<u16, PathlossEntry>>,
+        dst_nem: u16,
+        src_nem: u16,
+        fwd: f32,
+        rev: f32,
+    ) {
+        let entry = cache
+            .entry(dst_nem)
+            .or_default()
+            .entry(src_nem)
+            .or_default();
         entry.forward = fwd;
         entry.reverse = rev;
 
-        let reverse_entry = cache.entry(src_nem).or_default().entry(dst_nem).or_default();
+        let reverse_entry = cache
+            .entry(src_nem)
+            .or_default()
+            .entry(dst_nem)
+            .or_default();
         reverse_entry.forward = rev;
         reverse_entry.reverse = fwd;
     }
 
-    pub fn get_events(&mut self, mode: i32, callback_data: *mut c_void, cb: extern "C" fn(*mut c_void, u16, u16, *const u8, usize)) {
+    pub fn get_events(
+        &mut self,
+        mode: i32,
+        callback_data: *mut c_void,
+        cb: extern "C" fn(*mut c_void, u16, u16, *const u8, usize),
+    ) {
         if self.delta_cache.is_empty() {
             return;
         }
 
-        let cache = if mode == 0 { // DELTA
+        let cache = if mode == 0 {
+            // DELTA
             &self.delta_cache
         } else {
             &self.cache
@@ -99,17 +128,18 @@ impl PathlossLoader {
             let mut msg = emane_message::PathlossEvent::default();
             for &src in sorted_srcs {
                 let entry = src_map.get(&src).unwrap();
-                msg.pathlosses.push(emane_message::pathloss_event::Pathloss {
-                    nem_id: *src as u32,
-                    forward_pathlossd_b: entry.forward,
-                    reverse_pathlossd_b: entry.reverse,
-                });
+                msg.pathlosses
+                    .push(emane_message::pathloss_event::Pathloss {
+                        nem_id: src as u32,
+                        forward_pathlossd_b: entry.forward,
+                        reverse_pathlossd_b: entry.reverse,
+                    });
             }
 
             if !msg.pathlosses.is_empty() {
                 let mut buf = Vec::with_capacity(msg.encoded_len());
                 if msg.encode(&mut buf).is_ok() {
-                    cb(callback_data, *dst, 101, buf.as_ptr(), buf.len()); // EMANE_EVENT_PATHLOSS = 101
+                    cb(callback_data, dst, 101, buf.as_ptr(), buf.len()); // EMANE_EVENT_PATHLOSS = 101
                 }
             }
         }
@@ -126,7 +156,9 @@ pub extern "C" fn emane_pathloss_loader_create() -> *mut PathlossLoader {
 #[no_mangle]
 pub extern "C" fn emane_pathloss_loader_destroy(ptr: *mut PathlossLoader) {
     if !ptr.is_null() {
-        unsafe { drop(Box::from_raw(ptr)); }
+        unsafe {
+            drop(Box::from_raw(ptr));
+        }
     }
 }
 
@@ -142,7 +174,7 @@ pub extern "C" fn emane_pathloss_loader_load(
     let loader = unsafe { &mut *ptr };
     let m_type = unsafe { CStr::from_ptr(module_type).to_string_lossy().into_owned() };
     let e_type = unsafe { CStr::from_ptr(event_type).to_string_lossy().into_owned() };
-    
+
     let mut args_vec = Vec::with_capacity(argc);
     let args_slice = unsafe { std::slice::from_raw_parts(args, argc) };
     for &arg_ptr in args_slice {

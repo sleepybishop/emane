@@ -17,7 +17,13 @@ impl PathlossExLoader {
         }
     }
 
-    pub fn load(&mut self, module_type: &str, module_id: u16, _event_type: &str, args: &[String]) -> Result<(), String> {
+    pub fn load(
+        &mut self,
+        module_type: &str,
+        module_id: u16,
+        _event_type: &str,
+        args: &[String],
+    ) -> Result<(), String> {
         if module_type != "nem" {
             return Ok(());
         }
@@ -36,28 +42,39 @@ impl PathlossExLoader {
             if colon_pos.is_none() || &dest_str[..colon_pos.unwrap()] != "nem" {
                 return Err("LoaderPathlossEx only supports 'nem' module type".to_string());
             }
-            let dst_nem: u16 = dest_str[colon_pos.unwrap() + 1..].parse()
-                .map_err(|e| format!("LoaderPathlossEx loader: Parameter conversion error. {}", e))?;
-            
+            let dst_nem: u16 = dest_str[colon_pos.unwrap() + 1..].parse().map_err(|e| {
+                format!("LoaderPathlossEx loader: Parameter conversion error. {}", e)
+            })?;
+
             let src_nem = module_id;
 
             for i in 1..params.len() {
                 let pathloss_params: Vec<&str> = params[i].split(':').collect();
                 if pathloss_params.len() == 2 || pathloss_params.len() == 3 {
-                    let freq_hz: u64 = pathloss_params[0].parse()
-                        .map_err(|e| format!("LoaderPathlossEx loader: Parameter conversion error. {}", e))?;
-                    let fwd_db: f32 = pathloss_params[1].parse()
-                        .map_err(|e| format!("LoaderPathlossEx loader: Parameter conversion error. {}", e))?;
-                    
+                    let freq_hz: u64 = pathloss_params[0].parse().map_err(|e| {
+                        format!("LoaderPathlossEx loader: Parameter conversion error. {}", e)
+                    })?;
+                    let fwd_db: f32 = pathloss_params[1].parse().map_err(|e| {
+                        format!("LoaderPathlossEx loader: Parameter conversion error. {}", e)
+                    })?;
+
                     let rev_db: f32 = if pathloss_params.len() == 3 {
-                        pathloss_params[2].parse()
-                            .map_err(|e| format!("LoaderPathlossEx loader: Parameter conversion error. {}", e))?
+                        pathloss_params[2].parse().map_err(|e| {
+                            format!("LoaderPathlossEx loader: Parameter conversion error. {}", e)
+                        })?
                     } else {
                         fwd_db
                     };
 
-                    self.update_cache(&mut self.cache, dst_nem, src_nem, freq_hz, fwd_db, rev_db);
-                    self.update_cache(&mut self.delta_cache, dst_nem, src_nem, freq_hz, fwd_db, rev_db);
+                    Self::update_cache(&mut self.cache, dst_nem, src_nem, freq_hz, fwd_db, rev_db);
+                    Self::update_cache(
+                        &mut self.delta_cache,
+                        dst_nem,
+                        src_nem,
+                        freq_hz,
+                        fwd_db,
+                        rev_db,
+                    );
                 } else {
                     return Err("LoaderPathlossEx loader malformed parameters".to_string());
                 }
@@ -66,17 +83,40 @@ impl PathlossExLoader {
         Ok(())
     }
 
-    fn update_cache(&mut self, cache: &mut HashMap<u16, HashMap<u16, HashMap<u64, f32>>>, dst_nem: u16, src_nem: u16, freq_hz: u64, fwd: f32, rev: f32) {
-        cache.entry(dst_nem).or_default().entry(src_nem).or_default().insert(freq_hz, fwd);
-        cache.entry(src_nem).or_default().entry(dst_nem).or_default().insert(freq_hz, rev);
+    fn update_cache(
+        cache: &mut HashMap<u16, HashMap<u16, HashMap<u64, f32>>>,
+        dst_nem: u16,
+        src_nem: u16,
+        freq_hz: u64,
+        fwd: f32,
+        rev: f32,
+    ) {
+        cache
+            .entry(dst_nem)
+            .or_default()
+            .entry(src_nem)
+            .or_default()
+            .insert(freq_hz, fwd);
+        cache
+            .entry(src_nem)
+            .or_default()
+            .entry(dst_nem)
+            .or_default()
+            .insert(freq_hz, rev);
     }
 
-    pub fn get_events(&mut self, mode: i32, callback_data: *mut c_void, cb: extern "C" fn(*mut c_void, u16, u16, *const u8, usize)) {
+    pub fn get_events(
+        &mut self,
+        mode: i32,
+        callback_data: *mut c_void,
+        cb: extern "C" fn(*mut c_void, u16, u16, *const u8, usize),
+    ) {
         if self.delta_cache.is_empty() {
             return;
         }
 
-        let cache = if mode == 0 { // DELTA
+        let cache = if mode == 0 {
+            // DELTA
             &self.delta_cache
         } else {
             &self.cache
@@ -97,16 +137,18 @@ impl PathlossExLoader {
                 sorted_freqs.sort();
 
                 let mut pathloss = emane_message::pathloss_ex_event::Pathloss {
-                    nem_id: *src as u32,
+                    nem_id: src as u32,
                     entries: Vec::new(),
                 };
 
                 for &freq in sorted_freqs {
                     let db = freq_map.get(&freq).unwrap();
-                    pathloss.entries.push(emane_message::pathloss_ex_event::pathloss::Entry {
-                        frequency_hz: *freq,
-                        pathlossd_b: *db,
-                    });
+                    pathloss
+                        .entries
+                        .push(emane_message::pathloss_ex_event::pathloss::Entry {
+                            frequency_hz: freq,
+                            pathlossd_b: *db,
+                        });
                 }
                 msg.pathlosses.push(pathloss);
             }
@@ -114,7 +156,7 @@ impl PathlossExLoader {
             if !msg.pathlosses.is_empty() {
                 let mut buf = Vec::with_capacity(msg.encoded_len());
                 if msg.encode(&mut buf).is_ok() {
-                    cb(callback_data, *dst, 107, buf.as_ptr(), buf.len()); // EMANE_EVENT_PATHLOSS_EX = 107
+                    cb(callback_data, dst, 107, buf.as_ptr(), buf.len()); // EMANE_EVENT_PATHLOSS_EX = 107
                 }
             }
         }
@@ -131,7 +173,9 @@ pub extern "C" fn emane_pathlossex_loader_create() -> *mut PathlossExLoader {
 #[no_mangle]
 pub extern "C" fn emane_pathlossex_loader_destroy(ptr: *mut PathlossExLoader) {
     if !ptr.is_null() {
-        unsafe { drop(Box::from_raw(ptr)); }
+        unsafe {
+            drop(Box::from_raw(ptr));
+        }
     }
 }
 
@@ -147,7 +191,7 @@ pub extern "C" fn emane_pathlossex_loader_load(
     let loader = unsafe { &mut *ptr };
     let m_type = unsafe { CStr::from_ptr(module_type).to_string_lossy().into_owned() };
     let e_type = unsafe { CStr::from_ptr(event_type).to_string_lossy().into_owned() };
-    
+
     let mut args_vec = Vec::with_capacity(argc);
     let args_slice = unsafe { std::slice::from_raw_parts(args, argc) };
     for &arg_ptr in args_slice {
