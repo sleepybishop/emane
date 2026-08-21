@@ -242,14 +242,14 @@ fn now_microseconds() -> i64 {
 }
 
 fn duration_microseconds(length: usize, data_rate: u64) -> u64 {
-    (data_rate != 0)
-        .then(|| {
-            (length as u64)
-                .saturating_mul(8)
-                .saturating_mul(1_000_000)
-                .div_ceil(data_rate)
-        })
-        .unwrap_or(0)
+    if data_rate == 0 {
+        0
+    } else {
+        (length as u64)
+            .saturating_mul(8)
+            .saturating_mul(1_000_000)
+            .div_ceil(data_rate)
+    }
 }
 
 fn random_unit(state: &mut State) -> f64 {
@@ -476,10 +476,10 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                 state.jitter_microseconds = value;
             }
             "flowcontrolenable" => {
-                let Some(value) = parse_bool(value) else {
+                if parse_bool(value) != Some(false) {
                     return false;
-                };
-                state.flow_control_enable = value;
+                }
+                state.flow_control_enable = false;
             }
             "flowcontroltokens" => {
                 let Ok(value) = value.parse::<u16>() else {
@@ -492,8 +492,24 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                 state.available_tokens = value;
             }
             "pcrcurveuri" => state.pcr_curve_uri.clone_from(value),
-            "radiometricenable" | "radiometricreportinterval" | "neighbormetricdeletetime" => {}
-            name if name.starts_with("rfsignaltable.") => {}
+            "radiometricenable" => {
+                // R2RI publication is not part of this plugin ABI. Do not
+                // claim to enable it when no metrics can be emitted.
+                if parse_bool(value) != Some(false) {
+                    return false;
+                }
+            }
+            "radiometricreportinterval" | "neighbormetricdeletetime" => {
+                if value
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|value| value.is_finite() && *value >= 0.0)
+                    .is_none()
+                {
+                    return false;
+                }
+            }
+            name if name.starts_with("rfsignaltable.") => return false,
             _ => return false,
         }
     }
@@ -505,13 +521,12 @@ extern "C" fn start(plugin: *mut c_void) -> bool {
         return false;
     };
     let mut state = mac.state.lock().unwrap();
-    state.pcr_curve = if state.pcr_curve_uri.is_empty() {
-        None
-    } else {
-        match PcrCurve::load(&state.pcr_curve_uri) {
-            Ok(curve) => Some(curve),
-            Err(_) => return false,
-        }
+    if state.pcr_curve_uri.is_empty() {
+        return false;
+    }
+    state.pcr_curve = match PcrCurve::load(&state.pcr_curve_uri) {
+        Ok(curve) => Some(curve),
+        Err(_) => return false,
     };
     state.available_tokens = state.flow_control_tokens;
     state.started = true;

@@ -13,10 +13,17 @@ impl PcrCurve {
             .map_err(|error| format!("failed to read PCR curve {path}: {error}"))?;
         let document = Document::parse(&content)
             .map_err(|error| format!("failed to parse PCR curve {path}: {error}"))?;
-        let table = document
-            .descendants()
-            .find(|node| node.has_tag_name("table"))
+        let root = document.root_element();
+        if !root.has_tag_name("pcr") {
+            return Err("PCR curve has an invalid document root".to_string());
+        }
+        let mut tables = root.children().filter(|node| node.has_tag_name("table"));
+        let table = tables
+            .next()
             .ok_or_else(|| "PCR curve has no table".to_string())?;
+        if tables.next().is_some() {
+            return Err("PCR curve has multiple tables".to_string());
+        }
         let packet_size = table
             .attribute("pktsize")
             .unwrap_or("0")

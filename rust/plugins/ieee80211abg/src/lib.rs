@@ -54,6 +54,7 @@ struct State {
     unicast_rate_index: u8,
     multicast_rate_index: u8,
     rts_threshold: u16,
+    max_distance_meters: u32,
     flow_control: bool,
     flow_tokens: u16,
     available_tokens: u16,
@@ -87,7 +88,7 @@ impl Ieee80211Mac {
                 cw_min: 32,
                 cw_max: 1024,
                 aifs_us: 2,
-                retry_limit: 2,
+                retry_limit: 0,
             },
             CategoryConfig {
                 queue_size: 255,
@@ -95,7 +96,7 @@ impl Ieee80211Mac {
                 cw_min: 32,
                 cw_max: 1024,
                 aifs_us: 2,
-                retry_limit: 2,
+                retry_limit: 0,
             },
             CategoryConfig {
                 queue_size: 255,
@@ -103,7 +104,7 @@ impl Ieee80211Mac {
                 cw_min: 16,
                 cw_max: 64,
                 aifs_us: 2,
-                retry_limit: 2,
+                retry_limit: 0,
             },
             CategoryConfig {
                 queue_size: 255,
@@ -111,7 +112,7 @@ impl Ieee80211Mac {
                 cw_min: 8,
                 cw_max: 16,
                 aifs_us: 1,
-                retry_limit: 2,
+                retry_limit: 0,
             },
         ];
         Self {
@@ -123,7 +124,8 @@ impl Ieee80211Mac {
                 mode: 0,
                 unicast_rate_index: 4,
                 multicast_rate_index: 1,
-                rts_threshold: 0,
+                rts_threshold: 255,
+                max_distance_meters: 1_000,
                 flow_control: false,
                 flow_tokens: 10,
                 available_tokens: 10,
@@ -238,7 +240,7 @@ fn own_packet(
     })
 }
 
-fn find_control<'a>(messages: &'a [FfiControlMessage], kind: u32) -> Option<&'a [u8]> {
+fn find_control(messages: &[FfiControlMessage], kind: u32) -> Option<&[u8]> {
     messages.iter().find_map(|message| {
         if message.msg_type != kind || (message.payload.len != 0 && message.payload.data.is_null())
         {
@@ -266,6 +268,25 @@ fn mode_parameters(mode: u8) -> (u64, u64, u64) {
         1 => (9, 16, 20),
         3 => (20, 16, 192),
         _ => (20, 10, 192),
+    }
+}
+
+fn slot_size_microseconds(mode: u8, distance_meters: u32) -> u64 {
+    let (base, _, _) = mode_parameters(mode);
+    let propagation = (u64::from(distance_meters) * 1_000_000) / 299_792_458;
+    base.saturating_add(propagation)
+}
+
+fn dscp_to_category(dscp: u8, wmm: bool) -> usize {
+    if !wmm {
+        0
+    } else {
+        match dscp {
+            8..=23 => 1,
+            32..=47 => 2,
+            48..=63 => 3,
+            _ => 0,
+        }
     }
 }
 
@@ -548,11 +569,17 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                     Err(_) => return false,
                 }
             }
-            "flowcontrolenable" => {
-                state.flow_control = match parse_bool(&value) {
-                    Some(value) => value,
-                    None => return false,
+            "distance" => {
+                state.max_distance_meters = match value.parse::<u32>() {
+                    Ok(value) => value,
+                    Err(_) => return false,
                 }
+            }
+            "flowcontrolenable" => {
+                if parse_bool(&value) != Some(false) {
+                    return false;
+                }
+                state.flow_control = false;
             }
             "flowcontroltokens" => {
                 state.flow_tokens = match value.parse::<u16>() {
@@ -562,12 +589,22 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                 state.available_tokens = state.flow_tokens;
             }
             "pcrcurveuri" => state.pcr_uri = value,
-            "distance"
-            | "channelactivityestimationtimer"
-            | "neighbortimeout"
-            | "radiometricenable"
-            | "radiometricreportinterval"
-            | "neighbormetricdeletetime" => {}
+            "channelactivityestimationtimer" | "neighbortimeout" => return false,
+            "radiometricenable" => {
+                if parse_bool(&value) != Some(false) {
+                    return false;
+                }
+            }
+            "radiometricreportinterval" | "neighbormetricdeletetime" => {
+                if value
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|value| value.is_finite() && *value >= 0.0)
+                    .is_none()
+                {
+                    return false;
+                }
+            }
             _ => {
                 let Some(index) = name
                     .chars()
@@ -584,13 +621,13 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                 match prefix {
                     "queuesize" => {
                         state.categories[index].queue_size = match value.parse::<usize>() {
-                            Ok(value) if value != 0 => value,
+                            Ok(value @ 1..=255) => value,
                             _ => return false,
                         }
                     }
                     "msdu" => {
                         state.categories[index].max_entry_size = match value.parse::<usize>() {
-                            Ok(value) if value != 0 => value,
+                            Ok(value @ 1..=65_535) => value,
                             _ => return false,
                         }
                     }
@@ -608,20 +645,23 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                     }
                     "aifs" => {
                         state.categories[index].aifs_us = match seconds_to_us(&value) {
-                            Some(value) => value,
-                            None => return false,
+                            Some(value @ 0..=255) => value,
+                            _ => return false,
                         }
                     }
                     "txop" => {
-                        if seconds_to_us(&value).is_none() {
+                        if seconds_to_us(&value) != Some(0) {
                             return false;
                         }
                     }
                     "retrylimit" => {
-                        state.categories[index].retry_limit = match value.parse() {
-                            Ok(value) => value,
-                            Err(_) => return false,
+                        // Retry/ACK exchange state is not represented by ABI v3.
+                        // Zero explicitly disables retry and is the only truthful
+                        // value this implementation can accept.
+                        if value.parse::<u8>().ok() != Some(0) {
+                            return false;
                         }
+                        state.categories[index].retry_limit = 0;
                     }
                     _ => return false,
                 }
@@ -635,6 +675,15 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
     {
         return false;
     }
+    let valid_rate = |rate: u8| match state.mode {
+        0 | 2 => (1..=4).contains(&rate),
+        1 => (5..=12).contains(&rate),
+        3 => (1..=12).contains(&rate),
+        _ => false,
+    };
+    if !valid_rate(state.unicast_rate_index) || !valid_rate(state.multicast_rate_index) {
+        return false;
+    }
     true
 }
 
@@ -643,15 +692,17 @@ extern "C" fn start(plugin: *mut c_void) -> bool {
         return false;
     };
     let mut state = mac.state.lock().unwrap();
-    state.pcr = if state.pcr_uri.is_empty() {
-        None
-    } else {
-        let mut pcr = PCRManager::new();
-        if pcr.load(&state.pcr_uri).is_err() {
-            return false;
-        }
-        Some(pcr)
-    };
+    if state.pcr_uri.is_empty() {
+        return false;
+    }
+    let mut pcr = PCRManager::new();
+    if pcr.load(&state.pcr_uri).is_err()
+        || !pcr.contains_rate(state.unicast_rate_index.into())
+        || !pcr.contains_rate(state.multicast_rate_index.into())
+    {
+        return false;
+    }
+    state.pcr = Some(pcr);
     state.available_tokens = state.flow_tokens;
     state.started = true;
     true
@@ -711,11 +762,7 @@ extern "C" fn process_downstream(
         if !state.started || (state.flow_control && state.available_tokens == 0) {
             return;
         }
-        let category = if state.wmm {
-            usize::from(packet.info.priority.min(3))
-        } else {
-            0
-        };
+        let category = dscp_to_category(packet.info.priority, state.wmm);
         let config = state.categories[category];
         if packet.payload.len() > config.max_entry_size {
             return;
@@ -732,10 +779,11 @@ extern "C" fn process_downstream(
                     .min(state.flow_tokens);
             }
         }
-        let (slot, _, _) = mode_parameters(state.mode);
+        let (_, sifs, _) = mode_parameters(state.mode);
+        let slot = slot_size_microseconds(state.mode, state.max_distance_meters);
         let backoff_slots = random_u64(&mut state) % u64::from(config.cw_min.max(1));
         let ready = now
-            .saturating_add(config.aifs_us as i64)
+            .saturating_add(config.aifs_us.saturating_mul(slot).saturating_add(sifs) as i64)
             .saturating_add(backoff_slots.saturating_mul(slot) as i64);
         state.queues[category].push_back(PendingTx {
             packet,
@@ -871,7 +919,7 @@ pub extern "C" fn emane_plugin_create() -> *const PluginApi {
     API.get_or_init(|| PluginApi {
         abi_version: PLUGIN_ABI_VERSION,
         struct_size: std::mem::size_of::<PluginApi>(),
-        name: b"ieee80211abgmaclayer\0".as_ptr().cast(),
+        name: c"ieee80211abgmaclayer".as_ptr(),
         plugin_type: 1,
         init,
         configure,
@@ -895,5 +943,18 @@ mod tests {
         assert_eq!(DATA_RATES_KBPS[4], 11_000);
         assert!(packet_duration(2, 1_500, 4, true) > packet_duration(2, 1_500, 4, false));
         assert_eq!(seconds_to_us("0.000002"), Some(2));
+    }
+
+    #[test]
+    fn wmm_uses_the_legacy_dscp_category_ranges() {
+        assert_eq!(dscp_to_category(0, true), 0);
+        assert_eq!(dscp_to_category(3, true), 0);
+        assert_eq!(dscp_to_category(8, true), 1);
+        assert_eq!(dscp_to_category(23, true), 1);
+        assert_eq!(dscp_to_category(32, true), 2);
+        assert_eq!(dscp_to_category(47, true), 2);
+        assert_eq!(dscp_to_category(48, true), 3);
+        assert_eq!(dscp_to_category(63, true), 3);
+        assert_eq!(dscp_to_category(63, false), 0);
     }
 }

@@ -15,6 +15,9 @@ impl PcrManager {
         let document = Document::parse(&content)
             .map_err(|error| format!("failed to parse PCR curve {path}: {error}"))?;
         let root = document.root_element();
+        if !root.has_tag_name("tdmabasemodel-pcr") {
+            return Err("PCR curve has an invalid document root".to_string());
+        }
         let packet_size = root
             .attribute("packetsize")
             .unwrap_or("0")

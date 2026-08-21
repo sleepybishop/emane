@@ -16,6 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const EVENT_TDMA_SCHEDULE: u16 = 105;
 const TIMER_TX_SLOT: u32 = 1;
 const TIMER_RX_COMPLETE: u32 = 2;
+const TIMER_REASSEMBLY_CHECK: u32 = 3;
 const BROADCAST_NEM: u16 = u16::MAX;
 const HEADER_LEN: usize = ModelHeader::ENCODED_LEN + 19;
 const FRAME_OVERHEAD_BYTES: usize = 64;
@@ -187,6 +188,7 @@ struct State {
     fragmentation_enable: bool,
     strict_dequeue: bool,
     fragment_timeout_us: i64,
+    fragment_check_us: i64,
     schedule: Option<Schedule>,
     queues: [VecDeque<QueuedPacket>; 4],
     sequence: u64,
@@ -223,6 +225,7 @@ impl TdmaMac {
                 fragmentation_enable: true,
                 strict_dequeue: false,
                 fragment_timeout_us: 5_000_000,
+                fragment_check_us: 2_000_000,
                 schedule: None,
                 queues: std::array::from_fn(|_| VecDeque::new()),
                 sequence: 0,
@@ -454,10 +457,10 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                 state.promiscuous = v;
             }
             "flowcontrolenable" => {
-                let Some(v) = parse_bool(value) else {
+                if parse_bool(value) != Some(false) {
                     return false;
-                };
-                state.flow_control_enable = v;
+                }
+                state.flow_control_enable = false;
             }
             "flowcontroltokens" => {
                 let Ok(v) = value.parse::<u16>() else {
@@ -477,9 +480,17 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                 state.fragment_timeout_us =
                     i64::try_from(v.saturating_mul(1_000_000)).unwrap_or(i64::MAX);
             }
-            "fragmentcheckthreshold"
-            | "neighbormetricdeletetime"
-            | "neighbormetricupdateinterval" => {
+            "fragmentcheckthreshold" => {
+                let Ok(v) = value.parse::<u64>() else {
+                    return false;
+                };
+                if v == 0 {
+                    return false;
+                }
+                state.fragment_check_us =
+                    i64::try_from(v.saturating_mul(1_000_000)).unwrap_or(i64::MAX);
+            }
+            "neighbormetricdeletetime" | "neighbormetricupdateinterval" => {
                 if value
                     .parse::<f64>()
                     .ok()
@@ -536,15 +547,17 @@ extern "C" fn start(plugin: *mut c_void) -> bool {
         return false;
     };
     let mut state = mac.state.lock().unwrap();
-    if !state.pcr_uri.is_empty() {
-        let Ok(pcr) = PcrManager::load(&state.pcr_uri) else {
-            return false;
-        };
-        state.pcr = Some(pcr);
+    if state.pcr_uri.is_empty() {
+        return false;
     }
+    let Ok(pcr) = PcrManager::load(&state.pcr_uri) else {
+        return false;
+    };
+    state.pcr = Some(pcr);
     state.started = true;
     drop(state);
     schedule_next_tx(mac, true);
+    schedule_reassembly_check(mac);
     true
 }
 
@@ -583,6 +596,24 @@ fn schedule_timer(mac: &TdmaMac, when: i64, event: u32, data: &[u8]) -> u64 {
         data.as_ptr(),
         data.len(),
     )
+}
+
+fn schedule_reassembly_check(mac: &TdmaMac) {
+    let when = {
+        let state = mac.state.lock().unwrap();
+        if !state.started {
+            return;
+        }
+        now_us().saturating_add(state.fragment_check_us)
+    };
+    let timer = schedule_timer(mac, when, TIMER_REASSEMBLY_CHECK, &0u64.to_be_bytes());
+    if timer != 0 {
+        mac.state
+            .lock()
+            .unwrap()
+            .timers
+            .insert(timer, TIMER_REASSEMBLY_CHECK);
+    }
 }
 
 fn schedule_next_tx(mac: &TdmaMac, first_after_schedule: bool) {
@@ -1053,6 +1084,19 @@ extern "C" fn timed(plugin: *mut c_void, timer_id: u64, event: u32, data: *const
             if let Some(packet) = mac.state.lock().unwrap().pending_rx.remove(&value) {
                 send_upstream(mac, packet);
             }
+        }
+        TIMER_REASSEMBLY_CHECK => {
+            let mut state = mac.state.lock().unwrap();
+            if !state.started {
+                return;
+            }
+            let now = now_us();
+            let timeout = state.fragment_timeout_us;
+            state
+                .reassembly
+                .retain(|_, entry| now.saturating_sub(entry.last_update_us) < timeout);
+            drop(state);
+            schedule_reassembly_check(mac);
         }
         _ => {}
     }

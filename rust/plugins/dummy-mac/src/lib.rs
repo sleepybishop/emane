@@ -1,5 +1,6 @@
 use emane_plugin_api::{
-    FfiControlMessage, FfiFrameworkService, FfiPacket, PluginApi, PLUGIN_ABI_VERSION,
+    FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket, PluginApi,
+    PLUGIN_ABI_VERSION,
 };
 use std::ffi::c_void;
 use std::sync::OnceLock;
@@ -19,8 +20,10 @@ extern "C" fn init(id: u16, framework: *const FfiFrameworkService) -> *mut c_voi
     })) as *mut c_void
 }
 
-extern "C" fn configure(_: *mut c_void, _: *const c_void) -> bool {
-    true
+extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
+    !plugin.is_null()
+        && unsafe { (request as *const FfiConfigRequest).as_ref() }
+            .is_some_and(|request| request.len == 0)
 }
 extern "C" fn start(_: *mut c_void) -> bool {
     true
@@ -78,7 +81,7 @@ pub extern "C" fn emane_plugin_create() -> *const PluginApi {
     API.get_or_init(|| PluginApi {
         abi_version: PLUGIN_ABI_VERSION,
         struct_size: std::mem::size_of::<PluginApi>(),
-        name: b"dummy-mac\0".as_ptr() as *const std::ffi::c_char,
+        name: c"dummy-mac".as_ptr(),
         plugin_type: 1,
         init,
         configure,

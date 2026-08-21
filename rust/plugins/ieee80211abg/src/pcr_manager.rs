@@ -7,13 +7,13 @@ pub struct PCREntry {
     pub por: f32,
 }
 
-pub struct PCRPOR {
+pub struct PcrPor {
     pub pcr: Vec<PCREntry>,
     pub por: Vec<f32>,
 }
 
 pub struct PCRManager {
-    pcr_por_map: HashMap<u16, PCRPOR>,
+    pcr_por_map: HashMap<u16, PcrPor>,
     table_packet_size: u32,
     precision_factor: i32,
 }
@@ -33,93 +33,92 @@ impl PCRManager {
         let doc = roxmltree::Document::parse(&content)
             .map_err(|e| format!("Failed to parse XML: {}", e))?;
 
-        self.pcr_por_map.clear();
-
-        for node in doc.descendants() {
-            if node.has_tag_name("pcr") {
-                for child in node.children() {
-                    if child.has_tag_name("table") {
-                        if let Some(pkt_size) = child.attribute("pktsize") {
-                            self.table_packet_size = pkt_size.parse().unwrap_or(0);
-                        }
-
-                        for datarate_node in child.children() {
-                            if datarate_node.has_tag_name("datarate") {
-                                let index: u16 = datarate_node
-                                    .attribute("index")
-                                    .unwrap_or("0")
-                                    .parse()
-                                    .unwrap_or(0);
-                                let mut pcr_entry_vector: Vec<PCREntry> = Vec::new();
-
-                                for row in datarate_node.children() {
-                                    if row.has_tag_name("row") {
-                                        let sinr: f32 = row
-                                            .attribute("sinr")
-                                            .unwrap_or("0")
-                                            .parse()
-                                            .unwrap_or(0.0);
-                                        let por_percent: f32 = row
-                                            .attribute("por")
-                                            .unwrap_or("0")
-                                            .parse()
-                                            .unwrap_or(0.0);
-                                        let por = por_percent / 100.0;
-
-                                        if let Some(last) = pcr_entry_vector.last() {
-                                            if sinr == last.sinr {
-                                                return Err(format!(
-                                                    "Duplicate sinr value {}",
-                                                    sinr
-                                                ));
-                                            } else if sinr < last.sinr {
-                                                return Err(format!(
-                                                    "Out of order sinr value {}",
-                                                    sinr
-                                                ));
-                                            }
-                                        }
-
-                                        pcr_entry_vector.push(PCREntry { sinr, por });
-                                    }
-                                }
-
-                                if self
-                                    .pcr_por_map
-                                    .insert(
-                                        index,
-                                        PCRPOR {
-                                            pcr: pcr_entry_vector,
-                                            por: Vec::new(),
-                                        },
-                                    )
-                                    .is_some()
-                                {
-                                    return Err(format!(
-                                        "Duplicate datarate index value {}",
-                                        index
-                                    ));
-                                }
-                            }
-                        }
-                    }
+        let root = doc.root_element();
+        if !root.has_tag_name("pcr") {
+            return Err("Invalid PCR document root".to_string());
+        }
+        let mut tables = root.children().filter(|node| node.has_tag_name("table"));
+        let table = tables
+            .next()
+            .ok_or_else(|| "PCR document has no table".to_string())?;
+        if tables.next().is_some() {
+            return Err("PCR document has multiple tables".to_string());
+        }
+        let table_packet_size = table
+            .attribute("pktsize")
+            .ok_or_else(|| "PCR table is missing pktsize".to_string())?
+            .parse::<u32>()
+            .map_err(|_| "PCR table has invalid pktsize".to_string())?;
+        let mut curves = HashMap::new();
+        for datarate in table
+            .children()
+            .filter(|node| node.has_tag_name("datarate"))
+        {
+            let index = datarate
+                .attribute("index")
+                .ok_or_else(|| "PCR datarate is missing index".to_string())?
+                .parse::<u16>()
+                .map_err(|_| "PCR datarate has invalid index".to_string())?;
+            if index == 0 {
+                return Err("PCR datarate index must be nonzero".to_string());
+            }
+            let mut points = Vec::new();
+            for row in datarate.children().filter(|node| node.has_tag_name("row")) {
+                let sinr = row
+                    .attribute("sinr")
+                    .ok_or_else(|| "PCR row is missing sinr".to_string())?
+                    .parse::<f32>()
+                    .map_err(|_| "PCR row has invalid sinr".to_string())?;
+                let percent = row
+                    .attribute("por")
+                    .ok_or_else(|| "PCR row is missing por".to_string())?
+                    .parse::<f32>()
+                    .map_err(|_| "PCR row has invalid por".to_string())?;
+                if !sinr.is_finite()
+                    || !percent.is_finite()
+                    || !(0.0..=100.0).contains(&percent)
+                    || points
+                        .last()
+                        .is_some_and(|last: &PCREntry| sinr <= last.sinr)
+                {
+                    return Err(format!("invalid PCR row for datarate index {index}"));
                 }
+                points.push(PCREntry {
+                    sinr,
+                    por: percent / 100.0,
+                });
+            }
+            if points.is_empty()
+                || curves
+                    .insert(
+                        index,
+                        PcrPor {
+                            pcr: points,
+                            por: Vec::new(),
+                        },
+                    )
+                    .is_some()
+            {
+                return Err(format!("empty or duplicate PCR datarate index {index}"));
             }
         }
-
-        for pcr_por in self.pcr_por_map.values() {
-            if pcr_por.pcr.is_empty() {
-                return Err("Need at least 1 point to define a pcr curve".to_string());
-            }
+        if curves.is_empty() {
+            return Err("PCR document has no datarates".to_string());
         }
+        self.table_packet_size = table_packet_size;
+        self.pcr_por_map = curves;
 
         self.interpolate();
         Ok(())
     }
 
+    pub fn contains_rate(&self, index: u16) -> bool {
+        self.pcr_por_map.contains_key(&index)
+    }
+
     fn interpolate(&mut self) {
         for pcr_por in self.pcr_por_map.values_mut() {
-            for i in 0..pcr_por.pcr.len() - 1 {
+            for i in 0..pcr_por.pcr.len().saturating_sub(1) {
                 let x1 = (pcr_por.pcr[i].sinr * self.precision_factor as f32) as i32;
                 let y1 = pcr_por.pcr[i].por;
                 let x2 = (pcr_por.pcr[i + 1].sinr * self.precision_factor as f32) as i32;

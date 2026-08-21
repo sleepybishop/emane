@@ -8,13 +8,72 @@ pub const CONTROL_TX_PROPERTIES: u32 = 0x454D_0001;
 pub const CONTROL_RX_PROPERTIES: u32 = 0x454D_0002;
 pub const CONTROL_MODEL_HEADER: u32 = 0x454D_0003;
 pub const CONTROL_FREQUENCY_INTEREST: u32 = 0x454D_0004;
+pub const CONTROL_COMM_EFFECT_HEADER: u32 = 0x454D_0005;
+pub const CONTROL_TIMING_ANALYSIS_HEADER: u32 = 0x454D_0006;
 
 pub const MAC_REGISTRATION_IEEE80211ABG: u16 = 0x0003;
+pub const MAC_REGISTRATION_BYPASS: u16 = 0x0001;
 pub const MAC_REGISTRATION_RFPIPE: u16 = 0x0004;
 pub const MAC_REGISTRATION_TDMA: u16 = 0x0005;
 pub const MAC_REGISTRATION_BENTPIPE: u16 = 0x0006;
 
 const PROPERTIES_VERSION: u8 = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommEffectHeader {
+    pub group_id: u32,
+    pub sequence: u32,
+    pub tx_time_microseconds: i64,
+}
+
+impl CommEffectHeader {
+    pub const ENCODED_LEN: usize = 17;
+
+    pub fn encode(self) -> [u8; Self::ENCODED_LEN] {
+        let mut data = [0u8; Self::ENCODED_LEN];
+        data[0] = PROPERTIES_VERSION;
+        data[1..5].copy_from_slice(&self.group_id.to_be_bytes());
+        data[5..9].copy_from_slice(&self.sequence.to_be_bytes());
+        data[9..17].copy_from_slice(&(self.tx_time_microseconds as u64).to_be_bytes());
+        data
+    }
+
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        (data.len() == Self::ENCODED_LEN && data[0] == PROPERTIES_VERSION).then(|| Self {
+            group_id: u32::from_be_bytes(data[1..5].try_into().unwrap()),
+            sequence: u32::from_be_bytes(data[5..9].try_into().unwrap()),
+            tx_time_microseconds: u64::from_be_bytes(data[9..17].try_into().unwrap()) as i64,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TimingAnalysisHeader {
+    pub tx_time_microseconds: u64,
+    pub source: u16,
+    pub packet_id: u16,
+}
+
+impl TimingAnalysisHeader {
+    pub const ENCODED_LEN: usize = 13;
+
+    pub fn encode(self) -> [u8; Self::ENCODED_LEN] {
+        let mut data = [0u8; Self::ENCODED_LEN];
+        data[0] = PROPERTIES_VERSION;
+        data[1..9].copy_from_slice(&self.tx_time_microseconds.to_be_bytes());
+        data[9..11].copy_from_slice(&self.source.to_be_bytes());
+        data[11..13].copy_from_slice(&self.packet_id.to_be_bytes());
+        data
+    }
+
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        (data.len() == Self::ENCODED_LEN && data[0] == PROPERTIES_VERSION).then(|| Self {
+            tx_time_microseconds: u64::from_be_bytes(data[1..9].try_into().unwrap()),
+            source: u16::from_be_bytes(data[9..11].try_into().unwrap()),
+            packet_id: u16::from_be_bytes(data[11..13].try_into().unwrap()),
+        })
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrequencyOfInterest {

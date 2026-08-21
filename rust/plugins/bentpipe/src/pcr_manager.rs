@@ -40,6 +40,8 @@ impl PCRManager {
             return Err("Missing packetsize attribute".to_string());
         }
 
+        self.curve_table.clear();
+
         for curve_node in root.children().filter(|n| n.has_tag_name("curve")) {
             let index_str = curve_node.attribute("index").ok_or("Missing curve index")?;
             let index: u16 = index_str.parse().map_err(|_| "Invalid curve index")?;
@@ -57,8 +59,11 @@ impl PCRManager {
                 let scaled_sinr = scale_float_to_integer(sinr_str)?;
                 let por: f32 = por_str
                     .parse::<f32>()
-                    .map_err(|_| "Invalid por attribute")?
-                    / 100.0;
+                    .map_err(|_| "Invalid por attribute")?;
+                if !por.is_finite() || !(0.0..=100.0).contains(&por) {
+                    return Err("POR must be finite and in the range 0 through 100".to_string());
+                }
+                let por = por / 100.0;
 
                 if curve.insert(scaled_sinr, por).is_some() {
                     return Err(format!(
@@ -69,6 +74,10 @@ impl PCRManager {
 
                 min_scaled_sinr = min_scaled_sinr.min(scaled_sinr);
                 max_scaled_sinr = max_scaled_sinr.max(scaled_sinr);
+            }
+
+            if curve.is_empty() {
+                return Err(format!("PCR curve {index} has no entries"));
             }
 
             let mut interpolation = BTreeMap::new();
@@ -103,7 +112,15 @@ impl PCRManager {
             }
         }
 
+        if self.curve_table.is_empty() {
+            return Err("PCR document has no curves".to_string());
+        }
+
         Ok(())
+    }
+
+    pub fn contains_curve(&self, index: u16) -> bool {
+        self.curve_table.contains_key(&index)
     }
 
     pub fn get_por(&self, index: u16, sinr: f32, packet_length_bytes: usize) -> Option<f32> {
@@ -226,7 +243,7 @@ pub extern "C" fn rust_bentpipe_pcr_manager_get_indices(
     let manager = unsafe { &*(ptr as *mut PCRManager) };
     let mut count = 0;
 
-    for (&index, _) in &manager.curve_table {
+    for &index in manager.curve_table.keys() {
         if count >= max_indices {
             break;
         }

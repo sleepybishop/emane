@@ -12,6 +12,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const EVENT_TRANSMIT: u32 = 1;
+const EVENT_REASSEMBLY_CHECK: u32 = 2;
 const DEFAULT_QUEUE_DEPTH: usize = 256;
 
 #[derive(Clone)]
@@ -98,13 +99,24 @@ struct Reassembly {
     total_length: usize,
     parts: BTreeMap<usize, Vec<u8>>,
     saw_last: bool,
+    last_update: i64,
+}
+
+#[derive(Clone, Copy)]
+struct AntennaDefinition {
+    fixed_gain_db: f64,
+    spectral_mask_index: u16,
 }
 
 struct State {
     transponders: BTreeMap<u16, Transponder>,
+    configured_transponder_fields: HashMap<u16, u32>,
     queues: HashMap<u16, VecDeque<PendingTx>>,
     queue_depth: usize,
     fragmentation_enable: bool,
+    antennas: HashMap<u16, AntennaDefinition>,
+    fragment_check_us: i64,
+    fragment_timeout_us: i64,
     pcr_uri: String,
     pcr: PCRManager,
     sequence: u64,
@@ -129,9 +141,13 @@ impl BentpipeMac {
             framework,
             state: Mutex::new(State {
                 transponders: BTreeMap::new(),
+                configured_transponder_fields: HashMap::new(),
                 queues: HashMap::new(),
                 queue_depth: DEFAULT_QUEUE_DEPTH,
                 fragmentation_enable: true,
+                antennas: HashMap::new(),
+                fragment_check_us: 2_000_000,
+                fragment_timeout_us: 5_000_000,
                 pcr_uri: String::new(),
                 pcr: PCRManager::new(),
                 sequence: 0,
@@ -168,6 +184,52 @@ fn parse_scaled_u64(value: &str) -> Option<u64> {
 fn split_index(value: &str) -> Option<(u16, &str)> {
     let (index, value) = value.split_once(':')?;
     Some((index.parse().ok()?, value))
+}
+
+fn transponder_config_bit(name: &str) -> Option<u32> {
+    const NAMES: [&str; 18] = [
+        "transponder.receive.frequency",
+        "transponder.receive.bandwidth",
+        "transponder.receive.antenna",
+        "transponder.receive.action",
+        "transponder.receive.enable",
+        "transponder.transmit.pcrcurveindex",
+        "transponder.transmit.frequency",
+        "transponder.transmit.bandwidth",
+        "transponder.transmit.antenna",
+        "transponder.transmit.ubend.delay",
+        "transponder.transmit.datarate",
+        "transponder.transmit.power",
+        "transponder.transmit.tosmap",
+        "transponder.transmit.slotperframe",
+        "transponder.transmit.slotsize",
+        "transponder.transmit.txslots",
+        "transponder.transmit.mtu",
+        "transponder.transmit.enable",
+    ];
+    NAMES
+        .iter()
+        .position(|candidate| *candidate == name)
+        .map(|index| 1u32 << index)
+}
+
+fn parse_antenna(value: &str) -> Option<(u16, AntennaDefinition)> {
+    let (index, definition) = split_index(value)?;
+    let fields: Vec<_> = definition.split(';').collect();
+    if fields.len() != 3 || fields[0] != "omni" {
+        // Profile-defined antennas require the PHY antenna-profile path. They
+        // are rejected until that path can preserve their directional gain.
+        return None;
+    }
+    let fixed_gain_db = fields[1].parse::<f64>().ok()?;
+    let spectral_mask_index = fields[2].parse::<u16>().ok()?;
+    fixed_gain_db.is_finite().then_some((
+        index,
+        AntennaDefinition {
+            fixed_gain_db,
+            spectral_mask_index,
+        },
+    ))
 }
 
 fn parse_ranges(value: &str) -> Option<HashSet<u8>> {
@@ -304,7 +366,7 @@ fn own_packet(
     })
 }
 
-fn find_control<'a>(messages: &'a [FfiControlMessage], kind: u32) -> Option<&'a [u8]> {
+fn find_control(messages: &[FfiControlMessage], kind: u32) -> Option<&[u8]> {
     messages.iter().find_map(|message| {
         if message.msg_type != kind || (message.payload.len != 0 && message.payload.data.is_null())
         {
@@ -328,14 +390,11 @@ fn now_us() -> i64 {
 }
 
 fn airtime(bytes: usize, rate: u64) -> u64 {
-    if rate == 0 {
-        0
-    } else {
-        (bytes as u64)
-            .saturating_mul(8_000_000)
-            .saturating_add(rate - 1)
-            / rate
-    }
+    (bytes as u64)
+        .saturating_mul(8_000_000)
+        .saturating_add(rate.saturating_sub(1))
+        .checked_div(rate)
+        .unwrap_or(0)
 }
 
 fn random_unit(state: &mut State) -> f32 {
@@ -448,7 +507,35 @@ fn schedule_transmit(mac: &BentpipeMac, index: u16, when: i64) {
     }
 }
 
-fn send_downstream(mac: &BentpipeMac, pending: PendingTx, transponder: &Transponder) {
+fn schedule_reassembly_check(mac: &BentpipeMac) {
+    let when = {
+        let state = mac.state.lock().unwrap();
+        if !state.started {
+            return;
+        }
+        now_us().saturating_add(state.fragment_check_us)
+    };
+    let when_u64 = when.max(0) as u64;
+    let timer = (mac.framework.schedule_timed_event)(
+        mac.framework.framework_ctx,
+        mac.id,
+        when_u64 / 1_000_000,
+        (when_u64 % 1_000_000) as u32,
+        EVENT_REASSEMBLY_CHECK,
+        std::ptr::null(),
+        0,
+    );
+    if timer != 0 {
+        mac.state.lock().unwrap().timers.insert(timer);
+    }
+}
+
+fn send_downstream(
+    mac: &BentpipeMac,
+    pending: PendingTx,
+    transponder: &Transponder,
+    antenna: AntennaDefinition,
+) {
     let header = ModelHeader {
         registration_id: MAC_REGISTRATION_BENTPIPE,
         sequence: pending.sequence,
@@ -469,12 +556,12 @@ fn send_downstream(mac: &BentpipeMac, pending: PendingTx, transponder: &Transpon
     let tx_bytes = TxProperties {
         frequency_hz: transponder.transmit_frequency_hz,
         bandwidth_hz: transponder.transmit_bandwidth_hz,
-        tx_power_dbm: transponder.transmit_power_dbm,
+        tx_power_dbm: transponder.transmit_power_dbm + antenna.fixed_gain_db,
         duration_microseconds: duration,
         offset_microseconds: 0,
         tx_time_microseconds: now_us(),
         antenna_index: transponder.transmit_antenna_index,
-        spectral_mask_index: 0,
+        spectral_mask_index: antenna.spectral_mask_index,
         sub_id: 0,
     }
     .encode();
@@ -524,9 +611,16 @@ fn send_downstream(mac: &BentpipeMac, pending: PendingTx, transponder: &Transpon
 }
 
 fn drive(mac: &BentpipeMac, index: u16, now: i64) {
-    let (pending, transponder, next) = {
+    let (pending, transponder, antenna, next) = {
         let mut state = mac.state.lock().unwrap();
         let Some(transponder) = state.transponders.get(&index).cloned() else {
+            return;
+        };
+        let Some(antenna) = state
+            .antennas
+            .get(&transponder.transmit_antenna_index)
+            .copied()
+        else {
             return;
         };
         let allowed = next_slot(&transponder, now);
@@ -564,10 +658,10 @@ fn drive(mac: &BentpipeMac, index: u16, now: i64) {
                         .max(now),
                 )
             });
-        (pending, transponder, next)
+        (pending, transponder, antenna, next)
     };
     if let Some(pending) = pending {
-        send_downstream(mac, pending, &transponder);
+        send_downstream(mac, pending, &transponder, antenna);
     }
     if let Some(next) = next {
         schedule_transmit(mac, index, next);
@@ -643,16 +737,53 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                 state.fragmentation_enable = value;
                 continue;
             }
-            "queue.aggregationenable"
-            | "antenna.defines"
-            | "reassembly.fragmentcheckthreshold"
-            | "reassembly.fragmenttimeoutthreshold" => continue,
+            "queue.aggregationenable" => return false,
+            "antenna.defines" => {
+                let mut antennas = HashMap::new();
+                for value in values {
+                    let Some((index, antenna)) = parse_antenna(&value) else {
+                        return false;
+                    };
+                    if antennas.insert(index, antenna).is_some() {
+                        return false;
+                    }
+                }
+                state.antennas = antennas;
+                continue;
+            }
+            "reassembly.fragmentcheckthreshold" => {
+                let Some(Ok(value)) = values.first().map(|value| value.parse::<u16>()) else {
+                    return false;
+                };
+                if value == 0 {
+                    return false;
+                }
+                state.fragment_check_us = i64::from(value) * 1_000_000;
+                continue;
+            }
+            "reassembly.fragmenttimeoutthreshold" => {
+                let Some(Ok(value)) = values.first().map(|value| value.parse::<u16>()) else {
+                    return false;
+                };
+                if value == 0 {
+                    return false;
+                }
+                state.fragment_timeout_us = i64::from(value) * 1_000_000;
+                continue;
+            }
             _ => {}
         }
         for entry in values {
             let Some((index, value)) = split_index(&entry) else {
                 return false;
             };
+            let Some(field) = transponder_config_bit(&name) else {
+                return false;
+            };
+            *state
+                .configured_transponder_fields
+                .entry(index)
+                .or_default() |= field;
             let transponder = state.transponders.entry(index).or_default();
             match name.as_str() {
                 "transponder.receive.frequency" => {
@@ -788,7 +919,22 @@ extern "C" fn start(plugin: *mut c_void) -> bool {
         return false;
     };
     let mut state = mac.state.lock().unwrap();
-    for transponder in state.transponders.values() {
+    if state.antennas.is_empty() || state.transponders.is_empty() {
+        return false;
+    }
+    if state.pcr_uri.is_empty() {
+        return false;
+    }
+    let uri = state.pcr_uri.clone();
+    if state.pcr.load(&uri).is_err() {
+        return false;
+    }
+    const REQUIRED_FIELDS: u32 = (1 << 18) - 1;
+    let mut receive_channels = HashSet::new();
+    for (index, transponder) in &state.transponders {
+        let slotted = transponder.transmit_slots_per_frame != 0
+            || transponder.transmit_slot_size_us != 0
+            || !transponder.transmit_slots.is_empty();
         if transponder.receive_frequency_hz == 0
             || transponder.receive_bandwidth_hz == 0
             || transponder.receive_action == ReceiveAction::Unknown
@@ -796,6 +942,22 @@ extern "C" fn start(plugin: *mut c_void) -> bool {
             || transponder.transmit_bandwidth_hz == 0
             || transponder.transmit_data_rate_bps == 0
             || effective_mtu(transponder) == 0
+            || !state
+                .antennas
+                .contains_key(&transponder.receive_antenna_index)
+            || !state
+                .antennas
+                .contains_key(&transponder.transmit_antenna_index)
+            || state.configured_transponder_fields.get(index).copied() != Some(REQUIRED_FIELDS)
+            || !state.pcr.contains_curve(transponder.curve_index)
+            || !receive_channels.insert((
+                transponder.receive_antenna_index,
+                transponder.receive_frequency_hz,
+            ))
+            || (slotted
+                && (transponder.transmit_slots_per_frame == 0
+                    || transponder.transmit_slot_size_us == 0
+                    || transponder.transmit_slots.is_empty()))
             || transponder
                 .transmit_slots
                 .iter()
@@ -804,13 +966,9 @@ extern "C" fn start(plugin: *mut c_void) -> bool {
             return false;
         }
     }
-    if !state.pcr_uri.is_empty() {
-        let uri = state.pcr_uri.clone();
-        if state.pcr.load(&uri).is_err() {
-            return false;
-        }
-    }
     state.started = true;
+    drop(state);
+    schedule_reassembly_check(mac);
     true
 }
 
@@ -885,7 +1043,7 @@ extern "C" fn upstream(
     }
     let decision = {
         let mut state = mac.state.lock().unwrap();
-        let Some((index, receive_action, transmit_delay_us)) = state
+        let Some((index, receive_action, transmit_delay_us, receive_gain_db)) = state
             .transponders
             .iter()
             .find(|(_, transponder)| {
@@ -898,6 +1056,11 @@ extern "C" fn upstream(
                     *index,
                     transponder.receive_action,
                     transponder.transmit_delay_us,
+                    state
+                        .antennas
+                        .get(&transponder.receive_antenna_index)
+                        .map(|antenna| antenna.fixed_gain_db)
+                        .unwrap_or(0.0),
                 )
             })
         else {
@@ -907,7 +1070,7 @@ extern "C" fn upstream(
             .pcr
             .get_por(
                 header.flags,
-                (rx.rx_power_dbm - rx.noise_floor_dbm) as f32,
+                (rx.rx_power_dbm + receive_gain_db - rx.noise_floor_dbm) as f32,
                 packet_ref.payload.len,
             )
             .unwrap_or(1.0);
@@ -921,6 +1084,11 @@ extern "C" fn upstream(
     };
     let completed = {
         let mut state = mac.state.lock().unwrap();
+        let now = now_us();
+        let timeout = state.fragment_timeout_us;
+        state
+            .reassembly
+            .retain(|_, entry| now.saturating_sub(entry.last_update) < timeout);
         let key = (fragment.info.source, header.sequence);
         let entry = state.reassembly.entry(key).or_insert_with(|| Reassembly {
             info: fragment.info,
@@ -928,6 +1096,7 @@ extern "C" fn upstream(
             total_length: total,
             parts: BTreeMap::new(),
             saw_last: false,
+            last_update: now,
         });
         if entry.total_length != total {
             state.reassembly.remove(&key);
@@ -935,6 +1104,7 @@ extern "C" fn upstream(
         }
         entry.parts.insert(offset, fragment.payload);
         entry.saw_last |= !more;
+        entry.last_update = now;
         let mut next = 0usize;
         let contiguous = entry.parts.iter().all(|(offset, data)| {
             if *offset != next {
@@ -1029,6 +1199,20 @@ extern "C" fn timed(
         return;
     };
     mac.state.lock().unwrap().timers.remove(&timer_id);
+    if event_id == EVENT_REASSEMBLY_CHECK {
+        let mut state = mac.state.lock().unwrap();
+        if !state.started {
+            return;
+        }
+        let now = now_us();
+        let timeout = state.fragment_timeout_us;
+        state
+            .reassembly
+            .retain(|_, entry| now.saturating_sub(entry.last_update) < timeout);
+        drop(state);
+        schedule_reassembly_check(mac);
+        return;
+    }
     if event_id != EVENT_TRANSMIT || len != 10 || data.is_null() {
         return;
     }
@@ -1053,7 +1237,7 @@ pub extern "C" fn emane_plugin_create() -> *const PluginApi {
     API.get_or_init(|| PluginApi {
         abi_version: PLUGIN_ABI_VERSION,
         struct_size: std::mem::size_of::<PluginApi>(),
-        name: b"bentpipemaclayer\0".as_ptr().cast(),
+        name: c"bentpipemaclayer".as_ptr(),
         plugin_type: 1,
         init,
         configure,
@@ -1077,5 +1261,10 @@ mod tests {
         assert_eq!(parse_scaled_u64("2.5M"), Some(2_500_000));
         assert_eq!(parse_ranges("1-3;8").unwrap().len(), 4);
         assert_eq!(parse_slots("1-2;4").unwrap(), vec![1, 2, 4]);
+        let (index, antenna) = parse_antenna("7:omni;3.5;2").unwrap();
+        assert_eq!(index, 7);
+        assert_eq!(antenna.fixed_gain_db, 3.5);
+        assert_eq!(antenna.spectral_mask_index, 2);
+        assert!(parse_antenna("7:42;0;0;2").is_none());
     }
 }
