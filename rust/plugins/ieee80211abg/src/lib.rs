@@ -1514,6 +1514,9 @@ pub extern "C" fn emane_plugin_create() -> *const PluginApi {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static EVENT_CAPTURE: Mutex<(u16, Vec<u8>)> = Mutex::new((0, Vec::new()));
 
     extern "C" fn packet_callback(
         _: *mut c_void,
@@ -1592,6 +1595,21 @@ mod tests {
         true
     }
 
+    extern "C" fn capture_event_callback(
+        _: *mut c_void,
+        event_id: u16,
+        data: *const u8,
+        len: usize,
+    ) -> bool {
+        let data = if len == 0 {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(data, len) }.to_vec()
+        };
+        *EVENT_CAPTURE.lock().unwrap() = (event_id, data);
+        true
+    }
+
     fn test_mac() -> Ieee80211Mac {
         Ieee80211Mac::new(
             1,
@@ -1616,6 +1634,14 @@ mod tests {
                 publish_event: publish_event_callback,
             },
         )
+    }
+
+    fn test_mac_with_event_capture(id: u16) -> Ieee80211Mac {
+        let mut mac = test_mac();
+        mac.id = id;
+        mac.framework.publish_event = capture_event_callback;
+        mac.state.get_mut().unwrap().local_id = id;
+        mac
     }
 
     #[test]
@@ -1663,6 +1689,36 @@ mod tests {
     }
 
     #[test]
+    fn drive_discards_a_packet_after_its_nonzero_txop() {
+        let mac = test_mac();
+        {
+            let mut state = mac.state.lock().unwrap();
+            state.started = true;
+            state.queues[0].push_back(PendingTx {
+                packet: OwnedPacket {
+                    info: FfiPacketInfo {
+                        source: 1,
+                        destination: 2,
+                        priority: 0,
+                        creation_time_sec: 0,
+                        creation_time_usec: 0,
+                    },
+                    payload: vec![1, 2, 3],
+                    controls: Vec::new(),
+                },
+                category: 0,
+                acquired_at: 1_000,
+                txop_microseconds: 500,
+                ready_at: i64::MAX,
+            });
+        }
+        drive(&mac, 1_501);
+        let state = mac.state.lock().unwrap();
+        assert!(state.queues[0].is_empty());
+        assert_eq!(state.queue_discards[0], 1);
+    }
+
+    #[test]
     fn channel_estimation_rolls_activity_and_expires_neighbors() {
         let mac = test_mac();
         let mut state = mac.state.lock().unwrap();
@@ -1700,6 +1756,42 @@ mod tests {
             Some((7, HashSet::from([2, 9])))
         );
         assert!(decode_one_hop_neighbors(&[0x12, 0xff]).is_none());
+    }
+
+    #[test]
+    fn channel_estimation_event_is_published_and_consumed_by_a_peer() {
+        *EVENT_CAPTURE.lock().unwrap() = (0, Vec::new());
+        let source = test_mac_with_event_capture(7);
+        {
+            let mut state = source.state.lock().unwrap();
+            state.started = true;
+            state.channel_activity_interval_microseconds = 100;
+            record_channel_activity(&mut state, 9, now_us(), 25, Some(-50.0));
+        }
+        let timer_data = now_us().to_be_bytes();
+        timed(
+            &source as *const Ieee80211Mac as *mut c_void,
+            0,
+            EVENT_CHANNEL_ESTIMATE,
+            timer_data.as_ptr(),
+            timer_data.len(),
+        );
+        let (event_id, payload) = EVENT_CAPTURE.lock().unwrap().clone();
+        assert_eq!(event_id, ONE_HOP_NEIGHBORS_EVENT_ID);
+        assert_eq!(
+            decode_one_hop_neighbors(&payload),
+            Some((7, HashSet::from([9])))
+        );
+
+        let peer = test_mac_with_event_capture(8);
+        process_event(
+            &peer as *const Ieee80211Mac as *mut c_void,
+            event_id,
+            payload.as_ptr(),
+            payload.len(),
+        );
+        let peer_state = peer.state.lock().unwrap();
+        assert_eq!(peer_state.neighbor_lists[&7].neighbors, HashSet::from([9]));
     }
 
     #[test]

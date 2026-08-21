@@ -1104,6 +1104,7 @@ mod tests {
     fn native_rf_signal_table_is_manifested_queried_and_clearable() {
         let build_id = 60_001;
         let handle = register_native_rf_signal_table(build_id, 1).unwrap();
+        assert!(configure_native_rf_signal_table(handle, true, true));
         assert!(update_native_rf_signal_table(
             handle,
             2,
@@ -1113,6 +1114,16 @@ mod tests {
             10.0,
             -60.0,
             -90.0,
+        ));
+        assert!(update_native_rf_signal_table(
+            handle,
+            2,
+            7,
+            5_800_000_000,
+            -70.0,
+            20.0,
+            -80.0,
+            -100.0,
         ));
         let manifest = emane_rs_statistic_get_table_manifest(build_id);
         assert_eq!(manifest.len, 1);
@@ -1130,6 +1141,18 @@ mod tests {
         assert!(table.native);
         assert_eq!(table.labels.len, 8);
         assert_eq!(table.rows_len, 1);
+        let values = unsafe {
+            let row = &*table.rows;
+            std::slice::from_raw_parts(row.values.data, row.values.len)
+        };
+        assert_eq!(values[0].u64_value, 2);
+        assert_eq!(values[1].any_type, 11);
+        assert_eq!(values[2].any_type, 11);
+        assert_eq!(values[3].u64_value, 2);
+        assert_eq!(values[4].d_value, -60.0);
+        assert_eq!(values[5].d_value, -70.0);
+        assert_eq!(values[6].d_value, 15.0);
+        assert_eq!(values[7].d_value, 25.0);
         emane_rs_statistic_free_table_query_result(result);
 
         emane_rs_statistic_clear_table(build_id, empty, error.as_mut_ptr(), error.len());

@@ -1079,6 +1079,34 @@ impl PhyState {
         local_pattern: AntennaPattern,
         remote_pattern: AntennaPattern,
     ) -> Option<f64> {
+        self.antenna_pair_gain_with(
+            local_id,
+            source,
+            local_pattern,
+            remote_pattern,
+            |profile, bearing, elevation, reference_bearing, reference_elevation| {
+                crate::antenna::get_manager().get_profile_gain(
+                    profile.profile_id,
+                    bearing,
+                    elevation,
+                    reference_bearing,
+                    reference_elevation,
+                )
+            },
+        )
+    }
+
+    fn antenna_pair_gain_with<F>(
+        &self,
+        local_id: u16,
+        source: u16,
+        local_pattern: AntennaPattern,
+        remote_pattern: AntennaPattern,
+        mut profile_gain: F,
+    ) -> Option<f64>
+    where
+        F: FnMut(TxAntennaProfile, f64, f64, f64, f64) -> Option<f64>,
+    {
         let local_pattern = match local_pattern {
             AntennaPattern::Default => self.default_antenna_pattern(local_id)?,
             pattern => pattern,
@@ -1097,12 +1125,12 @@ impl PhyState {
         }
         let local = *self.locations.get(&local_id)?;
         let remote = *self.locations.get(&source)?;
-        let side_gain = |pattern: AntennaPattern, from: Location, to: Location| match pattern {
+        let mut side_gain = |pattern: AntennaPattern, from: Location, to: Location| match pattern {
             AntennaPattern::IdealOmni { gain_db } => Some(gain_db),
             AntennaPattern::Profile(profile) => {
                 let (reference_azimuth, reference_elevation) = oriented_direction_angles(from, to)?;
-                crate::antenna::get_manager().get_profile_gain(
-                    profile.profile_id,
+                profile_gain(
+                    profile,
                     normalize_azimuth(reference_azimuth - profile.azimuth_degrees),
                     normalize_elevation(reference_elevation - profile.elevation_degrees),
                     reference_azimuth,
@@ -3996,6 +4024,45 @@ mod tests {
     }
 
     #[test]
+    fn explicit_profile_receive_antenna_uses_pointing_relative_direction() {
+        let mut phy = PhyState::new();
+        let local = Location {
+            latitude_degrees: 0.0,
+            longitude_degrees: 0.0,
+            altitude_meters: 0.0,
+            velocity: None,
+            orientation: Orientation::default(),
+        };
+        phy.locations.insert(1, local);
+        phy.locations.insert(
+            2,
+            Location {
+                longitude_degrees: 0.001,
+                ..local
+            },
+        );
+        let gain = phy.antenna_pair_gain_with(
+            1,
+            2,
+            AntennaPattern::Profile(TxAntennaProfile {
+                profile_id: 42,
+                azimuth_degrees: 20.0,
+                elevation_degrees: -5.0,
+            }),
+            AntennaPattern::IdealOmni { gain_db: 2.0 },
+            |profile, bearing, elevation, reference_bearing, reference_elevation| {
+                assert_eq!(profile.profile_id, 42);
+                assert!((bearing - 70.0).abs() < 1.0e-9);
+                assert!((elevation - 5.0).abs() < 1.0e-9);
+                assert!((reference_bearing - 90.0).abs() < 1.0e-9);
+                assert!(reference_elevation.abs() < 1.0e-9);
+                Some(7.5)
+            },
+        );
+        assert_eq!(gain, Some(9.5));
+    }
+
+    #[test]
     fn active_phy_reports_multiple_segments_and_combines_collaborative_transmitters() {
         PHY_CAPTURE_SEGMENTS.store(0, Ordering::Relaxed);
         PHY_CAPTURE_POWER_BITS.store(0, Ordering::Relaxed);
@@ -4369,6 +4436,130 @@ mod tests {
         assert_eq!(query.len, 1);
         assert_eq!(unsafe { &*query.data }.value.u64_value, 1);
         emane_rs_statistic_free_query_result(query);
+    }
+
+    #[test]
+    fn dynamic_rfpipe_updates_aggregated_native_signal_table() {
+        use crate::statistics::{
+            emane_rs_statistic_clear_table, emane_rs_statistic_free_table_query_result,
+            emane_rs_statistic_query_table, FfiStringArray,
+        };
+        use emane_plugin_api::{ModelHeader, CONTROL_MODEL_HEADER, MAC_REGISTRATION_RFPIPE};
+
+        let Ok(plugin) = resolve_plugin_path("rfpipemaclayer") else {
+            return;
+        };
+        if !plugin.exists() {
+            return;
+        }
+        let mut manager = NemManager::new([15; 16]);
+        let config = [
+            (
+                "rfsignaltable.averageallantenna".to_string(),
+                vec!["true".to_string()],
+            ),
+            (
+                "rfsignaltable.averageallfrequencies".to_string(),
+                vec!["true".to_string()],
+            ),
+        ];
+        if let Err(error) = manager.add_layer_configured(1, plugin.to_str().unwrap(), 1, &config) {
+            if error.contains("plugin ABI mismatch") {
+                return;
+            }
+            panic!("{error}");
+        }
+        let layer = &manager.layers[&1][0];
+        let build_id = layer.event_build_id;
+        let invocation = layer.invocation;
+        let header = ModelHeader {
+            registration_id: MAC_REGISTRATION_RFPIPE,
+            sequence: 1,
+            data_rate_bps: 1_000_000,
+            category: 0,
+            message_type: 0,
+            flags: 0,
+        }
+        .encode();
+        let payload = [1u8, 2, 3, 4];
+        let packet = FfiPacket {
+            info: FfiPacketInfo {
+                source: 2,
+                destination: 1,
+                priority: 0,
+                creation_time_sec: 0,
+                creation_time_usec: 0,
+            },
+            payload: FfiSlice {
+                data: payload.as_ptr(),
+                len: payload.len(),
+            },
+        };
+        for (frequency_hz, rx_power_dbm, noise_floor_dbm) in
+            [(2_400_000_000, -50.0, -60.0), (5_800_000_000, -70.0, -80.0)]
+        {
+            let rx = RxProperties {
+                frequency_hz,
+                bandwidth_hz: 1_000_000,
+                rx_power_dbm,
+                noise_floor_dbm,
+                tx_time_microseconds: 0,
+                propagation_microseconds: 0,
+                duration_microseconds: 0,
+                antenna_index: 0,
+                sub_id: 0,
+                signal_in_noise: false,
+            }
+            .encode();
+            let controls = [
+                FfiControlMessage {
+                    msg_type: CONTROL_MODEL_HEADER,
+                    payload: FfiSlice {
+                        data: header.as_ptr(),
+                        len: header.len(),
+                    },
+                },
+                FfiControlMessage {
+                    msg_type: CONTROL_RX_PROPERTIES,
+                    payload: FfiSlice {
+                        data: rx.as_ptr(),
+                        len: rx.len(),
+                    },
+                },
+            ];
+            (invocation.api().process_upstream)(
+                invocation.context(),
+                &packet,
+                controls.as_ptr(),
+                controls.len(),
+            );
+        }
+
+        let empty = FfiStringArray {
+            data: std::ptr::null(),
+            len: 0,
+        };
+        let mut error = [0i8; 128];
+        let result =
+            emane_rs_statistic_query_table(build_id, empty, error.as_mut_ptr(), error.len());
+        assert_eq!(result.len, 1);
+        let table = unsafe { &*result.data };
+        assert_eq!(table.rows_len, 1);
+        let values = unsafe {
+            let row = &*table.rows;
+            std::slice::from_raw_parts(row.values.data, row.values.len)
+        };
+        assert_eq!(values[3].u64_value, 2);
+        assert_eq!(values[4].d_value, -60.0);
+        assert_eq!(values[5].d_value, -70.0);
+        assert_eq!(values[6].d_value, 10.0);
+        emane_rs_statistic_free_table_query_result(result);
+
+        emane_rs_statistic_clear_table(build_id, empty, error.as_mut_ptr(), error.len());
+        let result =
+            emane_rs_statistic_query_table(build_id, empty, error.as_mut_ptr(), error.len());
+        assert_eq!(unsafe { &*result.data }.rows_len, 0);
+        emane_rs_statistic_free_table_query_result(result);
     }
 
     #[test]
