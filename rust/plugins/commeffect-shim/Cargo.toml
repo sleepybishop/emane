@@ -1,0 +1,14 @@
+[package]
+name = "commeffect-shim"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "commeffectshim"
+crate-type = ["cdylib"]
+
+[dependencies]
+emane-plugin-api = { path = "../../emane-plugin-api" }
+prost = "0.12"
+rand = "0.8"
+roxmltree = "0.19"

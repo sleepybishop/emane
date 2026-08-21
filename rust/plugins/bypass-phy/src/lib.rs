@@ -1,0 +1,114 @@
+use emane_plugin_api::{
+    FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket, PluginApi,
+    PLUGIN_ABI_VERSION,
+};
+use std::ffi::c_void;
+use std::sync::OnceLock;
+
+struct BypassPhy {
+    id: u16,
+    framework: FfiFrameworkService,
+}
+
+extern "C" fn init(id: u16, framework: *const FfiFrameworkService) -> *mut c_void {
+    let Some(framework) = (unsafe { framework.as_ref() }) else {
+        return std::ptr::null_mut();
+    };
+    Box::into_raw(Box::new(BypassPhy {
+        id,
+        framework: *framework,
+    }))
+    .cast()
+}
+
+extern "C" fn configure(_: *mut c_void, request: *const c_void) -> bool {
+    let Some(request) = (unsafe { (request as *const FfiConfigRequest).as_ref() }) else {
+        return false;
+    };
+    request.len == 0
+}
+
+extern "C" fn start(plugin: *mut c_void) -> bool {
+    !plugin.is_null()
+}
+
+extern "C" fn lifecycle(_: *mut c_void) {}
+
+extern "C" fn destroy(plugin: *mut c_void) {
+    if !plugin.is_null() {
+        unsafe { drop(Box::from_raw(plugin as *mut BypassPhy)) };
+    }
+}
+
+extern "C" fn upstream(
+    plugin: *mut c_void,
+    packet: *const FfiPacket,
+    messages: *const FfiControlMessage,
+    count: usize,
+) {
+    let Some(phy) = (unsafe { (plugin as *mut BypassPhy).as_ref() }) else {
+        return;
+    };
+    if packet.is_null() {
+        (phy.framework.send_upstream_control)(phy.framework.framework_ctx, phy.id, messages, count);
+    } else {
+        (phy.framework.send_upstream_packet)(
+            phy.framework.framework_ctx,
+            phy.id,
+            packet,
+            messages,
+            count,
+        );
+    }
+}
+
+extern "C" fn downstream(
+    plugin: *mut c_void,
+    packet: *const FfiPacket,
+    messages: *const FfiControlMessage,
+    count: usize,
+) {
+    let Some(phy) = (unsafe { (plugin as *mut BypassPhy).as_ref() }) else {
+        return;
+    };
+    if packet.is_null() {
+        (phy.framework.send_downstream_control)(
+            phy.framework.framework_ctx,
+            phy.id,
+            messages,
+            count,
+        );
+    } else {
+        (phy.framework.send_downstream_packet)(
+            phy.framework.framework_ctx,
+            phy.id,
+            packet,
+            messages,
+            count,
+        );
+    }
+}
+
+extern "C" fn timed(_: *mut c_void, _: u64, _: u32, _: *const u8, _: usize) {}
+extern "C" fn event(_: *mut c_void, _: u16, _: *const u8, _: usize) {}
+
+#[no_mangle]
+pub extern "C" fn emane_plugin_create() -> *const PluginApi {
+    static API: OnceLock<PluginApi> = OnceLock::new();
+    API.get_or_init(|| PluginApi {
+        abi_version: PLUGIN_ABI_VERSION,
+        struct_size: std::mem::size_of::<PluginApi>(),
+        name: c"bypassphylayer".as_ptr(),
+        plugin_type: 2,
+        init,
+        configure,
+        start,
+        post_start: lifecycle,
+        stop: lifecycle,
+        destroy,
+        process_upstream: upstream,
+        process_downstream: downstream,
+        process_timed_event: timed,
+        process_event: event,
+    })
+}

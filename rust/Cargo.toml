@@ -7,5 +7,10 @@ members = [
     "plugins/ieee80211abg",
     "plugins/bentpipe",
     "plugins/tdma",
-    "plugins/rfpipe"
+    "plugins/rfpipe",
+    "plugins/bypass-mac",
+    "plugins/bypass-phy",
+    "plugins/commeffect-shim",
+    "plugins/timing-analysis-shim",
+    "plugins/phy-api-test-shim"
 ]

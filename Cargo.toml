@@ -9,4 +9,9 @@ members = [
     "rust/plugins/bentpipe",
     "rust/plugins/tdma",
     "rust/plugins/rfpipe",
+    "rust/plugins/bypass-mac",
+    "rust/plugins/bypass-phy",
+    "rust/plugins/commeffect-shim",
+    "rust/plugins/timing-analysis-shim",
+    "rust/plugins/phy-api-test-shim",
 ]

@@ -1,0 +1,11 @@
+[package]
+name = "phy-api-test-shim"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "phyapitestshim"
+crate-type = ["cdylib"]
+
+[dependencies]
+emane-plugin-api = { path = "../../emane-plugin-api" }
