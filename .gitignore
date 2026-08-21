@@ -1,6 +1,4 @@
 # autotools
-Makefile
-Makefile.in
 configure
 libtool
 config
