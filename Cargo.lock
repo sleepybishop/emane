@@ -28,6 +28,7 @@ name = "bentpipe"
 version = "0.1.0"
 dependencies = [
  "emane-plugin-api",
+ "prost",
  "roxmltree",
 ]
 

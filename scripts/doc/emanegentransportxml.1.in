@@ -1,48 +1,53 @@
 .TH emanegentransportxml 1 "@RELDATE@" "emanegentransportxml @VERSION@"
 .SH NAME
-emanegentransportxml - EMANE transport daemon XML generator
+emanegentransportxml \- EMANE transport daemon XML generator
 .SH SYNOPSIS
-emanegentransportxml [OPTIONS]... URI [URI]...
+.B emanegentransportxml
+.RI [ OPTIONS ]... " URI" " [URI]..."
 .SH DESCRIPTION
 .P
-emanegentransportxml generates XML configuration file(s) for emanetransportd from emane emulator platform XML.
+.B emanegentransportxml
+generates XML configuration files for
+.B emanetransportd
+from one or more EMANE emulator platform XML files.
 .SH OPTIONS
-.P
-The following options are supported:
 .TP
 .B URI
-\fBURI\fP of the emane emulator platform XML.
+URI of an EMANE emulator platform XML file.
 .TP
-.B \--outpath LOCATION
-Specifies output location for generated xml files
-.br
-Default: current working directory
+.BI \--outpath " LOCATION"
+Write generated files to
+.IR LOCATION .
+The default is the current working directory.
 .TP
-.B \--dtdpath LOCATION
-Specifies the location of the directory containing DTDs
-.br
-Default: directory in the SYSTEM declaration in platform URI
+.BI \--dtdpath " LOCATION"
+Resolve DTD files from
+.IR LOCATION .
+The default is the directory from the platform XML SYSTEM declaration.
 .TP
-.B \--dtd DTD
-Specifies the DTD file to validate against
-.br
-Default: transport.dtd
+.BI \--dtd " DTD"
+Validate using
+.IR DTD .
+The default is
+.BR transport.dtd .
 .TP
 .B \--debug
-Enable debug output
+Enable debug output.
 .TP
 .B \--help
 Print usage information and exit.
-.SH Example
-Example application command line:
-.RS
-emanegentransportxml platform*.xml
-.RE
+.SH EXAMPLE
 .P
-Example XML output:
+Generate transport daemon configuration files from all matching platform files:
 .RS
 .nf
-
+emanegentransportxml platform*.xml
+.fi
+.RE
+.P
+Example output:
+.RS
+.nf
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE transportdaemon SYSTEM "file://@datadir@/dtd/transportdaemon.dtd">
 <transportdaemon>
@@ -56,19 +61,21 @@ Example XML output:
     </transport>
   </instance>
 </transportdaemon>
-
 .fi
 .RE
 .SH VERSION
 @VERSION@
 .SH BUGS
-To report a bug, please send and email to <labs at adjacentlink dot com>
+To report a bug, send email to <labs at adjacentlink dot com>.
 .SH SEE ALSO
-emanetransport(1) emaneeventservice(1) emaneeventd(1) emanesh
+.BR emane (1),
+.BR emaneeventd (1),
+.BR emaneeventservice (1),
+.BR emanetransportd (1),
+.BR emanesh (1)
 .SH AUTHORS
 Adjacent Link LLC
-.br 
+.br
 https://github.com/adjacentlink/emane
 .SH NOTES
-.P
 EMANE is released under the BSD License.
