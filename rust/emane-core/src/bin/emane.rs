@@ -1,7 +1,9 @@
 use emane_core::nem_manager::NemManager;
-use emane_core::xml_parser::parse_platform;
+use emane_core::xml_parser::{parse_platform, ParamMap};
+use emane_core::{event_service, ota_manager, spectral_mask};
 use std::collections::HashSet;
 use std::env;
+use std::ffi::CString;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,6 +30,132 @@ fn install_signal_handlers() {
 
 fn usage() {
     println!("Usage: emane [OPTIONS] platform.xml");
+}
+
+struct NetworkServices {
+    ota: bool,
+    event: bool,
+    workers: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl NetworkServices {
+    fn start(params: &ParamMap, uuid: [u8; 16]) -> Result<Self, String> {
+        if let Some(uri) = parameter(params, "spectralmaskmanifesturi") {
+            spectral_mask::load_global(uri)
+                .map_err(|error| format!("failed to load spectral mask manifest: {error}"))?;
+        }
+
+        let mut services = Self {
+            ota: false,
+            event: false,
+            workers: Vec::new(),
+        };
+        if let Some(group) = parameter(params, "eventservicegroup") {
+            let group = c_string(group, "eventservicegroup")?;
+            let device = c_string(
+                parameter(params, "eventservicedevice").unwrap_or(""),
+                "eventservicedevice",
+            )?;
+            let ttl = parse_parameter::<i32>(params, "eventservicettl", 1)?;
+            if !event_service::emane_rs_event_service_mcast_open(
+                group.as_ptr(),
+                device.as_ptr(),
+                ttl,
+                false,
+                uuid.as_ptr(),
+            ) {
+                return Err("failed to open Event Service channel".to_string());
+            }
+            services.event = true;
+            services.workers.push(
+                std::thread::Builder::new()
+                    .name("emane-event-service".to_string())
+                    .spawn(move || {
+                        event_service::emane_rs_event_service_process_loop(uuid.as_ptr())
+                    })
+                    .map_err(|error| format!("failed to start Event Service worker: {error}"))?,
+            );
+        }
+
+        let ota_enabled = parse_bool_parameter(params, "otamanagerchannelenable", true)?;
+        if ota_enabled {
+            if let Some(group) = parameter(params, "otamanagergroup") {
+                let group = c_string(group, "otamanagergroup")?;
+                let device = c_string(
+                    parameter(params, "otamanagerdevice").unwrap_or(""),
+                    "otamanagerdevice",
+                )?;
+                let ttl = parse_parameter::<u8>(params, "otamanagerttl", 1)?;
+                let mtu = parse_parameter::<usize>(params, "otamanagermtu", 0)?;
+                let check = parse_parameter::<u16>(params, "otamanagerpartcheckthreshold", 2)?;
+                let timeout = parse_parameter::<u16>(params, "otamanagerparttimeoutthreshold", 5)?;
+                let loopback = parse_bool_parameter(params, "otamanagerloopback", false)?;
+                if !ota_manager::emane_rs_ota_manager_open(
+                    group.as_ptr(),
+                    device.as_ptr(),
+                    ttl,
+                    loopback,
+                    uuid.as_ptr(),
+                    mtu,
+                    check,
+                    timeout,
+                ) {
+                    return Err("failed to open OTA channel".to_string());
+                }
+                services.ota = true;
+                services.workers.push(
+                    std::thread::Builder::new()
+                        .name("emane-ota-manager".to_string())
+                        .spawn(|| ota_manager::emane_rs_ota_manager_process_loop())
+                        .map_err(|error| format!("failed to start OTA worker: {error}"))?,
+                );
+            }
+        }
+        Ok(services)
+    }
+}
+
+impl Drop for NetworkServices {
+    fn drop(&mut self) {
+        if self.ota {
+            ota_manager::emane_rs_ota_manager_close();
+        }
+        if self.event {
+            event_service::emane_rs_event_service_mcast_close();
+        }
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn parameter<'a>(params: &'a ParamMap, name: &str) -> Option<&'a str> {
+    params.get(name)?.values.first().map(String::as_str)
+}
+
+fn parse_parameter<T>(params: &ParamMap, name: &str, default: T) -> Result<T, String>
+where
+    T: std::str::FromStr,
+{
+    parameter(params, name).map_or(Ok(default), |value| {
+        value
+            .parse()
+            .map_err(|_| format!("invalid platform parameter {name}: {value}"))
+    })
+}
+
+fn parse_bool_parameter(params: &ParamMap, name: &str, default: bool) -> Result<bool, String> {
+    parameter(params, name).map_or(Ok(default), |value| {
+        match value.to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => Ok(true),
+            "false" | "0" | "no" | "off" => Ok(false),
+            _ => Err(format!("invalid platform parameter {name}: {value}")),
+        }
+    })
+}
+
+fn c_string(value: &str, name: &str) -> Result<CString, String> {
+    CString::new(value).map_err(|_| format!("platform parameter {name} contains a NUL byte"))
 }
 
 fn run() -> Result<(), String> {
@@ -68,7 +196,8 @@ fn run() -> Result<(), String> {
         return Err("platform contains no NEMs".to_string());
     }
 
-    let mut manager = NemManager::new(rand::random());
+    let uuid = rand::random();
+    let mut manager = NemManager::new(uuid);
     let mut nem_ids = HashSet::new();
     for nem in platform.nems {
         if !nem_ids.insert(nem.id) {
@@ -109,6 +238,8 @@ fn run() -> Result<(), String> {
                 })?;
         }
     }
+
+    let _network_services = NetworkServices::start(&platform.params, uuid)?;
 
     install_signal_handlers();
     manager.start()?;
