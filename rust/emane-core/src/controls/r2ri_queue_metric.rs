@@ -14,6 +14,12 @@ pub struct R2riQueueMetricControlMessage {
     pub metrics: Vec<R2riQueueMetric>,
 }
 
+impl Default for R2riQueueMetricControlMessage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl R2riQueueMetricControlMessage {
     pub fn new() -> Self {
         Self {

@@ -158,7 +158,7 @@ impl GpsdLocationAgent {
         Self::do_checksum_nmea(&mut buf);
         self.write_pty(&buf);
 
-        let mut buf = format!("$GPGSA,A,3,01,02,03,04,05,06,07,08,,,,,1.8,1.1,1.3");
+        let mut buf = "$GPGSA,A,3,01,02,03,04,05,06,07,08,,,,,1.8,1.1,1.3".to_string();
         Self::do_checksum_nmea(&mut buf);
         self.write_pty(&buf);
 

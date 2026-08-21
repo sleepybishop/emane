@@ -2,6 +2,7 @@ use roxmltree::Document;
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
+use std::sync::OnceLock;
 
 pub struct AntennaPattern {
     elevation_bearing_gain: BTreeMap<i16, Option<BTreeMap<i16, f64>>>,
@@ -114,21 +115,25 @@ impl AntennaPattern {
                             .parse()
                             .map_err(|_| format!("Bad entry {}: gain value parse", uri))?;
 
-                        if !bearing_gain_map.contains_key(&(bearing_min - 1)) {
-                            bearing_gain_map.insert(bearing_min - 1, missing_value);
-                        }
+                        let Some(preceding_bearing) = bearing_min.checked_sub(1) else {
+                            return Err(format!(
+                                "Bad entry {}: bearing minimum is out of range",
+                                uri
+                            ));
+                        };
+                        bearing_gain_map.entry(preceding_bearing).or_insert(missing_value);
                         bearing_gain_map.insert(bearing_max, gain);
                     }
                 }
 
-                if !pattern
-                    .elevation_bearing_gain
-                    .contains_key(&(elevation_min - 1))
-                {
-                    pattern
-                        .elevation_bearing_gain
-                        .insert(elevation_min - 1, None);
-                }
+                let Some(preceding_elevation) = elevation_min.checked_sub(1) else {
+                    return Err(format!(
+                        "Bad entry {}: elevation minimum is out of range",
+                        uri
+                    ));
+                };
+                pattern
+                    .elevation_bearing_gain.entry(preceding_elevation).or_insert(None);
                 pattern
                     .elevation_bearing_gain
                     .insert(elevation_max, Some(bearing_gain_map));
@@ -160,6 +165,12 @@ pub struct AntennaProfileManifest {
     profiles: HashMap<u16, (usize, usize, f64, f64, f64)>, // (antenna_idx, blockage_idx, north, east, up)
     patterns: Vec<AntennaPattern>,
     pattern_uri_to_idx: HashMap<String, usize>,
+}
+
+impl Default for AntennaProfileManifest {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AntennaProfileManifest {
@@ -204,12 +215,12 @@ impl AntennaProfileManifest {
         {
             let id_str = node
                 .attribute("id")
-                .ok_or_else(|| format!("profile missing id"))?;
-            let id: u16 = id_str.parse().map_err(|_| format!("profile id parse"))?;
+                .ok_or_else(|| "profile missing id".to_string())?;
+            let id: u16 = id_str.parse().map_err(|_| "profile id parse".to_string())?;
 
             let antenna_uri = node
                 .attribute("antennapatternuri")
-                .ok_or_else(|| format!("profile missing antennapatternuri"))?;
+                .ok_or_else(|| "profile missing antennapatternuri".to_string())?;
             let blockage_uri = node.attribute("blockagepatternuri");
 
             let mut north = 0.0;
@@ -271,15 +282,13 @@ impl AntennaProfileManifest {
     }
 }
 
-static mut MANAGER: Option<AntennaProfileManifest> = None;
+static MANAGER: OnceLock<AntennaProfileManifest> = OnceLock::new();
+static EMPTY_MANAGER: OnceLock<AntennaProfileManifest> = OnceLock::new();
 
-pub fn get_manager() -> &'static mut AntennaProfileManifest {
-    unsafe {
-        if MANAGER.is_none() {
-            MANAGER = Some(AntennaProfileManifest::new());
-        }
-        MANAGER.as_mut().unwrap()
-    }
+pub fn get_manager() -> &'static AntennaProfileManifest {
+    MANAGER
+        .get()
+        .unwrap_or_else(|| EMPTY_MANAGER.get_or_init(AntennaProfileManifest::new))
 }
 
 #[no_mangle]
@@ -288,8 +297,18 @@ pub extern "C" fn emane_rs_antenna_profile_load(
     error_buf: *mut c_char,
     error_buf_len: usize,
 ) {
+    if uri.is_null() {
+        write_error(error_buf, error_buf_len, "null antenna profile URI");
+        return;
+    }
     let uri_str = unsafe { CStr::from_ptr(uri).to_string_lossy() };
-    match get_manager().load(&uri_str) {
+    let mut manager = AntennaProfileManifest::new();
+    let result = manager.load(&uri_str).and_then(|_| {
+        MANAGER
+            .set(manager)
+            .map_err(|_| "antenna profiles already loaded".to_string())
+    });
+    match result {
         Ok(_) => {
             if !error_buf.is_null() && error_buf_len > 0 {
                 unsafe {
@@ -299,15 +318,22 @@ pub extern "C" fn emane_rs_antenna_profile_load(
         }
         Err(e) => {
             if !error_buf.is_null() && error_buf_len > 0 {
-                let c_msg = CString::new(e).unwrap();
-                let bytes = c_msg.as_bytes_with_nul();
-                let copy_len = std::cmp::min(bytes.len(), error_buf_len - 1);
-                unsafe {
-                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), error_buf as *mut u8, copy_len);
-                    *error_buf.add(copy_len) = 0;
-                }
+                write_error(error_buf, error_buf_len, &e);
             }
         }
+    }
+}
+
+fn write_error(error_buf: *mut c_char, error_buf_len: usize, message: &str) {
+    if error_buf.is_null() || error_buf_len == 0 {
+        return;
+    }
+    let message = CString::new(message).unwrap_or_else(|_| CString::new("invalid error").unwrap());
+    let bytes = message.as_bytes();
+    let copy_len = bytes.len().min(error_buf_len - 1);
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), error_buf.cast::<u8>(), copy_len);
+        *error_buf.add(copy_len) = 0;
     }
 }
 
@@ -320,6 +346,14 @@ pub extern "C" fn emane_rs_antenna_profile_get_info(
     east_out: *mut f64,
     up_out: *mut f64,
 ) -> bool {
+    if ant_ptr_out.is_null()
+        || blk_ptr_out.is_null()
+        || north_out.is_null()
+        || east_out.is_null()
+        || up_out.is_null()
+    {
+        return false;
+    }
     if let Some((a, b, n, e, u)) = get_manager().get_profile_info(id) {
         unsafe {
             *ant_ptr_out = a;

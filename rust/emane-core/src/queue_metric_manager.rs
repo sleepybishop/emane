@@ -58,7 +58,7 @@ impl QueueMetricManager {
         let data = self
             .queue_data_map
             .entry(queue_id)
-            .or_insert_with(QueueData::default);
+            .or_default();
 
         data.num_samples += 1;
         data.sum_delay_microseconds += delay_microseconds;
@@ -102,12 +102,11 @@ impl QueueMetricManager {
     }
 
     pub fn add_queue_metric(&mut self, queue_id: u16, max_queue_size: u32) -> bool {
-        if self.queue_data_map.contains_key(&queue_id) {
-            false
-        } else {
-            self.queue_data_map
-                .insert(queue_id, QueueData::new(max_queue_size));
+        if let std::collections::hash_map::Entry::Vacant(e) = self.queue_data_map.entry(queue_id) {
+            e.insert(QueueData::new(max_queue_size));
             true
+        } else {
+            false
         }
     }
 
@@ -125,7 +124,7 @@ pub extern "C" fn emane_rs_queue_metric_manager_create(nem_id: u16) -> *mut Queu
 pub extern "C" fn emane_rs_queue_metric_manager_destroy(ptr: *mut QueueMetricManager) {
     if !ptr.is_null() {
         unsafe {
-            Box::from_raw(ptr);
+            drop(Box::from_raw(ptr));
         }
     }
 }

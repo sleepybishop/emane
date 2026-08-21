@@ -50,7 +50,7 @@ pub extern "C" fn emane_timinganalysis_processUpstreamPacket(
     crate::log_service::emane_rs_log(4, msg.as_ptr());
 
     let mut queues = QUEUES.lock().unwrap();
-    let q = queues.entry(id).or_insert_with(VecDeque::new);
+    let q = queues.entry(id).or_default();
     if max_queue_size != 0 && q.len() >= max_queue_size as usize {
         q.pop_front();
     }

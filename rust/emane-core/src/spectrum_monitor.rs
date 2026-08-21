@@ -117,6 +117,12 @@ fn milliwatt_to_dbm(mw: f64) -> f64 {
     10.0 * mw.log10()
 }
 
+impl Default for SpectrumMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SpectrumMonitor {
     pub fn new() -> Self {
         Self {

@@ -102,7 +102,7 @@ impl RFSignalTable {
         let entry = self
             .rf_receive_metric_cache
             .entry(key)
-            .or_insert_with(RFSignalCacheEntry::default);
+            .or_default();
 
         entry.update(
             rx_power_dbm,

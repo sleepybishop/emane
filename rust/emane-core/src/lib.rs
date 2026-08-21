@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_variables, unused_assignments, unused_mut)]
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
@@ -30,7 +31,10 @@ pub mod protobufs {
         include!(concat!(env!("OUT_DIR"), "/emane_event_message.rs"));
     }
     pub mod emane_remote_control_port_api {
-        include!(concat!(env!("OUT_DIR"), "/emane_remote_control_port_api.rs"));
+        include!(concat!(
+            env!("OUT_DIR"),
+            "/emane_remote_control_port_api.rs"
+        ));
     }
 }
 
@@ -66,7 +70,7 @@ pub extern "C" fn emane_rs_tworay_pathloss(
 /// Calculates the FreeSpace pathloss for a single frequency.
 #[no_mangle]
 pub extern "C" fn emane_rs_freespace_pathloss_single(d_distance: f64, freq_hz: f64) -> f64 {
-    const FSPL_CONST: f64 = 41.916900439033640;
+    const FSPL_CONST: f64 = 41.916_900_439_033_64;
     if d_distance == 0.0 {
         return 0.0;
     }
@@ -230,9 +234,9 @@ pub mod transport_layer;
 pub mod agents;
 pub mod factory_manager;
 pub mod generators;
+pub mod plugin_interface;
 pub mod raw_transport;
 pub mod shim;
+pub mod types;
 pub mod r#virtual;
 pub mod xml_parser;
-pub mod plugin_interface;
-pub mod types;

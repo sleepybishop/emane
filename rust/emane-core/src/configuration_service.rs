@@ -71,6 +71,7 @@ pub struct FfiConfigManifest {
     pub len: usize,
 }
 
+#[cfg(not(test))]
 extern "C" {
     fn emane_c_config_call_validator(
         pValidator: *mut std::ffi::c_void,
@@ -82,6 +83,23 @@ extern "C" {
         pRunningStateMutable: *mut std::ffi::c_void,
         update: *const FfiConfigUpdate,
     );
+}
+
+#[cfg(test)]
+unsafe extern "C" fn emane_c_config_call_validator(
+    _: *mut std::ffi::c_void,
+    _: *const FfiConfigUpdate,
+    _: *mut c_char,
+    _: usize,
+) -> bool {
+    true
+}
+
+#[cfg(test)]
+unsafe extern "C" fn emane_c_config_process_configuration(
+    _: *mut std::ffi::c_void,
+    _: *const FfiConfigUpdate,
+) {
 }
 
 #[derive(Clone)]
@@ -193,7 +211,7 @@ pub extern "C" fn emane_rs_config_register_numeric_any(
     err_len: usize,
 ) {
     let mut s = get_config_service().lock().unwrap();
-    let store = s.stores.entry(build_id).or_insert_with(HashMap::new);
+    let store = s.stores.entry(build_id).or_default();
     let name = unsafe { CStr::from_ptr(s_name).to_string_lossy().into_owned() };
 
     if name.chars().any(|c| !c.is_alphanumeric() && c != '.') {
@@ -283,7 +301,7 @@ pub extern "C" fn emane_rs_config_register_non_numeric_any(
     err_len: usize,
 ) {
     let mut s = get_config_service().lock().unwrap();
-    let store = s.stores.entry(build_id).or_insert_with(HashMap::new);
+    let store = s.stores.entry(build_id).or_default();
     let name = unsafe { CStr::from_ptr(s_name).to_string_lossy().into_owned() };
 
     if name.chars().any(|c| !c.is_alphanumeric() && c != '.') {
@@ -815,14 +833,13 @@ pub extern "C" fn emane_rs_config_build_updates(
                                 out_of_range = true;
                             }
                         }
-                        8 | 9 => {
+                        8 | 9
                             // Float/Double
-                            if parsed.d_value < info.min_value.d_value
-                                || parsed.d_value > info.max_value.d_value
-                            {
+                            if (parsed.d_value < info.min_value.d_value
+                                || parsed.d_value > info.max_value.d_value)
+                            => {
                                 out_of_range = true;
                             }
-                        }
                         _ => {}
                     }
                     if out_of_range {
@@ -976,7 +993,7 @@ pub extern "C" fn emane_rs_config_register_validator(
     let mut s = get_config_service().lock().unwrap();
     s.validators
         .entry(build_id)
-        .or_insert_with(Vec::new)
+        .or_default()
         .push(VoidPtr(validator));
 }
 

@@ -2,13 +2,17 @@ use roxmltree::Document;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
+use std::sync::OnceLock;
 
 pub fn frequency_overlap_ratio(freq1: u64, bw1: u64, freq2: u64, bw2: u64) -> (f64, u64, u64) {
-    let upper1 = freq1 + bw1 / 2;
-    let lower1 = freq1 - bw1 / 2;
+    if bw1 == 0 || bw2 == 0 {
+        return (0.0, 0, 0);
+    }
+    let upper1 = freq1.saturating_add(bw1 / 2);
+    let lower1 = freq1.saturating_sub(bw1 / 2);
 
-    let upper2 = freq2 + bw2 / 2;
-    let lower2 = freq2 - bw2 / 2;
+    let upper2 = freq2.saturating_add(bw2 / 2);
+    let lower2 = freq2.saturating_sub(bw2 / 2);
 
     let mut lower_overlap = 0;
     let mut upper_overlap = 0;
@@ -93,13 +97,21 @@ impl SpectralMaskManager {
         {
             let id_str = node.attribute("id").ok_or("mask missing id attribute")?;
             let id: u16 = id_str.parse().map_err(|_| "invalid mask id")?;
+            if id == 0 || self.masks.contains_key(&id) {
+                return Err(format!("invalid or duplicate mask id {id}"));
+            }
 
             let mut mask_entries = Vec::new();
+            let mut primary_count = 0usize;
 
             for child in node.children().filter(|n| n.is_element()) {
                 if child.tag_name().name() == "primary" {
+                    primary_count += 1;
+                    if primary_count != 1 || !mask_entries.is_empty() {
+                        return Err(format!("mask {id} has an invalid primary section"));
+                    }
                     let mut shape = Vec::new();
-                    let mut bandwidth = 0;
+                    let mut bandwidth = 0u64;
                     for width_node in child
                         .children()
                         .filter(|n| n.is_element() && n.tag_name().name() == "width")
@@ -110,13 +122,18 @@ impl SpectralMaskManager {
                         let hz = parse_frequency(hz_str)?;
 
                         let dbr = if let Some(dbr_str) = width_node.attribute("dBr") {
-                            dbr_str.parse().unwrap_or(0.0)
+                            parse_finite(dbr_str, "invalid primary dBr")?
                         } else {
                             0.0
                         };
 
                         shape.push((hz, db_to_milliwatt(dbr)));
-                        bandwidth += hz;
+                        bandwidth = bandwidth
+                            .checked_add(hz)
+                            .ok_or("primary bandwidth overflow")?;
+                    }
+                    if shape.is_empty() {
+                        return Err(format!("mask {id} primary has no widths"));
                     }
                     mask_entries.push((0, bandwidth, shape));
                 } else if child.tag_name().name() == "spurs" {
@@ -130,7 +147,7 @@ impl SpectralMaskManager {
                         let offset = parse_frequency_i64(offset_str)?;
 
                         let mut shape = Vec::new();
-                        let mut bandwidth = 0;
+                        let mut bandwidth = 0u64;
                         for width_node in spur_node
                             .children()
                             .filter(|n| n.is_element() && n.tag_name().name() == "width")
@@ -139,18 +156,26 @@ impl SpectralMaskManager {
                                 width_node.attribute("hz").ok_or("spur width missing hz")?;
                             let hz = parse_frequency(hz_str)?;
 
-                            let dbr = width_node
-                                .attribute("dBr")
-                                .ok_or("spur width missing dBr")?
-                                .parse()
-                                .unwrap_or(0.0);
+                            let dbr = parse_finite(
+                                width_node
+                                    .attribute("dBr")
+                                    .ok_or("spur width missing dBr")?,
+                                "invalid spur dBr",
+                            )?;
 
                             shape.push((hz, db_to_milliwatt(dbr)));
-                            bandwidth += hz;
+                            bandwidth =
+                                bandwidth.checked_add(hz).ok_or("spur bandwidth overflow")?;
+                        }
+                        if shape.is_empty() {
+                            return Err(format!("mask {id} spur has no widths"));
                         }
                         mask_entries.push((offset, bandwidth, shape));
                     }
                 }
+            }
+            if primary_count != 1 {
+                return Err(format!("mask {id} must contain exactly one primary"));
             }
             self.masks.insert(id, mask_entries);
         }
@@ -193,19 +218,26 @@ impl SpectralMaskManager {
                     let mut upper_spur_overlap = 0;
                     let mut segments = Vec::new();
 
-                    let mut tx_lower = tx_freq as i64 + *offset - (*mask_bw as i64) / 2;
+                    let tx_lower =
+                        i128::from(tx_freq) + i128::from(*offset) - i128::from(*mask_bw / 2);
+                    if !(0..=i128::from(u64::MAX)).contains(&tx_lower) {
+                        continue;
+                    }
+                    let mut tx_lower = tx_lower as u64;
 
                     for (seg_width, seg_mw) in shape {
                         let seg_width = *seg_width;
-                        let tx_upper = tx_lower + seg_width as i64;
+                        let Some(tx_upper) = tx_lower.checked_add(seg_width) else {
+                            break;
+                        };
 
-                        let tx_center = tx_lower + (seg_width as i64) / 2;
+                        let tx_center = tx_lower.saturating_add(seg_width / 2);
 
                         let (ratio, lower_seg, upper_seg) =
-                            frequency_overlap_ratio(rx_freq, rx_bw, tx_center as u64, seg_width);
+                            frequency_overlap_ratio(rx_freq, rx_bw, tx_center, seg_width);
 
                         if ratio > 0.0 {
-                            segments.push((ratio, *seg_mw, tx_lower as u64, tx_upper as u64));
+                            segments.push((ratio, *seg_mw, tx_lower, tx_upper));
                             if lower_spur_overlap > lower_seg {
                                 lower_spur_overlap = lower_seg;
                             }
@@ -215,7 +247,7 @@ impl SpectralMaskManager {
                             total += 1;
                         }
 
-                        tx_lower += seg_width as i64;
+                        tx_lower = tx_upper;
                     }
 
                     if !segments.is_empty() {
@@ -245,6 +277,14 @@ impl SpectralMaskManager {
     }
 }
 
+fn parse_finite(val: &str, error: &str) -> Result<f64, String> {
+    let value: f64 = val.parse().map_err(|_| error.to_string())?;
+    value
+        .is_finite()
+        .then_some(value)
+        .ok_or_else(|| error.to_string())
+}
+
 fn parse_frequency(val: &str) -> Result<u64, String> {
     let mut multiplier = 1.0;
     let mut num_str = val;
@@ -259,8 +299,12 @@ fn parse_frequency(val: &str) -> Result<u64, String> {
         num_str = &val[..val.len() - 1];
     }
 
-    let num: f64 = num_str.parse().map_err(|_| "invalid frequency")?;
-    Ok((num * multiplier) as u64)
+    let num = parse_finite(num_str, "invalid frequency")?;
+    let scaled = num * multiplier;
+    if num < 0.0 || !scaled.is_finite() || scaled > u64::MAX as f64 {
+        return Err("invalid frequency".to_string());
+    }
+    Ok(scaled as u64)
 }
 
 fn parse_frequency_i64(val: &str) -> Result<i64, String> {
@@ -286,23 +330,25 @@ fn parse_frequency_i64(val: &str) -> Result<i64, String> {
         num_str = &num_str[..num_str.len() - 1];
     }
 
-    let num: f64 = num_str.parse().map_err(|_| "invalid frequency")?;
-    Ok((sign * num * multiplier) as i64)
+    let num = parse_finite(num_str, "invalid signed frequency")?;
+    let scaled = sign * num * multiplier;
+    if num < 0.0 || !scaled.is_finite() || scaled < i64::MIN as f64 || scaled > i64::MAX as f64 {
+        return Err("invalid signed frequency".to_string());
+    }
+    Ok(scaled as i64)
 }
 
 fn db_to_milliwatt(db: f64) -> f64 {
     10.0f64.powf(db / 10.0)
 }
 
-static mut MANAGER: Option<SpectralMaskManager> = None;
+static MANAGER: OnceLock<SpectralMaskManager> = OnceLock::new();
+static EMPTY_MANAGER: OnceLock<SpectralMaskManager> = OnceLock::new();
 
-pub fn get_manager() -> &'static mut SpectralMaskManager {
-    unsafe {
-        if MANAGER.is_none() {
-            MANAGER = Some(SpectralMaskManager::new());
-        }
-        MANAGER.as_mut().unwrap()
-    }
+pub fn get_manager() -> &'static SpectralMaskManager {
+    MANAGER
+        .get()
+        .unwrap_or_else(|| EMPTY_MANAGER.get_or_init(SpectralMaskManager::new))
 }
 
 #[no_mangle]
@@ -311,8 +357,18 @@ pub extern "C" fn emane_rs_spectral_mask_load(
     error_buf: *mut c_char,
     error_buf_len: usize,
 ) {
+    if uri.is_null() {
+        write_error(error_buf, error_buf_len, "null spectral mask URI");
+        return;
+    }
     let uri_str = unsafe { CStr::from_ptr(uri).to_string_lossy() };
-    match get_manager().load(&uri_str) {
+    let mut manager = SpectralMaskManager::new();
+    let result = manager.load(&uri_str).and_then(|_| {
+        MANAGER
+            .set(manager)
+            .map_err(|_| "spectral masks already loaded".to_string())
+    });
+    match result {
         Ok(_) => {
             if !error_buf.is_null() && error_buf_len > 0 {
                 unsafe {
@@ -322,15 +378,22 @@ pub extern "C" fn emane_rs_spectral_mask_load(
         }
         Err(e) => {
             if !error_buf.is_null() && error_buf_len > 0 {
-                let c_msg = CString::new(e).unwrap();
-                let bytes = c_msg.as_bytes_with_nul();
-                let copy_len = std::cmp::min(bytes.len(), error_buf_len - 1);
-                unsafe {
-                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), error_buf as *mut u8, copy_len);
-                    *error_buf.add(copy_len) = 0;
-                }
+                write_error(error_buf, error_buf_len, &e);
             }
         }
+    }
+}
+
+fn write_error(error_buf: *mut c_char, error_buf_len: usize, message: &str) {
+    if error_buf.is_null() || error_buf_len == 0 {
+        return;
+    }
+    let message = CString::new(message).unwrap_or_else(|_| CString::new("invalid error").unwrap());
+    let bytes = message.as_bytes();
+    let copy_len = bytes.len().min(error_buf_len - 1);
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), error_buf.cast::<u8>(), copy_len);
+        *error_buf.add(copy_len) = 0;
     }
 }
 
@@ -348,6 +411,9 @@ pub extern "C" fn emane_rs_spectral_mask_get_overlap(
     mask_id: u16,
     out: *mut FfiMaskOverlap,
 ) -> bool {
+    if out.is_null() {
+        return false;
+    }
     if let Some((overlaps, lower, upper, total)) =
         get_manager().get_spectral_overlap(tx_freq, rx_freq, rx_bw, tx_bw, mask_id)
     {
@@ -399,6 +465,14 @@ pub extern "C" fn emane_rs_spectral_mask_free_overlap(overlap: *mut FfiMaskOverl
             return;
         }
 
+        if (*overlap).overlaps_len == 0 {
+            (*overlap).overlaps = std::ptr::null_mut();
+            return;
+        }
+        if (*overlap).overlaps.is_null() {
+            return;
+        }
+
         let overlaps = Vec::from_raw_parts(
             (*overlap).overlaps,
             (*overlap).overlaps_len,
@@ -409,5 +483,29 @@ pub extern "C" fn emane_rs_spectral_mask_free_overlap(overlap: *mut FfiMaskOverl
                 Vec::from_raw_parts(ov.segments, ov.segments_len, ov.segments_len);
             }
         }
+        (*overlap).overlaps = std::ptr::null_mut();
+        (*overlap).overlaps_len = 0;
+        (*overlap).total = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_non_finite_and_out_of_range_frequencies() {
+        assert!(parse_frequency("NaN").is_err());
+        assert!(parse_frequency("-1").is_err());
+        assert!(parse_frequency_i64("+inf").is_err());
+    }
+
+    #[test]
+    fn negative_spur_does_not_wrap_below_zero() {
+        let mut manager = SpectralMaskManager::new();
+        manager.masks.insert(1, vec![(-200, 100, vec![(100, 1.0)])]);
+        assert!(manager
+            .get_spectral_overlap(100, 100, 100, 100, 1)
+            .is_none());
     }
 }

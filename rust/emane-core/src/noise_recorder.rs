@@ -529,7 +529,7 @@ impl NoiseRecorder {
                 let map = self
                     .nem_antenna_index_eor_bin_map
                     .entry(transmitter)
-                    .or_insert_with(HashMap::new);
+                    .or_default();
                 map.insert(tx_antenna_index, end_of_reception_bin);
             }
         }

@@ -253,14 +253,39 @@ pub fn parse_nem(file_path: &Path, node: Node<'_, '_>) -> Result<NemConfig, Conf
     }
 
     if config.nem_type == NemType::Structured {
-        let has_phy = config.layers.iter().any(|l| l.layer_type == "phy");
-        let has_mac = config.layers.iter().any(|l| l.layer_type == "mac");
-        let has_transport = config.layers.iter().any(|l| l.layer_type == "transport");
+        let positions = |layer_type: &str| {
+            config
+                .layers
+                .iter()
+                .enumerate()
+                .filter_map(|(index, layer)| (layer.layer_type == layer_type).then_some(index))
+                .collect::<Vec<_>>()
+        };
+        let transports = positions("transport");
+        let macs = positions("mac");
+        let phys = positions("phy");
 
-        if !has_phy || !has_mac || !has_transport {
+        if transports.len() != 1 || macs.len() != 1 || phys.len() != 1 {
             return Err(ConfigurationError::ValidationError(format!(
-                "NEM id {} is NOT properly configured. Missing phy|mac|transport",
+                "NEM id {} must contain exactly one transport, mac, and phy layer",
                 id
+            )));
+        }
+        if !(transports[0] < macs[0] && macs[0] < phys[0]) {
+            return Err(ConfigurationError::ValidationError(format!(
+                "NEM id {} layer order must be transport -> mac -> phy (with optional shims)",
+                id
+            )));
+        }
+        if let Some(layer) = config.layers.iter().find(|layer| {
+            !matches!(
+                layer.layer_type.as_str(),
+                "transport" | "shim" | "mac" | "phy"
+            )
+        }) {
+            return Err(ConfigurationError::ValidationError(format!(
+                "NEM id {} contains unknown layer type {}",
+                id, layer.layer_type
             )));
         }
     }
@@ -288,10 +313,18 @@ pub fn parse_platform(file_path: &Path) -> Result<PlatformConfig, ConfigurationE
         params: parse_params(root)?,
     };
 
+    let mut nem_ids = std::collections::HashSet::new();
     for child in root.children().filter(|c| c.is_element()) {
         let name = child.tag_name().name();
         if name == "nem" {
-            config.nems.push(parse_nem(file_path, child)?);
+            let nem = parse_nem(file_path, child)?;
+            if !nem_ids.insert(nem.id) {
+                return Err(ConfigurationError::ValidationError(format!(
+                    "duplicate NEM id {}",
+                    nem.id
+                )));
+            }
+            config.nems.push(nem);
         }
     }
 

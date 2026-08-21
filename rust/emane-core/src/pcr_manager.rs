@@ -12,6 +12,12 @@ pub struct PCRManager {
     precision_factor: i32,
 }
 
+impl Default for PCRManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PCRManager {
     pub fn new() -> Self {
         Self {

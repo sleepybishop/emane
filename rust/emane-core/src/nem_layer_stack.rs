@@ -13,6 +13,12 @@ pub struct NemLayerStack {
     layers: Vec<*mut c_void>,
 }
 
+impl Default for NemLayerStack {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NemLayerStack {
     pub fn new() -> Self {
         Self { layers: Vec::new() }

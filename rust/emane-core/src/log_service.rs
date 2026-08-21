@@ -46,7 +46,7 @@ pub extern "C" fn emane_rs_log(level: i32, msg: *const c_char) {
         libc::localtime_r(&time_t, &mut tm);
     }
 
-    let lvl_str = if level >= 0 && level <= 4 {
+    let lvl_str = if (0..=4).contains(&level) {
         LEVEL_STRINGS[level as usize]
     } else {
         "?"

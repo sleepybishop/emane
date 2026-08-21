@@ -18,7 +18,9 @@ pub struct TunTap {
 
 impl TunTap {
     pub fn new(path: &str, name: &str) -> std::io::Result<Self> {
-        let path_c = std::ffi::CString::new(path).unwrap();
+        let path_c = std::ffi::CString::new(path).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "device path contains NUL")
+        })?;
         let fd = unsafe { libc::open(path_c.as_ptr(), libc::O_RDWR) };
         if fd < 0 {
             return Err(std::io::Error::last_os_error());
@@ -43,6 +45,11 @@ impl TunTap {
         }
 
         let ctrl_sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+        if ctrl_sock < 0 {
+            let err = std::io::Error::last_os_error();
+            unsafe { libc::close(fd) };
+            return Err(err);
+        }
         if unsafe { libc::ioctl(ctrl_sock, SIOCGIFINDEX, &ifr) } < 0 {
             let err = std::io::Error::last_os_error();
             unsafe {
@@ -77,6 +84,9 @@ impl TunTap {
 
     fn get_flags(&self) -> std::io::Result<i32> {
         let ctrl_sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+        if ctrl_sock < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
         let mut ifr: ifreq = unsafe { std::mem::zeroed() };
         let name_bytes = self.name.as_bytes();
         let len = std::cmp::min(name_bytes.len(), 15);
@@ -98,13 +108,22 @@ impl TunTap {
 
     fn set_flags(&self, newflags: i32, cmd: i32) -> std::io::Result<()> {
         let ctrl_sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+        if ctrl_sock < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
         let mut ifr: ifreq = unsafe { std::mem::zeroed() };
         let name_bytes = self.name.as_bytes();
         let len = std::cmp::min(name_bytes.len(), 15);
         for i in 0..len {
             ifr.ifr_name[i] = name_bytes[i] as libc::c_char;
         }
-        let current_flags = self.get_flags()?;
+        let current_flags = match self.get_flags() {
+            Ok(flags) => flags,
+            Err(error) => {
+                unsafe { libc::close(ctrl_sock) };
+                return Err(error);
+            }
+        };
         unsafe {
             ifr.ifr_ifru.ifru_flags = if cmd > 0 {
                 (current_flags | newflags) as libc::c_short
@@ -152,6 +171,9 @@ impl TunTap {
         }
 
         let ctrl_sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+        if ctrl_sock < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
         if unsafe { libc::ioctl(ctrl_sock, SIOCSIFHWADDR, &ifr) } < 0 {
             let err = std::io::Error::last_os_error();
             unsafe {
@@ -179,8 +201,15 @@ pub extern "C" fn emane_rs_tuntap_new_ffi(
     path: *const libc::c_char,
     name: *const libc::c_char,
 ) -> *mut TunTap {
-    let p = unsafe { std::ffi::CStr::from_ptr(path).to_str().unwrap_or("") };
-    let n = unsafe { std::ffi::CStr::from_ptr(name).to_str().unwrap_or("") };
+    if path.is_null() || name.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(p) = (unsafe { std::ffi::CStr::from_ptr(path) }).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let Ok(n) = (unsafe { std::ffi::CStr::from_ptr(name) }).to_str() else {
+        return std::ptr::null_mut();
+    };
     match TunTap::new(p, n) {
         Ok(t) => Box::into_raw(Box::new(t)),
         Err(_) => std::ptr::null_mut(),
@@ -198,6 +227,9 @@ pub extern "C" fn emane_rs_tuntap_free_ffi(ptr: *mut TunTap) {
 
 #[no_mangle]
 pub extern "C" fn emane_rs_tuntap_activate_ffi(ptr: *mut TunTap, arp_enabled: bool) -> libc::c_int {
+    if ptr.is_null() {
+        return -1;
+    }
     let tt = unsafe { &*ptr };
     match tt.activate(arp_enabled) {
         Ok(_) => 0,
@@ -207,6 +239,9 @@ pub extern "C" fn emane_rs_tuntap_activate_ffi(ptr: *mut TunTap, arp_enabled: bo
 
 #[no_mangle]
 pub extern "C" fn emane_rs_tuntap_deactivate_ffi(ptr: *mut TunTap) -> libc::c_int {
+    if ptr.is_null() {
+        return -1;
+    }
     let tt = unsafe { &*ptr };
     match tt.deactivate() {
         Ok(_) => 0,
@@ -216,12 +251,18 @@ pub extern "C" fn emane_rs_tuntap_deactivate_ffi(ptr: *mut TunTap) -> libc::c_in
 
 #[no_mangle]
 pub extern "C" fn emane_rs_tuntap_get_handle_ffi(ptr: *mut TunTap) -> libc::c_int {
+    if ptr.is_null() {
+        return -1;
+    }
     let tt = unsafe { &*ptr };
     tt.fd
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_tuntap_set_ethaddr_ffi(ptr: *mut TunTap, id: u16) -> libc::c_int {
+    if ptr.is_null() {
+        return -1;
+    }
     let tt = unsafe { &*ptr };
     match tt.set_ethaddr(id) {
         Ok(_) => 0,
@@ -235,6 +276,9 @@ pub extern "C" fn emane_rs_tuntap_readv_ffi(
     iov: *mut libc::iovec,
     iov_len: libc::size_t,
 ) -> libc::c_int {
+    if ptr.is_null() || (iov_len != 0 && iov.is_null()) {
+        return -1;
+    }
     let tt = unsafe { &*ptr };
     unsafe { libc::readv(tt.fd, iov, iov_len as libc::c_int) as libc::c_int }
 }
@@ -245,6 +289,9 @@ pub extern "C" fn emane_rs_tuntap_writev_ffi(
     iov: *const libc::iovec,
     iov_len: libc::size_t,
 ) -> libc::c_int {
+    if ptr.is_null() || (iov_len != 0 && iov.is_null()) {
+        return -1;
+    }
     let tt = unsafe { &*ptr };
     unsafe { libc::writev(tt.fd, iov, iov_len as libc::c_int) as libc::c_int }
 }

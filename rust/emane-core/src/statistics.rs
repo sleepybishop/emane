@@ -72,6 +72,7 @@ pub struct FfiStatisticTableQueryResult {
     pub len: usize,
 }
 
+#[cfg(not(test))]
 extern "C" {
     fn emane_c_statistic_as_any(p_statistic: *mut std::ffi::c_void) -> FfiAny;
     fn emane_c_statistic_free_any_string(s: *const c_char);
@@ -91,6 +92,57 @@ extern "C" {
         rows: *mut FfiTableRow,
         rows_len: usize,
     );
+}
+
+#[cfg(test)]
+unsafe extern "C" fn emane_c_statistic_as_any(_: *mut std::ffi::c_void) -> FfiAny {
+    FfiAny {
+        any_type: 1,
+        i64_value: 0,
+        u64_value: 0,
+        d_value: 0.0,
+        s_value: std::ptr::null(),
+    }
+}
+
+#[cfg(test)]
+unsafe extern "C" fn emane_c_statistic_free_any_string(_: *const c_char) {}
+
+#[cfg(test)]
+unsafe extern "C" fn emane_c_statistic_clear(_: *mut std::ffi::c_void) {}
+
+#[cfg(test)]
+unsafe extern "C" fn emane_c_statistic_table_clear(
+    _: *mut std::ffi::c_void,
+    _: *mut std::ffi::c_void,
+) {
+}
+
+#[cfg(test)]
+unsafe extern "C" fn emane_c_statistic_table_get_values(
+    _: *mut std::ffi::c_void,
+    out_labels: *mut FfiStringArray,
+    out_rows: *mut *mut FfiTableRow,
+    out_rows_len: *mut usize,
+) {
+    if let Some(labels) = out_labels.as_mut() {
+        labels.data = std::ptr::null();
+        labels.len = 0;
+    }
+    if let Some(rows) = out_rows.as_mut() {
+        *rows = std::ptr::null_mut();
+    }
+    if let Some(length) = out_rows_len.as_mut() {
+        *length = 0;
+    }
+}
+
+#[cfg(test)]
+unsafe extern "C" fn emane_c_statistic_table_free_values(
+    _: FfiStringArray,
+    _: *mut FfiTableRow,
+    _: usize,
+) {
 }
 
 pub struct StatisticInfo {
@@ -153,7 +205,7 @@ pub extern "C" fn emane_rs_statistic_register(
     err_len: usize,
 ) {
     let mut s = get_statistic_service().lock().unwrap();
-    let store = s.stats.entry(build_id).or_insert_with(HashMap::new);
+    let store = s.stats.entry(build_id).or_default();
     let name = unsafe { CStr::from_ptr(s_name).to_string_lossy().into_owned() };
 
     if name.chars().any(|c| !c.is_alphanumeric() && c != '.') {
@@ -198,7 +250,7 @@ pub extern "C" fn emane_rs_statistic_register_table(
     err_len: usize,
 ) {
     let mut s = get_statistic_service().lock().unwrap();
-    let store = s.tables.entry(build_id).or_insert_with(HashMap::new);
+    let store = s.tables.entry(build_id).or_default();
     let name = unsafe { CStr::from_ptr(s_name).to_string_lossy().into_owned() };
 
     if name.chars().any(|c| !c.is_alphanumeric() && c != '.') {
@@ -296,9 +348,7 @@ pub extern "C" fn emane_rs_statistic_free_query_result(res: FfiStatisticQueryRes
             }
         }
         unsafe {
-            drop(Box::from_raw(std::slice::from_raw_parts_mut(
-                res.data, res.len,
-            )));
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(res.data, res.len)));
         }
     }
 }
@@ -449,9 +499,7 @@ pub extern "C" fn emane_rs_statistic_free_table_query_result(res: FfiStatisticTa
             }
         }
         unsafe {
-            drop(Box::from_raw(std::slice::from_raw_parts_mut(
-                res.data, res.len,
-            )));
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(res.data, res.len)));
         }
     }
 }
@@ -532,9 +580,7 @@ pub extern "C" fn emane_rs_statistic_free_manifest(res: FfiStatisticManifest) {
             }
         }
         unsafe {
-            drop(Box::from_raw(std::slice::from_raw_parts_mut(
-                res.data, res.len,
-            )));
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(res.data, res.len)));
         }
     }
 }
@@ -573,9 +619,7 @@ pub extern "C" fn emane_rs_statistic_free_table_manifest(res: FfiStatisticTableM
             }
         }
         unsafe {
-            drop(Box::from_raw(std::slice::from_raw_parts_mut(
-                res.data, res.len,
-            )));
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(res.data, res.len)));
         }
     }
 }

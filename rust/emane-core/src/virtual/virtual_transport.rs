@@ -53,16 +53,26 @@ pub extern "C" fn emane_rs_virtual_transport_start(
     device_name: *const c_char,
     arp_mode: bool,
 ) -> i32 {
+    if ptr.is_null() || device_path.is_null() || device_name.is_null() {
+        return -1;
+    }
     let vt = unsafe { &mut *ptr };
-    let path = unsafe { CStr::from_ptr(device_path).to_str().unwrap() };
-    let name = unsafe { CStr::from_ptr(device_name).to_str().unwrap() };
+    if vt.thread.is_some() {
+        return -1;
+    }
+    let Ok(path) = (unsafe { CStr::from_ptr(device_path) }).to_str() else {
+        return -1;
+    };
+    let Ok(name) = (unsafe { CStr::from_ptr(device_name) }).to_str() else {
+        return -1;
+    };
 
     match TunTap::new(path, name) {
         Ok(tun) => {
-            if let Err(_) = tun.set_ethaddr(vt.id) {
+            if tun.set_ethaddr(vt.id).is_err() {
                 return -1;
             }
-            if let Err(_) = tun.activate(arp_mode) {
+            if tun.activate(arp_mode).is_err() {
                 return -1;
             }
             vt.canceled.store(false, Ordering::SeqCst);
@@ -76,11 +86,23 @@ pub extern "C" fn emane_rs_virtual_transport_start(
             vt.thread = Some(thread::spawn(move || {
                 let mut buf = [0u8; 65535];
                 while !canceled.load(Ordering::SeqCst) {
+                    let mut descriptor = libc::pollfd {
+                        fd: tun_arc.fd,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    let ready = unsafe { libc::poll(&mut descriptor, 1, 100) };
+                    if ready == 0 {
+                        continue;
+                    }
+                    if ready < 0 || descriptor.revents & libc::POLLIN == 0 {
+                        break;
+                    }
                     let mut iov = iovec {
                         iov_base: buf.as_mut_ptr() as *mut c_void,
                         iov_len: buf.len(),
                     };
-                    let len = unsafe { readv(tun_arc.fd, &mut iov, 1) };
+                    let len = unsafe { readv(tun_arc.fd, &iov, 1) };
                     if len > 0 {
                         unsafe {
                             let cpp_obj = cpp_obj_usize as *mut c_void;
@@ -110,12 +132,13 @@ pub extern "C" fn emane_rs_virtual_transport_stop(ptr: *mut VirtualTransport) {
 impl VirtualTransport {
     fn stop(&mut self) {
         self.canceled.store(true, Ordering::SeqCst);
+        if let Some(tun) = &self.tun_tap {
+            let _ = tun.deactivate();
+        }
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
-        if let Some(tun) = self.tun_tap.take() {
-            let _ = tun.deactivate();
-        }
+        self.tun_tap.take();
     }
 }
 
@@ -125,7 +148,7 @@ pub extern "C" fn emane_rs_virtual_transport_process_upstream_packet(
     buf: *const u8,
     len: usize,
 ) -> i32 {
-    if ptr.is_null() {
+    if ptr.is_null() || (len != 0 && buf.is_null()) {
         return -1;
     }
     let vt = unsafe { &*ptr };
@@ -134,7 +157,7 @@ pub extern "C" fn emane_rs_virtual_transport_process_upstream_packet(
             iov_base: buf as *const _ as *mut c_void,
             iov_len: len,
         };
-        let ret = unsafe { writev(tun.fd, &mut iov, 1) };
+        let ret = unsafe { writev(tun.fd, &iov, 1) };
         if ret < 0 {
             return -1;
         }

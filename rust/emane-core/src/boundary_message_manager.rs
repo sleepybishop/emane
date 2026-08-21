@@ -1,10 +1,11 @@
 use libc::iovec;
 use std::ffi::CStr;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream, UdpSocket};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 use std::os::raw::{c_char, c_void};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 extern "C" {
     fn emane_c_boundary_manager_handle_message(manager_ptr: *mut c_void, buf: *mut u8, len: usize);
@@ -45,77 +46,85 @@ pub extern "C" fn emane_rs_boundary_manager_free(ptr: *mut Arc<BoundaryMessageMa
     if !ptr.is_null() {
         let state_box = unsafe { Box::from_raw(ptr) };
         let state = *state_box;
-
-        {
-            let mut cancel = state.cancel.lock().unwrap();
-            *cancel = true;
-        }
-
-        let handle = state.thread_handle.lock().unwrap().take();
-        if let Some(h) = handle {
-            let _ = h.join();
-        }
+        stop_state(&state);
     }
 }
 
 fn handle_udp(state: Arc<BoundaryMessageManagerState>, local_addr: String, _remote_addr: String) {
-    let socket = UdpSocket::bind(&local_addr).expect("Unable to bind UDP");
-    socket.set_nonblocking(false).unwrap();
-    state
-        .udp_socket
-        .lock()
-        .unwrap()
-        .replace(socket.try_clone().unwrap());
+    let Ok(socket) = UdpSocket::bind(&local_addr) else {
+        return;
+    };
+    if socket
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .is_err()
+    {
+        return;
+    }
+    let Ok(clone) = socket.try_clone() else {
+        return;
+    };
+    state.udp_socket.lock().unwrap().replace(clone);
 
     let mut buf = [0u8; 65536];
     loop {
         if *state.cancel.lock().unwrap() {
             break;
         }
-        if let Ok((len, _)) = socket.recv_from(&mut buf) {
-            unsafe {
+        match socket.recv_from(&mut buf) {
+            Ok((len, _)) => unsafe {
                 emane_c_boundary_manager_handle_message(state.c_manager_ptr, buf.as_mut_ptr(), len);
-            }
-        } else {
-            break;
+            },
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(_) => break,
         }
     }
 }
 
 fn handle_tcp_server(state: Arc<BoundaryMessageManagerState>, local_addr: String) {
-    let listener = TcpListener::bind(&local_addr).expect("Unable to bind TCP");
-    listener.set_nonblocking(false).unwrap();
+    let Ok(listener) = TcpListener::bind(&local_addr) else {
+        return;
+    };
+    if listener.set_nonblocking(true).is_err() {
+        return;
+    }
 
-    for stream in listener.incoming() {
+    loop {
         if *state.cancel.lock().unwrap() {
             break;
         }
-        if let Ok(mut s) = stream {
-            state
-                .tcp_stream
-                .lock()
-                .unwrap()
-                .replace(s.try_clone().unwrap());
-            let mut header_buf = [0u8; 6]; // length of NetAdapterHeader is 6
-            loop {
-                if *state.cancel.lock().unwrap() {
-                    break;
-                }
-                if s.read_exact(&mut header_buf).is_ok() {
-                    let mut len_bytes = [0u8; 4];
-                    len_bytes.copy_from_slice(&header_buf[2..6]);
-                    let msg_len = u32::from_be_bytes(len_bytes) as usize;
+        match listener.accept() {
+            Ok((mut s, _)) => {
+                let Ok(clone) = s.try_clone() else {
+                    continue;
+                };
+                state.tcp_stream.lock().unwrap().replace(clone);
+                let mut header_buf = [0u8; 6]; // length of NetAdapterHeader is 6
+                loop {
+                    if *state.cancel.lock().unwrap() {
+                        break;
+                    }
+                    if s.read_exact(&mut header_buf).is_ok() {
+                        let mut len_bytes = [0u8; 4];
+                        len_bytes.copy_from_slice(&header_buf[2..6]);
+                        let msg_len = u32::from_be_bytes(len_bytes) as usize;
 
-                    if msg_len >= 6 {
-                        let mut full_buf = vec![0u8; msg_len];
-                        full_buf[0..6].copy_from_slice(&header_buf);
-                        if s.read_exact(&mut full_buf[6..]).is_ok() {
-                            unsafe {
-                                emane_c_boundary_manager_handle_message(
-                                    state.c_manager_ptr,
-                                    full_buf.as_mut_ptr(),
-                                    msg_len,
-                                );
+                        if (6..=64 * 1024 * 1024).contains(&msg_len) {
+                            let mut full_buf = vec![0u8; msg_len];
+                            full_buf[0..6].copy_from_slice(&header_buf);
+                            if s.read_exact(&mut full_buf[6..]).is_ok() {
+                                unsafe {
+                                    emane_c_boundary_manager_handle_message(
+                                        state.c_manager_ptr,
+                                        full_buf.as_mut_ptr(),
+                                        msg_len,
+                                    );
+                                }
+                            } else {
+                                break;
                             }
                         } else {
                             break;
@@ -123,10 +132,12 @@ fn handle_tcp_server(state: Arc<BoundaryMessageManagerState>, local_addr: String
                     } else {
                         break;
                     }
-                } else {
-                    break;
                 }
             }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => break,
         }
     }
 }
@@ -136,12 +147,18 @@ fn handle_tcp_client(state: Arc<BoundaryMessageManagerState>, remote_addr: Strin
         if *state.cancel.lock().unwrap() {
             break;
         }
-        if let Ok(mut s) = TcpStream::connect(&remote_addr) {
-            state
-                .tcp_stream
-                .lock()
-                .unwrap()
-                .replace(s.try_clone().unwrap());
+        let stream = remote_addr.to_socket_addrs().ok().and_then(|addresses| {
+            addresses
+                .filter_map(|address| {
+                    TcpStream::connect_timeout(&address, Duration::from_millis(200)).ok()
+                })
+                .next()
+        });
+        if let Some(mut s) = stream {
+            let Ok(clone) = s.try_clone() else {
+                continue;
+            };
+            state.tcp_stream.lock().unwrap().replace(clone);
             let mut header_buf = [0u8; 6];
             loop {
                 if *state.cancel.lock().unwrap() {
@@ -152,7 +169,7 @@ fn handle_tcp_client(state: Arc<BoundaryMessageManagerState>, remote_addr: Strin
                     len_bytes.copy_from_slice(&header_buf[2..6]);
                     let msg_len = u32::from_be_bytes(len_bytes) as usize;
 
-                    if msg_len >= 6 {
+                    if (6..=64 * 1024 * 1024).contains(&msg_len) {
                         let mut full_buf = vec![0u8; msg_len];
                         full_buf[0..6].copy_from_slice(&header_buf);
                         if s.read_exact(&mut full_buf[6..]).is_ok() {
@@ -186,7 +203,16 @@ pub extern "C" fn emane_rs_boundary_manager_open(
     remote_addr: *const c_char,
     protocol: i32,
 ) {
+    if ptr.is_null() || local_addr.is_null() || remote_addr.is_null() || !matches!(protocol, 0..=2)
+    {
+        return;
+    }
     let state = unsafe { &*ptr }.clone();
+
+    if state.thread_handle.lock().unwrap().is_some() {
+        return;
+    }
+    *state.cancel.lock().unwrap() = false;
 
     let local = unsafe { CStr::from_ptr(local_addr) }
         .to_string_lossy()
@@ -213,7 +239,14 @@ pub extern "C" fn emane_rs_boundary_manager_open(
 
 #[no_mangle]
 pub extern "C" fn emane_rs_boundary_manager_close(ptr: *mut Arc<BoundaryMessageManagerState>) {
+    if ptr.is_null() {
+        return;
+    }
     let state = unsafe { &*ptr };
+    stop_state(state);
+}
+
+fn stop_state(state: &Arc<BoundaryMessageManagerState>) {
     {
         let mut cancel = state.cancel.lock().unwrap();
         *cancel = true;
@@ -238,18 +271,30 @@ pub extern "C" fn emane_rs_boundary_manager_send(
     iov: *const iovec,
     iov_len: usize,
 ) {
+    if ptr.is_null() || (iov_len != 0 && iov.is_null()) {
+        return;
+    }
     let state = unsafe { &*ptr };
 
-    let mut total_len = 0;
-    let iov_slice = unsafe { std::slice::from_raw_parts(iov, iov_len) };
+    let iov_slice = if iov_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(iov, iov_len) }
+    };
     let mut buf = Vec::new();
 
-    for i in 0..iov_len {
-        let slice = unsafe {
-            std::slice::from_raw_parts(iov_slice[i].iov_base as *const u8, iov_slice[i].iov_len)
-        };
+    for item in iov_slice {
+        if item.iov_len == 0 {
+            continue;
+        }
+        if item.iov_base.is_null()
+            || buf.len().checked_add(item.iov_len).is_none()
+            || buf.len() + item.iov_len > 64 * 1024 * 1024
+        {
+            return;
+        }
+        let slice = unsafe { std::slice::from_raw_parts(item.iov_base as *const u8, item.iov_len) };
         buf.extend_from_slice(slice);
-        total_len += iov_slice[i].iov_len;
     }
 
     let udp = state
@@ -257,10 +302,11 @@ pub extern "C" fn emane_rs_boundary_manager_send(
         .lock()
         .unwrap()
         .as_ref()
-        .map(|s| s.try_clone().unwrap());
+        .and_then(|socket| socket.try_clone().ok());
     if let Some(sock) = udp {
-        let remote = state.remote_addr.lock().unwrap().clone().unwrap();
-        let _ = sock.send_to(&buf, &remote);
+        if let Some(remote) = state.remote_addr.lock().unwrap().clone() {
+            let _ = sock.send_to(&buf, &remote);
+        }
         return;
     }
 
@@ -269,7 +315,7 @@ pub extern "C" fn emane_rs_boundary_manager_send(
         .lock()
         .unwrap()
         .as_ref()
-        .map(|s| s.try_clone().unwrap());
+        .and_then(|socket| socket.try_clone().ok());
     if let Some(mut sock) = tcp {
         let _ = sock.write_all(&buf);
     }

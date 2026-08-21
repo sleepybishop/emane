@@ -45,6 +45,12 @@ pub struct BuildIdService {
     event_agents: Vec<u16>,
 }
 
+impl Default for BuildIdService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BuildIdService {
     pub fn new() -> Self {
         BuildIdService {
@@ -169,7 +175,7 @@ pub extern "C" fn emane_rs_buildid_register_layer(
     let entry = s
         .nem_layer_components
         .entry(nem_id)
-        .or_insert_with(Vec::new);
+        .or_default();
     entry.push(NEMLayerComponent {
         build_id,
         layer_type,
@@ -254,17 +260,12 @@ pub extern "C" fn emane_rs_buildid_free_nem_layer_component_map(map: FfiNEMLayer
                     }
                 }
                 unsafe {
-                    drop(Box::from_raw(std::slice::from_raw_parts_mut(
-                        list.components,
-                        list.len,
-                    )));
+                    drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(list.components, list.len)));
                 }
             }
         }
         unsafe {
-            drop(Box::from_raw(std::slice::from_raw_parts_mut(
-                map.nems, map.len,
-            )));
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(map.nems, map.len)));
         }
     }
 }

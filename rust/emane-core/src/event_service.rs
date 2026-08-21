@@ -58,10 +58,10 @@ pub extern "C" fn emane_rs_event_service_register_user(
 pub extern "C" fn emane_rs_event_service_register_event(build_id: u16, event_id: u16) -> bool {
     let mut reg = get_event_service_registry().lock().unwrap();
     if reg.users.contains_key(&build_id) {
-        reg.registrations
-            .entry(event_id)
-            .or_insert_with(Vec::new)
-            .push(build_id);
+        let build_ids = reg.registrations.entry(event_id).or_default();
+        if !build_ids.contains(&build_id) {
+            build_ids.push(build_id);
+        }
         true
     } else {
         false
@@ -76,23 +76,29 @@ pub extern "C" fn emane_rs_event_service_route_local_event(
     data: *const c_char,
     len: usize,
 ) {
-    let reg = get_event_service_registry().lock().unwrap();
-    if let Some(build_ids) = reg.registrations.get(&event_id) {
-        for &registered_build_id in build_ids {
-            if let Some(user) = reg.users.get(&registered_build_id) {
-                if build_id == 0 || registered_build_id != build_id {
-                    if nem_id == 0 || user.nem_id == nem_id {
-                        unsafe {
-                            emane_c_event_service_user_process_event(
-                                user.p_user.0,
-                                event_id,
-                                data,
-                                len,
-                            );
-                        }
-                    }
-                }
-            }
+    let callbacks: Vec<usize> = {
+        let reg = get_event_service_registry().lock().unwrap();
+        reg.registrations
+            .get(&event_id)
+            .into_iter()
+            .flatten()
+            .filter_map(|registered_build_id| {
+                reg.users.get(registered_build_id).and_then(|user| {
+                    ((build_id == 0 || *registered_build_id != build_id)
+                        && (nem_id == 0 || user.nem_id == nem_id))
+                        .then_some(user.p_user.0 as usize)
+                })
+            })
+            .collect()
+    };
+    for callback in callbacks {
+        unsafe {
+            emane_c_event_service_user_process_event(
+                callback as *mut std::ffi::c_void,
+                event_id,
+                data,
+                len,
+            );
         }
     }
 }
@@ -105,23 +111,29 @@ pub extern "C" fn emane_rs_event_service_process_event_message(
     len: usize,
     ignore_nem: u16,
 ) {
-    let reg = get_event_service_registry().lock().unwrap();
-    if let Some(build_ids) = reg.registrations.get(&event_id) {
-        for &registered_build_id in build_ids {
-            if let Some(user) = reg.users.get(&registered_build_id) {
-                if ignore_nem == 0 || ignore_nem != user.nem_id {
-                    if nem_id == 0 || user.nem_id == nem_id {
-                        unsafe {
-                            emane_c_event_service_user_process_event(
-                                user.p_user.0,
-                                event_id,
-                                data,
-                                len,
-                            );
-                        }
-                    }
-                }
-            }
+    let callbacks: Vec<usize> = {
+        let reg = get_event_service_registry().lock().unwrap();
+        reg.registrations
+            .get(&event_id)
+            .into_iter()
+            .flatten()
+            .filter_map(|registered_build_id| {
+                reg.users.get(registered_build_id).and_then(|user| {
+                    ((ignore_nem == 0 || ignore_nem != user.nem_id)
+                        && (nem_id == 0 || user.nem_id == nem_id))
+                        .then_some(user.p_user.0 as usize)
+                })
+            })
+            .collect()
+    };
+    for callback in callbacks {
+        unsafe {
+            emane_c_event_service_user_process_event(
+                callback as *mut std::ffi::c_void,
+                event_id,
+                data,
+                len,
+            );
         }
     }
 }
@@ -139,6 +151,7 @@ pub struct EventServiceState {
     pub uuid: [u8; 16],
     pub seq_num: u64,
     pub mcast_addr: Option<String>,
+    pub running: bool,
 }
 
 fn get_event_service_state() -> &'static Mutex<EventServiceState> {
@@ -148,6 +161,7 @@ fn get_event_service_state() -> &'static Mutex<EventServiceState> {
             uuid: [0; 16],
             seq_num: 0,
             mcast_addr: None,
+            running: false,
         })
     })
 }
@@ -160,14 +174,13 @@ pub extern "C" fn emane_rs_event_service_mcast_open(
     loopback: bool,
     uuid: *const u8,
 ) -> bool {
-    let addr_str = unsafe { std::ffi::CStr::from_ptr(addr) }.to_string_lossy();
-    let mut state = get_event_service_state().lock().unwrap();
-    state.mcast_addr = Some(addr_str.clone().into_owned());
-    unsafe {
-        state
-            .uuid
-            .copy_from_slice(std::slice::from_raw_parts(uuid, 16));
+    if addr.is_null() || uuid.is_null() || !(0..=255).contains(&ttl) {
+        return false;
     }
+    if get_event_service_state().lock().unwrap().running {
+        return false;
+    }
+    let addr_str = unsafe { std::ffi::CStr::from_ptr(addr) }.to_string_lossy();
 
     let sock_addr: SocketAddr = match addr_str.parse() {
         Ok(a) => a,
@@ -184,15 +197,15 @@ pub extern "C" fn emane_rs_event_service_mcast_open(
         Err(_) => return false,
     };
 
-    if let Err(_) = socket.set_reuse_address(true) {
+    if socket.set_reuse_address(true).is_err() {
         return false;
     }
 
     if sock_addr.is_ipv4() {
-        if let Err(_) = socket.set_multicast_ttl_v4(ttl as u32) {
+        if socket.set_multicast_ttl_v4(ttl as u32).is_err() {
             return false;
         }
-        if let Err(_) = socket.set_multicast_loop_v4(loopback) {
+        if socket.set_multicast_loop_v4(loopback).is_err() {
             return false;
         }
 
@@ -200,24 +213,32 @@ pub extern "C" fn emane_rs_event_service_mcast_open(
             std::net::IpAddr::V4(ip) => ip,
             _ => return false,
         };
-        if let Err(_) = socket.bind(&socket2::SockAddr::from(sock_addr)) {
+        let bind_addr = SocketAddr::new(
+            std::net::IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            sock_addr.port(),
+        );
+        if socket.bind(&socket2::SockAddr::from(bind_addr)).is_err() {
             return false;
         }
-        if let Err(_) = socket.join_multicast_v4(&ip, &Ipv4Addr::new(0, 0, 0, 0)) {
+        if socket.join_multicast_v4(&ip, &Ipv4Addr::new(0, 0, 0, 0)).is_err() {
             return false;
         }
     } else {
-        if let Err(_) = socket.set_multicast_loop_v6(loopback) {
+        if socket.set_multicast_loop_v6(loopback).is_err() {
             return false;
         }
-        if let Err(_) = socket.bind(&socket2::SockAddr::from(sock_addr)) {
+        let bind_addr = SocketAddr::new(
+            std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
+            sock_addr.port(),
+        );
+        if socket.bind(&socket2::SockAddr::from(bind_addr)).is_err() {
             return false;
         }
         let ip = match sock_addr.ip() {
             std::net::IpAddr::V6(ip) => ip,
             _ => return false,
         };
-        if let Err(_) = socket.join_multicast_v6(&ip, 0) {
+        if socket.join_multicast_v6(&ip, 0).is_err() {
             return false;
         }
     }
@@ -225,7 +246,7 @@ pub extern "C" fn emane_rs_event_service_mcast_open(
     if !device.is_null() {
         let dev_str = unsafe { std::ffi::CStr::from_ptr(device) };
         let bytes = dev_str.to_bytes();
-        if bytes.len() > 0 {
+        if !bytes.is_empty() {
             let mut dev_name = [0u8; libc::IFNAMSIZ];
             let len = std::cmp::min(bytes.len(), libc::IFNAMSIZ - 1);
             dev_name[..len].copy_from_slice(&bytes[..len]);
@@ -235,7 +256,7 @@ pub extern "C" fn emane_rs_event_service_mcast_open(
                     libc::SOL_SOCKET,
                     libc::SO_BINDTODEVICE,
                     dev_name.as_ptr() as *const libc::c_void,
-                    len as libc::socklen_t,
+                    (len + 1) as libc::socklen_t,
                 ) < 0
                 {
                     return false;
@@ -246,8 +267,22 @@ pub extern "C" fn emane_rs_event_service_mcast_open(
 
     let udp_socket: UdpSocket = socket.into();
     *get_event_socket().lock().unwrap() = Some(udp_socket);
+    let mut state = get_event_service_state().lock().unwrap();
+    state.mcast_addr = Some(addr_str.into_owned());
+    unsafe {
+        state
+            .uuid
+            .copy_from_slice(std::slice::from_raw_parts(uuid, 16));
+    }
+    state.running = true;
 
     true
+}
+
+#[no_mangle]
+pub extern "C" fn emane_rs_event_service_mcast_close() {
+    get_event_service_state().lock().unwrap().running = false;
+    get_event_socket().lock().unwrap().take();
 }
 
 use crate::protobufs::emane_message::event::{data::Serialization, Data};
@@ -268,12 +303,19 @@ pub extern "C" fn emane_rs_event_service_send_event_multicast(
     seq_num: u64,
     addr: *const c_char,
 ) {
+    if uuid.is_null() || addr.is_null() || (len != 0 && data.is_null()) || len > u32::MAX as usize {
+        return;
+    }
     let mut msg = Event::default();
 
     let mut serialization = Serialization::default();
     serialization.nem_id = nem_id as u32;
     serialization.event_id = event_id as u32;
-    serialization.data = unsafe { std::slice::from_raw_parts(data as *const u8, len) }.to_vec();
+    serialization.data = if len == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(data as *const u8, len) }.to_vec()
+    };
 
     let mut data_msg = Data::default();
     data_msg.serializations.push(serialization);
@@ -283,14 +325,19 @@ pub extern "C" fn emane_rs_event_service_send_event_multicast(
     msg.sequence_number = seq_num;
 
     let mut buf = Vec::new();
-    if msg.encode(&mut buf).is_ok() {
+    if msg.encode(&mut buf).is_ok() && buf.len() <= u16::MAX as usize {
         let msg_len = buf.len() as u16;
         let mut final_buf = msg_len.to_be_bytes().to_vec();
         final_buf.extend_from_slice(&buf);
 
         let addr_str = unsafe { std::ffi::CStr::from_ptr(addr) }.to_string_lossy();
         if let Ok(sock_addr) = addr_str.parse::<SocketAddr>() {
-            if let Some(sock) = &*get_event_socket().lock().unwrap() {
+            let socket = get_event_socket()
+                .lock()
+                .unwrap()
+                .as_ref()
+                .and_then(|socket| socket.try_clone().ok());
+            if let Some(sock) = socket {
                 if sock.send_to(&final_buf, sock_addr).is_ok() {
                     unsafe {
                         emane_c_event_service_update_stat(0, uuid, event_id); // TYPE_TX
@@ -303,6 +350,9 @@ pub extern "C" fn emane_rs_event_service_send_event_multicast(
 
 #[no_mangle]
 pub extern "C" fn emane_rs_event_service_process_loop(local_uuid: *const u8) {
+    if local_uuid.is_null() {
+        return;
+    }
     let local_uuid_slice = unsafe { std::slice::from_raw_parts(local_uuid, 16) };
 
     let sock = if let Some(s) = &*get_event_socket().lock().unwrap() {
@@ -313,6 +363,12 @@ pub extern "C" fn emane_rs_event_service_process_loop(local_uuid: *const u8) {
     } else {
         return;
     };
+    if sock
+        .set_read_timeout(Some(std::time::Duration::from_millis(200)))
+        .is_err()
+    {
+        return;
+    }
 
     let mut recv_buf = [0u8; 65536];
     loop {
@@ -321,10 +377,15 @@ pub extern "C" fn emane_rs_event_service_process_loop(local_uuid: *const u8) {
                 let packet_len = u16::from_be_bytes([recv_buf[0], recv_buf[1]]) as usize;
                 if len - 2 == packet_len {
                     if let Ok(msg) = Event::decode(&recv_buf[2..len]) {
-                        if msg.uuid != local_uuid_slice {
+                        if msg.uuid.len() == 16 && msg.uuid != local_uuid_slice {
                             for serialization in msg.data.serializations {
-                                let recv_nem_id = serialization.nem_id as u16;
-                                let recv_event_id = serialization.event_id as u16;
+                                let Ok(recv_nem_id) = u16::try_from(serialization.nem_id) else {
+                                    continue;
+                                };
+                                let Ok(recv_event_id) = u16::try_from(serialization.event_id)
+                                else {
+                                    continue;
+                                };
 
                                 emane_rs_event_service_process_event_message(
                                     recv_nem_id,
@@ -347,7 +408,20 @@ pub extern "C" fn emane_rs_event_service_process_loop(local_uuid: *const u8) {
                 }
             }
             Ok(_) => continue,
-            Err(_) => break, // socket closed or error
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                if !get_event_service_state().lock().unwrap().running {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+        if !get_event_service_state().lock().unwrap().running {
+            break;
         }
     }
 }
@@ -360,14 +434,17 @@ pub extern "C" fn emane_rs_event_service_send_event(
     data: *const std::os::raw::c_char,
     len: usize,
 ) {
+    if len != 0 && data.is_null() {
+        return;
+    }
     emane_rs_event_service_route_local_event(build_id, nem_id, event_id, data, len);
 
     let mut state = get_event_service_state().lock().unwrap();
     if let Some(addr) = state.mcast_addr.clone() {
-        state.seq_num += 1;
+        state.seq_num = state.seq_num.wrapping_add(1);
         let seq_num = state.seq_num;
         let c_addr = std::ffi::CString::new(addr.clone()).unwrap();
-        let uuid = state.uuid.clone(); // copy
+        let uuid = state.uuid; // copy
         drop(state); // drop lock before calling multicast function
 
         emane_rs_event_service_send_event_multicast(

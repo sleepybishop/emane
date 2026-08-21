@@ -45,15 +45,14 @@ fn parse_ffi_any(val: &FfiAny) -> Any {
         9 => any.f_value = Some(val.d_value as f32),
         10 => any.d_value = Some(val.d_value),
         12 => any.b_value = Some(val.i64_value != 0),
-        11 | 13 => {
-            if !val.s_value.is_null() {
+        11 | 13
+            if !val.s_value.is_null() => {
                 any.s_value = Some(
                     unsafe { CStr::from_ptr(val.s_value) }
                         .to_string_lossy()
                         .into_owned(),
                 );
             }
-        }
         _ => {}
     }
     any
@@ -118,8 +117,8 @@ fn any_to_ffi_any(any: &Any) -> (FfiAny, Option<CString>) {
 }
 
 fn handle_query_manifest(_build_id: u16) -> response::query::Manifest {
-    let manifest = response::query::Manifest::default();
-    manifest
+    
+    response::query::Manifest::default()
 }
 
 fn handle_query_configuration(

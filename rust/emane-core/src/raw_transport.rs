@@ -51,8 +51,16 @@ pub extern "C" fn emane_rs_raw_transport_start(
     ptr: *mut RawTransport,
     device_name: *const c_char,
 ) -> i32 {
+    if ptr.is_null() || device_name.is_null() {
+        return -1;
+    }
     let rt = unsafe { &mut *ptr };
-    let name = unsafe { CStr::from_ptr(device_name).to_str().unwrap() };
+    if rt.thread.is_some() {
+        return -1;
+    }
+    let Ok(name) = (unsafe { CStr::from_ptr(device_name) }).to_str() else {
+        return -1;
+    };
 
     // Create the RX capture handle
     let rx_cap = match Capture::from_device(name) {
@@ -147,7 +155,7 @@ pub extern "C" fn emane_rs_raw_transport_process_upstream_packet(
     buf: *const u8,
     len: usize,
 ) -> i32 {
-    if ptr.is_null() {
+    if ptr.is_null() || (len != 0 && buf.is_null()) {
         return -1;
     }
     let rt = unsafe { &mut *ptr };

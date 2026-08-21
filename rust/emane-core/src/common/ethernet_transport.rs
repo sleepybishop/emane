@@ -26,6 +26,12 @@ pub struct EthernetTransportState {
     pub mac_cache: Mutex<HashMap<[u8; 6], u16>>,
 }
 
+impl Default for EthernetTransportState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EthernetTransportState {
     pub fn new() -> Self {
         Self {
@@ -53,7 +59,7 @@ pub extern "C" fn emane_rs_ethernet_transport_verify_frame(
     buf: *const c_void,
     len: size_t,
 ) -> c_int {
-    if len < ETH_HEADER_LEN {
+    if buf.is_null() || len < ETH_HEADER_LEN {
         return -1;
     }
 
@@ -150,7 +156,12 @@ pub extern "C" fn emane_rs_ethernet_transport_parse_frame(
     nem_dest: *mut u16,
     dscp: *mut u8,
 ) -> c_int {
-    if state_ptr.is_null() || nem_dest.is_null() || dscp.is_null() || len < ETH_HEADER_LEN {
+    if state_ptr.is_null()
+        || buf.is_null()
+        || nem_dest.is_null()
+        || dscp.is_null()
+        || len < ETH_HEADER_LEN
+    {
         return -1;
     }
 
@@ -248,7 +259,7 @@ pub extern "C" fn emane_rs_ethernet_transport_update_arp_cache(
     broadcast_mode: bool,
     arp_cache_mode: bool,
 ) {
-    if state_ptr.is_null() || len < ETH_HEADER_LEN {
+    if state_ptr.is_null() || buf.is_null() || len < ETH_HEADER_LEN {
         return;
     }
 
@@ -278,8 +289,8 @@ pub extern "C" fn emane_rs_ethernet_transport_update_arp_cache(
                 }
             }
         }
-        ETH_P_IPV6 => {
-            if len >= ETH_HEADER_LEN + IPV6_HEADER_LEN + 8 {
+        ETH_P_IPV6
+            if len >= ETH_HEADER_LEN + IPV6_HEADER_LEN + 8 => {
                 // +8 for ICMPv6 min
                 let next_header = buf_slice[ETH_HEADER_LEN + 6];
                 if next_header == IPV6_P_ICMP {
@@ -291,7 +302,6 @@ pub extern "C" fn emane_rs_ethernet_transport_update_arp_cache(
                     }
                 }
             }
-        }
         _ => {}
     }
 }

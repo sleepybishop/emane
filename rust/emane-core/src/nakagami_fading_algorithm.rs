@@ -6,6 +6,12 @@ pub struct NakagamiFadingAlgorithm {
     rng: StdRng,
 }
 
+impl Default for NakagamiFadingAlgorithm {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NakagamiFadingAlgorithm {
     pub fn new() -> Self {
         Self {

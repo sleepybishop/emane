@@ -45,6 +45,12 @@ pub struct FrameworkPhy {
     pub b_radio_silence_enable: bool,
 }
 
+impl Default for FrameworkPhy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FrameworkPhy {
     pub fn new() -> Self {
         Self {
@@ -154,7 +160,6 @@ impl FrameworkPhy {
                     pkt,
                     4,
                 ); // DROP_CODE_OUT_OF_BAND
-                return;
             }
         }
     }

@@ -351,7 +351,7 @@ pub extern "C" fn emane_rs_neighbor_metric_manager_create(
 pub extern "C" fn emane_rs_neighbor_metric_manager_destroy(ptr: *mut NeighborMetricManager) {
     if !ptr.is_null() {
         unsafe {
-            Box::from_raw(ptr);
+            drop(Box::from_raw(ptr));
         }
     }
 }
