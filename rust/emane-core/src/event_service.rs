@@ -1,25 +1,16 @@
-use crate::config::VoidPtr;
 use std::collections::HashMap;
+use std::ffi::c_void;
 use std::os::raw::c_char;
 use std::sync::{Mutex, OnceLock};
 
-extern "C" {
-    fn emane_c_event_service_user_process_event(
-        p_user: *mut std::ffi::c_void,
-        event_id: u16,
-        data: *const c_char,
-        len: usize,
-    );
-    // Note: LogServiceSingleton::instance() logger might be accessed from C++ if we really need to log
-    // but for now we just omit the debug log inside Rust, or use a C++ callback to log.
-    // We will omit the DEBUG_LEVEL logs that were in the loops for simplicity.
-    fn emane_c_log_debug(msg: *const c_char);
-}
+pub type EventCallback =
+    extern "C" fn(context: *mut c_void, event_id: u16, data: *const u8, len: usize);
 
 pub struct EventServiceUser {
     pub build_id: u16,
     pub nem_id: u16,
-    pub p_user: VoidPtr,
+    context: usize,
+    callback: Option<EventCallback>,
 }
 
 pub struct EventServiceRegistry {
@@ -49,9 +40,36 @@ pub extern "C" fn emane_rs_event_service_register_user(
         EventServiceUser {
             build_id,
             nem_id,
-            p_user: VoidPtr(p_user),
+            context: p_user as usize,
+            callback: None,
         },
     );
+}
+
+pub fn register_native_user(
+    build_id: u16,
+    nem_id: u16,
+    context: *mut c_void,
+    callback: EventCallback,
+) {
+    let mut registry = get_event_service_registry().lock().unwrap();
+    registry.users.insert(
+        build_id,
+        EventServiceUser {
+            build_id,
+            nem_id,
+            context: context as usize,
+            callback: Some(callback),
+        },
+    );
+}
+
+pub fn unregister_user(build_id: u16) {
+    let mut registry = get_event_service_registry().lock().unwrap();
+    registry.users.remove(&build_id);
+    for registrations in registry.registrations.values_mut() {
+        registrations.retain(|registered| *registered != build_id);
+    }
 }
 
 #[no_mangle]
@@ -76,7 +94,10 @@ pub extern "C" fn emane_rs_event_service_route_local_event(
     data: *const c_char,
     len: usize,
 ) {
-    let callbacks: Vec<usize> = {
+    if len != 0 && data.is_null() {
+        return;
+    }
+    let callbacks: Vec<(usize, EventCallback)> = {
         let reg = get_event_service_registry().lock().unwrap();
         reg.registrations
             .get(&event_id)
@@ -86,20 +107,14 @@ pub extern "C" fn emane_rs_event_service_route_local_event(
                 reg.users.get(registered_build_id).and_then(|user| {
                     ((build_id == 0 || *registered_build_id != build_id)
                         && (nem_id == 0 || user.nem_id == nem_id))
-                        .then_some(user.p_user.0 as usize)
+                        .then(|| user.callback.map(|callback| (user.context, callback)))
+                        .flatten()
                 })
             })
             .collect()
     };
-    for callback in callbacks {
-        unsafe {
-            emane_c_event_service_user_process_event(
-                callback as *mut std::ffi::c_void,
-                event_id,
-                data,
-                len,
-            );
-        }
+    for (context, callback) in callbacks {
+        callback(context as *mut c_void, event_id, data.cast(), len);
     }
 }
 
@@ -111,7 +126,10 @@ pub extern "C" fn emane_rs_event_service_process_event_message(
     len: usize,
     ignore_nem: u16,
 ) {
-    let callbacks: Vec<usize> = {
+    if len != 0 && data.is_null() {
+        return;
+    }
+    let callbacks: Vec<(usize, EventCallback)> = {
         let reg = get_event_service_registry().lock().unwrap();
         reg.registrations
             .get(&event_id)
@@ -121,21 +139,25 @@ pub extern "C" fn emane_rs_event_service_process_event_message(
                 reg.users.get(registered_build_id).and_then(|user| {
                     ((ignore_nem == 0 || ignore_nem != user.nem_id)
                         && (nem_id == 0 || user.nem_id == nem_id))
-                        .then_some(user.p_user.0 as usize)
+                        .then(|| user.callback.map(|callback| (user.context, callback)))
+                        .flatten()
                 })
             })
             .collect()
     };
-    for callback in callbacks {
-        unsafe {
-            emane_c_event_service_user_process_event(
-                callback as *mut std::ffi::c_void,
-                event_id,
-                data,
-                len,
-            );
-        }
+    for (context, callback) in callbacks {
+        callback(context as *mut c_void, event_id, data.cast(), len);
     }
+}
+
+pub fn route_serialized_event(nem_id: u16, event_id: u16, data: &[u8], ignore_nem: u16) {
+    emane_rs_event_service_process_event_message(
+        nem_id,
+        event_id,
+        data.as_ptr().cast(),
+        data.len(),
+        ignore_nem,
+    );
 }
 
 use socket2::{Domain, Protocol, Socket, Type};
@@ -152,6 +174,8 @@ pub struct EventServiceState {
     pub seq_num: u64,
     pub mcast_addr: Option<String>,
     pub running: bool,
+    pub transmitted: u64,
+    pub received: u64,
 }
 
 fn get_event_service_state() -> &'static Mutex<EventServiceState> {
@@ -162,6 +186,8 @@ fn get_event_service_state() -> &'static Mutex<EventServiceState> {
             seq_num: 0,
             mcast_addr: None,
             running: false,
+            transmitted: 0,
+            received: 0,
         })
     })
 }
@@ -220,7 +246,10 @@ pub extern "C" fn emane_rs_event_service_mcast_open(
         if socket.bind(&socket2::SockAddr::from(bind_addr)).is_err() {
             return false;
         }
-        if socket.join_multicast_v4(&ip, &Ipv4Addr::new(0, 0, 0, 0)).is_err() {
+        if socket
+            .join_multicast_v4(&ip, &Ipv4Addr::new(0, 0, 0, 0))
+            .is_err()
+        {
             return false;
         }
     } else {
@@ -289,10 +318,6 @@ use crate::protobufs::emane_message::event::{data::Serialization, Data};
 use crate::protobufs::emane_message::Event;
 use prost::Message;
 
-extern "C" {
-    fn emane_c_event_service_update_stat(type_: i32, uuid: *const u8, event_id: u16);
-}
-
 #[no_mangle]
 pub extern "C" fn emane_rs_event_service_send_event_multicast(
     uuid: *const u8,
@@ -339,9 +364,8 @@ pub extern "C" fn emane_rs_event_service_send_event_multicast(
                 .and_then(|socket| socket.try_clone().ok());
             if let Some(sock) = socket {
                 if sock.send_to(&final_buf, sock_addr).is_ok() {
-                    unsafe {
-                        emane_c_event_service_update_stat(0, uuid, event_id); // TYPE_TX
-                    }
+                    let mut state = get_event_service_state().lock().unwrap();
+                    state.transmitted = state.transmitted.saturating_add(1);
                 }
             }
         }
@@ -395,13 +419,8 @@ pub extern "C" fn emane_rs_event_service_process_loop(local_uuid: *const u8) {
                                     0,
                                 );
 
-                                unsafe {
-                                    emane_c_event_service_update_stat(
-                                        1,
-                                        msg.uuid.as_ptr(),
-                                        recv_event_id,
-                                    ); // TYPE_RX
-                                }
+                                let mut state = get_event_service_state().lock().unwrap();
+                                state.received = state.received.saturating_add(1);
                             }
                         }
                     }

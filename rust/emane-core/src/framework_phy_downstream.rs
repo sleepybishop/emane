@@ -99,10 +99,9 @@ pub fn process_downstream_packet(phy: &mut FrameworkPhy, pkt: *mut c_void, msgs:
                 // stub
             }
             // MIMOTxWhileRxInterferenceControlMessage
-            118
-                if phy.compatibility_mode == 2 => {
-                    // stub
-                }
+            118 if phy.compatibility_mode == 2 => {
+                // stub
+            }
             _ => {
                 // ignore
             }

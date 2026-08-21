@@ -17,6 +17,12 @@ pub struct GpsdLocationAgent {
     mag_mps: f64,
 }
 
+impl Drop for GpsdLocationAgent {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 impl GpsdLocationAgent {
     pub fn new(nem_id: u16) -> Self {
         Self {
@@ -33,26 +39,57 @@ impl GpsdLocationAgent {
         }
     }
 
-    pub fn start(&mut self, pseudo_terminal_file: &str) {
+    pub fn nem_id(&self) -> u16 {
+        self.nem_id
+    }
+
+    pub fn process_timed_event(&self) {
+        if self.have_initial_position {
+            self.send_spoofed_nmea(self.lat_degrees, self.lon_degrees, self.alt_meters);
+            if self.have_initial_velocity {
+                self.send_spoofed_gpvtg(self.azm_degrees, self.mag_mps);
+            }
+        }
+    }
+
+    pub fn start(&mut self, pseudo_terminal_file: &str) -> Result<(), String> {
+        if pseudo_terminal_file.is_empty() {
+            return Err("pseudoterminalfile must not be empty".to_string());
+        }
         self.pseudo_terminal_file = pseudo_terminal_file.to_string();
 
         unsafe {
             self.master_pty = posix_openpt(O_RDWR | O_NOCTTY);
             if self.master_pty < 0 {
-                panic!("posix_openpt failed");
+                return Err(format!(
+                    "posix_openpt failed: {}",
+                    std::io::Error::last_os_error()
+                ));
             }
 
             if grantpt(self.master_pty) < 0 {
-                panic!("grantpt failed");
+                self.stop();
+                return Err(format!(
+                    "grantpt failed: {}",
+                    std::io::Error::last_os_error()
+                ));
             }
 
             if unlockpt(self.master_pty) < 0 {
-                panic!("unlockpt failed");
+                self.stop();
+                return Err(format!(
+                    "unlockpt failed: {}",
+                    std::io::Error::last_os_error()
+                ));
             }
 
             let mut pts_name = [0i8; 1024];
             if ptsname_r(self.master_pty, pts_name.as_mut_ptr(), 1024) != 0 {
-                panic!("ptsname_r failed");
+                self.stop();
+                return Err(format!(
+                    "ptsname_r failed: {}",
+                    std::io::Error::last_os_error()
+                ));
             }
 
             let pts_str = CStr::from_ptr(pts_name.as_ptr())
@@ -61,10 +98,12 @@ impl GpsdLocationAgent {
 
             // Create symlink
             let _ = std::fs::remove_file(&self.pseudo_terminal_file);
-            if std::os::unix::fs::symlink(&pts_str, &self.pseudo_terminal_file).is_err() {
-                panic!("symlink failed");
+            if let Err(error) = std::os::unix::fs::symlink(&pts_str, &self.pseudo_terminal_file) {
+                self.stop();
+                return Err(format!("failed to create pseudo-terminal link: {error}"));
             }
         }
+        Ok(())
     }
 
     pub fn stop(&mut self) {
@@ -192,6 +231,18 @@ impl GpsdLocationAgent {
         Self::do_checksum_nmea(&mut buf);
         self.write_pty(&buf);
     }
+
+    pub fn update_location(&mut self, lat: f64, lon: f64, alt: f64, velocity: Option<(f64, f64)>) {
+        self.lat_degrees = lat;
+        self.lon_degrees = lon;
+        self.alt_meters = alt;
+        self.have_initial_position = true;
+        self.have_initial_velocity = velocity.is_some();
+        if let Some((azimuth, magnitude)) = velocity {
+            self.azm_degrees = azimuth;
+            self.mag_mps = magnitude;
+        }
+    }
 }
 
 // C FFI Interface
@@ -215,7 +266,7 @@ pub extern "C" fn emane_rs_gpsd_agent_start(ptr: *mut GpsdLocationAgent, pty_fil
     let file = unsafe { CStr::from_ptr(pty_file) }
         .to_string_lossy()
         .into_owned();
-    agent.start(&file);
+    let _ = agent.start(&file);
 }
 
 #[no_mangle]
@@ -235,25 +286,11 @@ pub extern "C" fn emane_rs_gpsd_agent_update_location(
     mag: c_double,
 ) {
     let agent = unsafe { &mut *ptr };
-    agent.lat_degrees = lat;
-    agent.lon_degrees = lon;
-    agent.alt_meters = alt;
-    agent.have_initial_position = true;
-
-    if has_velocity {
-        agent.have_initial_velocity = true;
-        agent.azm_degrees = azm;
-        agent.mag_mps = mag;
-    }
+    agent.update_location(lat, lon, alt, has_velocity.then_some((azm, mag)));
 }
 
 #[no_mangle]
 pub extern "C" fn emane_rs_gpsd_agent_process_timed_event(ptr: *mut GpsdLocationAgent) {
     let agent = unsafe { &mut *ptr };
-    if agent.have_initial_position {
-        agent.send_spoofed_nmea(agent.lat_degrees, agent.lon_degrees, agent.alt_meters);
-        if agent.have_initial_velocity {
-            agent.send_spoofed_gpvtg(agent.azm_degrees, agent.mag_mps);
-        }
-    }
+    agent.process_timed_event();
 }

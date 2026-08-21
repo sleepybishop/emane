@@ -204,9 +204,22 @@ impl NoiseRecorder {
         u64_bandwidth_hz: u64,
         u64_bandwidth_bin_size_hz: u64,
     ) -> Self {
-        let total_window_bins = max_duration / bin;
-        let total_wheel_bins = (max_offset + max_propagation + 2 * max_duration) / bin;
-        let u64_band_start_frequency_hz = u64_frequency_hz - (u64_bandwidth_hz as f64 / 2.0) as u64;
+        // Framework configuration normally guarantees positive, aligned time
+        // values. Keep the native API sound for malformed FFI callers too:
+        // the old expression divided by zero and could construct a zero-slot
+        // wheel, which later panicked on every update.
+        let bin = bin.max(1);
+        let max_offset = max_offset.max(0);
+        let max_propagation = max_propagation.max(0);
+        let max_duration = max_duration.max(bin);
+        let total_window_bins = (max_duration / bin).max(1);
+        let total_wheel_bins = max_offset
+            .saturating_add(max_propagation)
+            .saturating_add(max_duration.saturating_mul(2))
+            .checked_div(bin)
+            .unwrap_or(1)
+            .max(1);
+        let u64_band_start_frequency_hz = u64_frequency_hz.saturating_sub(u64_bandwidth_hz / 2);
 
         let total_sub_band_bins = if u64_bandwidth_bin_size_hz > 0 {
             ((u64_bandwidth_hz as f64 / u64_bandwidth_bin_size_hz as f64).ceil() as usize) + 1
@@ -214,9 +227,17 @@ impl NoiseRecorder {
             1
         };
 
-        let u64_band_end_frequency_hz = u64_band_start_frequency_hz
-            + (total_sub_band_bins as u64) * u64_bandwidth_bin_size_hz
-            - 1;
+        let u64_band_end_frequency_hz = if u64_bandwidth_bin_size_hz == 0 {
+            u64_band_start_frequency_hz
+                .saturating_add(u64_bandwidth_hz)
+                .saturating_sub(1)
+        } else {
+            u64_band_start_frequency_hz
+                .saturating_add(
+                    (total_sub_band_bins as u64).saturating_mul(u64_bandwidth_bin_size_hz),
+                )
+                .saturating_sub(1)
+        };
 
         Self {
             total_window_bins,
@@ -686,11 +707,15 @@ pub extern "C" fn emane_rs_noise_recorder_update(
     out_sor: *mut i64,
     out_eor: *mut i64,
 ) {
-    if ptr.is_null() {
+    if ptr.is_null() || (transmitters_len != 0 && transmitters_ptr.is_null()) {
         return;
     }
     let recorder = unsafe { &mut *ptr };
-    let transmitters = unsafe { std::slice::from_raw_parts(transmitters_ptr, transmitters_len) };
+    let transmitters = if transmitters_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(transmitters_ptr, transmitters_len) }
+    };
 
     let (sor, eor) = recorder.update(
         now,

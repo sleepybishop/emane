@@ -351,6 +351,14 @@ pub fn get_manager() -> &'static SpectralMaskManager {
         .unwrap_or_else(|| EMPTY_MANAGER.get_or_init(SpectralMaskManager::new))
 }
 
+pub fn load_global(uri: &str) -> Result<(), String> {
+    let mut manager = SpectralMaskManager::new();
+    manager.load(uri)?;
+    MANAGER
+        .set(manager)
+        .map_err(|_| "spectral masks already loaded".to_string())
+}
+
 #[no_mangle]
 pub extern "C" fn emane_rs_spectral_mask_load(
     uri: *const c_char,
@@ -362,12 +370,7 @@ pub extern "C" fn emane_rs_spectral_mask_load(
         return;
     }
     let uri_str = unsafe { CStr::from_ptr(uri).to_string_lossy() };
-    let mut manager = SpectralMaskManager::new();
-    let result = manager.load(&uri_str).and_then(|_| {
-        MANAGER
-            .set(manager)
-            .map_err(|_| "spectral masks already loaded".to_string())
-    });
+    let result = load_global(&uri_str);
     match result {
         Ok(_) => {
             if !error_buf.is_null() && error_buf_len > 0 {

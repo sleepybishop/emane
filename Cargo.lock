@@ -28,6 +28,7 @@ name = "bentpipe"
 version = "0.1.0"
 dependencies = [
  "emane-plugin-api",
+ "roxmltree",
 ]
 
 [[package]]
@@ -195,6 +196,7 @@ name = "ieee80211abg"
 version = "0.1.0"
 dependencies = [
  "emane-plugin-api",
+ "roxmltree",
 ]
 
 [[package]]
@@ -495,6 +497,7 @@ name = "rfpipe"
 version = "0.1.0"
 dependencies = [
  "emane-plugin-api",
+ "roxmltree",
 ]
 
 [[package]]
@@ -548,6 +551,8 @@ name = "tdma"
 version = "0.1.0"
 dependencies = [
  "emane-plugin-api",
+ "prost",
+ "roxmltree",
 ]
 
 [[package]]

@@ -348,7 +348,9 @@ pub extern "C" fn emane_rs_statistic_free_query_result(res: FfiStatisticQueryRes
             }
         }
         unsafe {
-            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(res.data, res.len)));
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                res.data, res.len,
+            )));
         }
     }
 }
@@ -499,7 +501,9 @@ pub extern "C" fn emane_rs_statistic_free_table_query_result(res: FfiStatisticTa
             }
         }
         unsafe {
-            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(res.data, res.len)));
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                res.data, res.len,
+            )));
         }
     }
 }
@@ -580,7 +584,9 @@ pub extern "C" fn emane_rs_statistic_free_manifest(res: FfiStatisticManifest) {
             }
         }
         unsafe {
-            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(res.data, res.len)));
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                res.data, res.len,
+            )));
         }
     }
 }
@@ -619,7 +625,9 @@ pub extern "C" fn emane_rs_statistic_free_table_manifest(res: FfiStatisticTableM
             }
         }
         unsafe {
-            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(res.data, res.len)));
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                res.data, res.len,
+            )));
         }
     }
 }

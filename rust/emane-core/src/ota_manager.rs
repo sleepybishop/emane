@@ -44,9 +44,29 @@ pub struct OtaManager {
     u64_sequence_number: u64,
     part_store: HashMap<PartKey, PartsData>,
     last_part_check_time: SystemTime,
-    pub nem_users: HashMap<u16, usize>,
+    pub nem_users: HashMap<u16, Vec<OtaUser>>,
     group_addr: Option<std::net::SocketAddr>,
     running: bool,
+    upstream_packets: u64,
+    reassembly_timeouts: u64,
+}
+
+pub type OtaPacketCallback = extern "C" fn(
+    context: *mut c_void,
+    source: u16,
+    destination: u16,
+    priority: u8,
+    uuid: *const u8,
+    data: *const u8,
+    data_len: usize,
+    controls: *const u8,
+    controls_len: usize,
+);
+
+#[derive(Clone, Copy)]
+pub struct OtaUser {
+    context: usize,
+    callback: Option<OtaPacketCallback>,
 }
 
 impl Default for OtaManager {
@@ -69,6 +89,8 @@ impl OtaManager {
             nem_users: HashMap::new(),
             group_addr: None,
             running: false,
+            upstream_packets: 0,
+            reassembly_timeouts: 0,
         }
     }
 }
@@ -79,35 +101,33 @@ pub fn get_ota_manager() -> &'static Mutex<OtaManager> {
     OTA_MANAGER.get_or_init(|| Mutex::new(OtaManager::new()))
 }
 
-extern "C" {
-    fn emane_c_ota_manager_update_stat(uuid_ptr: *const u8, src_nem: u16, stat_type: u32);
-
-    fn emane_c_ota_manager_init_publishers();
-
-    fn emane_c_ota_manager_deliver_event(
-        src_nem: u16,
-        event_id: u16,
-        data: *const u8,
-        data_len: usize,
-    );
-
-    fn emane_c_ota_user_process_packet(
-        p_user: *mut c_void,
-        source: u16,
-        destination: u16,
-        priority: u8,
-        uuid_ptr: *const u8,
-        data: *const u8,
-        data_len: usize,
-        controls: *const u8,
-        controls_len: usize,
-    );
-}
-
 #[no_mangle]
 pub extern "C" fn emane_rs_ota_manager_register_user(id: u16, p_user: *mut c_void) {
     let mut manager = get_ota_manager().lock().unwrap();
-    manager.nem_users.insert(id, p_user as usize);
+    manager.nem_users.entry(id).or_default().push(OtaUser {
+        context: p_user as usize,
+        callback: None,
+    });
+}
+
+pub fn register_native_user(id: u16, context: *mut c_void, callback: OtaPacketCallback) {
+    let mut manager = get_ota_manager().lock().unwrap();
+    let users = manager.nem_users.entry(id).or_default();
+    users.retain(|user| user.context != context as usize);
+    users.push(OtaUser {
+        context: context as usize,
+        callback: Some(callback),
+    });
+}
+
+pub fn unregister_native_user(id: u16, context: *mut c_void) {
+    let mut manager = get_ota_manager().lock().unwrap();
+    if let Some(users) = manager.nem_users.get_mut(&id) {
+        users.retain(|user| user.context != context as usize);
+        if users.is_empty() {
+            manager.nem_users.remove(&id);
+        }
+    }
 }
 
 #[no_mangle]
@@ -172,9 +192,9 @@ pub extern "C" fn emane_rs_ota_manager_open(
             .is_err()
             || socket.set_multicast_loop_v4(loopback).is_err()
             || socket.set_multicast_ttl_v4(ttl as u32).is_err())
-        {
-            return false;
-        }
+    {
+        return false;
+    }
 
     if !device_c.is_empty() {
         let mut dev_bytes = device_c.into_bytes();
@@ -205,12 +225,6 @@ pub extern "C" fn emane_rs_ota_manager_open(
     manager.group_addr = Some(std::net::SocketAddr::V4(SocketAddrV4::new(ip, port)));
     manager.part_store.clear();
     manager.running = true;
-    drop(manager);
-
-    unsafe {
-        emane_c_ota_manager_init_publishers();
-    }
-
     true
 }
 
@@ -434,8 +448,11 @@ pub extern "C" fn emane_rs_ota_manager_process_loop() {
                     }
                     expired
                 };
-                for (uuid, source) in expired {
-                    unsafe { emane_c_ota_manager_update_stat(uuid.as_ptr(), source, 3) };
+                if !expired.is_empty() {
+                    let mut manager = get_ota_manager().lock().unwrap();
+                    manager.reassembly_timeouts = manager
+                        .reassembly_timeouts
+                        .saturating_add(expired.len() as u64);
                 }
             }
             Err(error)
@@ -486,14 +503,12 @@ fn handle_ota_message(
                 ) else {
                     continue;
                 };
-                unsafe {
-                    emane_c_ota_manager_deliver_event(
-                        nem_id,
-                        event_id,
-                        serialization.data.as_ptr(),
-                        serialization.data.len(),
-                    );
-                }
+                crate::event_service::route_serialized_event(
+                    nem_id,
+                    event_id,
+                    &serialization.data,
+                    0,
+                );
             }
         }
         offset += events_size;
@@ -514,20 +529,16 @@ fn handle_ota_message(
     };
 
     if data_size > 0 {
-        let users: Vec<usize> = {
-            let manager = get_ota_manager().lock().unwrap();
-            manager.nem_users.values().copied().collect()
+        let users: Vec<OtaUser> = {
+            let mut manager = get_ota_manager().lock().unwrap();
+            manager.upstream_packets = manager.upstream_packets.saturating_add(1);
+            manager.nem_users.values().flatten().copied().collect()
         };
 
-        unsafe {
-            // Update TYPE_UPSTREAM_PACKET_SUCCESS = 2
-            emane_c_ota_manager_update_stat(remote_uuid.as_ptr(), source, 2);
-        }
-
-        for p_user in users {
-            unsafe {
-                emane_c_ota_user_process_packet(
-                    p_user as *mut c_void,
+        for user in users {
+            if let Some(callback) = user.callback {
+                callback(
+                    user.context as *mut c_void,
                     source,
                     destination,
                     0, // Priority is set to 0 as in original
@@ -718,31 +729,20 @@ mod tests {
     use std::os::raw::c_void;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    static STATS_UPDATES: AtomicUsize = AtomicUsize::new(0);
-    static PUBLISHERS_INIT: AtomicUsize = AtomicUsize::new(0);
     static EVENTS_DELIVERED: AtomicUsize = AtomicUsize::new(0);
     static PACKETS_PROCESSED: AtomicUsize = AtomicUsize::new(0);
 
-    #[no_mangle]
-    pub extern "C" fn emane_c_ota_manager_update_stat(_uuid: *const u8, _src: u16, _stat: u32) {
-        STATS_UPDATES.fetch_add(1, Ordering::SeqCst);
-    }
-    #[no_mangle]
-    pub extern "C" fn emane_c_ota_manager_init_publishers() {
-        PUBLISHERS_INIT.fetch_add(1, Ordering::SeqCst);
-    }
-    #[no_mangle]
-    pub extern "C" fn emane_c_ota_manager_deliver_event(
-        _src: u16,
-        _evt: u16,
+    extern "C" fn event_callback(
+        _context: *mut c_void,
+        _event_id: u16,
         _data: *const u8,
         _len: usize,
     ) {
         EVENTS_DELIVERED.fetch_add(1, Ordering::SeqCst);
     }
-    #[no_mangle]
-    pub extern "C" fn emane_c_ota_user_process_packet(
-        _p: *mut c_void,
+
+    extern "C" fn packet_callback(
+        _context: *mut c_void,
         _src: u16,
         _dst: u16,
         _pri: u8,
@@ -756,8 +756,6 @@ mod tests {
     }
 
     fn reset_mocks() {
-        STATS_UPDATES.store(0, Ordering::SeqCst);
-        PUBLISHERS_INIT.store(0, Ordering::SeqCst);
         EVENTS_DELIVERED.store(0, Ordering::SeqCst);
         PACKETS_PROCESSED.store(0, Ordering::SeqCst);
     }
@@ -769,8 +767,8 @@ mod tests {
         let p_user = 456 as *mut c_void;
         emane_rs_ota_manager_register_user(id, p_user);
         assert_eq!(
-            manager.lock().unwrap().nem_users.get(&id),
-            Some(&(p_user as usize))
+            manager.lock().unwrap().nem_users.get(&id).unwrap()[0].context,
+            p_user as usize
         );
         emane_rs_ota_manager_unregister_user(id);
         assert!(manager.lock().unwrap().nem_users.get(&id).is_none());
@@ -782,8 +780,9 @@ mod tests {
         let uuid = [0u8; 16];
         // event data: mock an event
         let mut evt = ota::event::Data::default();
+        let test_nem = 60_001;
         let ser = ota::event::data::Serialization {
-            nem_id: 1,
+            nem_id: u32::from(test_nem),
             event_id: 2,
             data: vec![1, 2, 3],
         };
@@ -799,7 +798,16 @@ mod tests {
         payload.extend_from_slice(&data);
 
         // register a user so packet gets processed
-        emane_rs_ota_manager_register_user(1, 123 as *mut c_void);
+        register_native_user(test_nem, std::ptr::null_mut(), packet_callback);
+        crate::event_service::register_native_user(
+            99,
+            test_nem,
+            std::ptr::null_mut(),
+            event_callback,
+        );
+        assert!(crate::event_service::emane_rs_event_service_register_event(
+            99, 2
+        ));
 
         handle_ota_message(
             1,
@@ -813,7 +821,8 @@ mod tests {
 
         assert_eq!(EVENTS_DELIVERED.load(Ordering::SeqCst), 1);
         assert_eq!(PACKETS_PROCESSED.load(Ordering::SeqCst), 1);
-        assert_eq!(STATS_UPDATES.load(Ordering::SeqCst), 1);
+        emane_rs_ota_manager_unregister_user(test_nem);
+        crate::event_service::unregister_user(99);
     }
 
     #[test]
@@ -840,8 +849,6 @@ mod tests {
             5,
         );
         assert!(success);
-        assert_eq!(PUBLISHERS_INIT.load(Ordering::SeqCst), 1);
-
         let packet_data = vec![1, 2, 3];
         let empty: Vec<u8> = vec![];
         let sent = emane_rs_ota_manager_send_ota_packet(

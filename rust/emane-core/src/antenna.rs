@@ -121,7 +121,9 @@ impl AntennaPattern {
                                 uri
                             ));
                         };
-                        bearing_gain_map.entry(preceding_bearing).or_insert(missing_value);
+                        bearing_gain_map
+                            .entry(preceding_bearing)
+                            .or_insert(missing_value);
                         bearing_gain_map.insert(bearing_max, gain);
                     }
                 }
@@ -133,7 +135,9 @@ impl AntennaPattern {
                     ));
                 };
                 pattern
-                    .elevation_bearing_gain.entry(preceding_elevation).or_insert(None);
+                    .elevation_bearing_gain
+                    .entry(preceding_elevation)
+                    .or_insert(None);
                 pattern
                     .elevation_bearing_gain
                     .insert(elevation_max, Some(bearing_gain_map));

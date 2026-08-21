@@ -1,7 +1,17 @@
+use crate::event_service::{
+    emane_rs_event_service_register_event, register_native_user as register_event_user,
+    unregister_user as unregister_event_user,
+};
+use crate::ota_manager::{
+    emane_rs_ota_manager_send_ota_packet, register_native_user, unregister_native_user,
+};
 use crate::plugin_interface::{
     FfiConfigItem, FfiConfigRequest, FfiConfigStringArray, FfiControlMessage, FfiFrameworkService,
-    FfiPacket, FfiPacketInfo, FfiSlice, PluginApi, PluginEntryFunc, PLUGIN_ABI_VERSION,
+    FfiPacket, FfiPacketInfo, FfiSlice, FrequencyOfInterest, PluginApi, PluginEntryFunc,
+    RxProperties, TxProperties, CONTROL_FREQUENCY_INTEREST, CONTROL_RX_PROPERTIES,
+    CONTROL_TX_PROPERTIES, PLUGIN_ABI_VERSION,
 };
+use crate::spectrum_monitor::{FfiFrequencySegment, NoiseMode, SpectrumMonitor};
 use crate::timer_service::{emane_rs_timer_cancel, emane_rs_timer_schedule};
 use crate::{
     common::ethernet_transport::{
@@ -20,9 +30,11 @@ use crate::{
     },
 };
 use libloading::{Library, Symbol};
+use prost::Message;
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{c_void, CStr, CString};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, OnceLock, RwLock, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -55,8 +67,17 @@ struct NemLayer {
     _library: Option<Library>,
     invocation: Invocation,
     _framework_context: Box<FrameworkContext>,
+    event_build_id: u16,
     started: bool,
     destroyed: bool,
+}
+
+fn next_event_build_id() -> u16 {
+    static NEXT: AtomicU16 = AtomicU16::new(1);
+    NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        Some(if value == u16::MAX { 1 } else { value + 1 })
+    })
+    .unwrap_or(1)
 }
 
 struct Runtime {
@@ -99,27 +120,32 @@ impl Runtime {
             return;
         }
 
-        // At the PHY boundary, preserve the original NEM addressing semantics.
-        // Local NEMs can communicate without a C++ OTA adapter; a remote OTA
-        // backend can be installed at this same boundary later.
-        let destination = unsafe { (*packet).info.destination };
+        let packet_ref = unsafe { &*packet };
+        if let Some(control_data) = encode_controls(messages, message_count) {
+            let _ = emane_rs_ota_manager_send_ota_packet(
+                nem_id,
+                packet_ref.info.destination,
+                packet_ref.payload.data,
+                packet_ref.payload.len,
+                control_data.as_ptr(),
+                control_data.len(),
+                std::ptr::null(),
+                0,
+            );
+        }
+
+        // OTA is a shared medium: every other local PHY must observe the
+        // transmission. Packet destination filtering happens in the MAC, not
+        // here, so that promiscuous reception and interference remain correct.
         let targets: Vec<Invocation> = {
             let Ok(layers) = self.invocations.read() else {
                 return;
             };
-            if destination == BROADCAST_NEM {
-                layers
-                    .iter()
-                    .filter(|(id, _)| **id != nem_id)
-                    .filter_map(|(_, stack)| stack.last().copied())
-                    .collect()
-            } else {
-                layers
-                    .get(&destination)
-                    .and_then(|stack| stack.last().copied())
-                    .into_iter()
-                    .collect()
-            }
+            layers
+                .iter()
+                .filter(|(id, _)| **id != nem_id)
+                .filter_map(|(_, stack)| stack.last().copied())
+                .collect()
         };
         for target in targets {
             (target.api().process_upstream)(target.context(), packet, messages, message_count);
@@ -170,6 +196,154 @@ impl Runtime {
             process(target.context(), std::ptr::null(), messages, message_count);
         }
     }
+}
+
+extern "C" fn ota_packet(
+    context_ptr: *mut c_void,
+    source: u16,
+    destination: u16,
+    priority: u8,
+    _uuid: *const u8,
+    data: *const u8,
+    data_len: usize,
+    controls: *const u8,
+    controls_len: usize,
+) {
+    let Some(context) = context(context_ptr) else {
+        return;
+    };
+    if (data_len != 0 && data.is_null()) || (controls_len != 0 && controls.is_null()) {
+        return;
+    }
+    let control_bytes = if controls_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(controls, controls_len) }
+    };
+    let Some(decoded) = decode_controls(control_bytes) else {
+        return;
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let packet = FfiPacket {
+        info: FfiPacketInfo {
+            source,
+            destination,
+            priority,
+            creation_time_sec: now.as_secs(),
+            creation_time_usec: now.subsec_micros(),
+        },
+        payload: FfiSlice {
+            data,
+            len: data_len,
+        },
+    };
+    if let Some(runtime) = context.runtime.upgrade() {
+        if let Some(phy) = runtime.last_invocation(context.nem_id) {
+            (phy.api().process_upstream)(
+                phy.context(),
+                &packet,
+                decoded.messages.as_ptr(),
+                decoded.messages.len(),
+            );
+        }
+    }
+}
+
+extern "C" fn framework_event(
+    context_ptr: *mut c_void,
+    event_id: u16,
+    data: *const u8,
+    data_len: usize,
+) {
+    let Some(context) = context(context_ptr) else {
+        return;
+    };
+    if data_len != 0 && data.is_null() {
+        return;
+    }
+    if let Some(runtime) = context.runtime.upgrade() {
+        if let Some(layer) = runtime.invocation(context.nem_id, context.layer_index) {
+            (layer.api().process_event)(layer.context(), event_id, data, data_len);
+        }
+    }
+}
+
+const MAX_CONTROL_WIRE_SIZE: usize = 16 * 1024 * 1024;
+
+fn encode_controls(messages: *const FfiControlMessage, count: usize) -> Option<Vec<u8>> {
+    let messages = ffi_control_messages(messages, count)?;
+    let count = u16::try_from(messages.len()).ok()?;
+    let mut data = Vec::new();
+    data.extend_from_slice(&count.to_be_bytes());
+    for message in messages {
+        if message.payload.len > u32::MAX as usize
+            || (message.payload.len != 0 && message.payload.data.is_null())
+        {
+            return None;
+        }
+        let required = 8usize.checked_add(message.payload.len)?;
+        if data.len().checked_add(required)? > MAX_CONTROL_WIRE_SIZE {
+            return None;
+        }
+        data.extend_from_slice(&message.msg_type.to_be_bytes());
+        data.extend_from_slice(&(message.payload.len as u32).to_be_bytes());
+        if message.payload.len != 0 {
+            data.extend_from_slice(unsafe {
+                std::slice::from_raw_parts(message.payload.data, message.payload.len)
+            });
+        }
+    }
+    Some(data)
+}
+
+struct DecodedControls {
+    _payloads: Vec<Vec<u8>>,
+    messages: Vec<FfiControlMessage>,
+}
+
+fn decode_controls(data: &[u8]) -> Option<DecodedControls> {
+    if data.len() < 2 || data.len() > MAX_CONTROL_WIRE_SIZE {
+        return None;
+    }
+    let count = u16::from_be_bytes(data[..2].try_into().ok()?) as usize;
+    let mut offset = 2usize;
+    let mut entries = Vec::with_capacity(count);
+    for _ in 0..count {
+        let header_end = offset.checked_add(8)?;
+        if header_end > data.len() {
+            return None;
+        }
+        let msg_type = u32::from_be_bytes(data[offset..offset + 4].try_into().ok()?);
+        let len = u32::from_be_bytes(data[offset + 4..header_end].try_into().ok()?) as usize;
+        offset = header_end;
+        let end = offset.checked_add(len)?;
+        if end > data.len() {
+            return None;
+        }
+        entries.push((msg_type, data[offset..end].to_vec()));
+        offset = end;
+    }
+    if offset != data.len() {
+        return None;
+    }
+    let payloads: Vec<Vec<u8>> = entries.iter().map(|(_, payload)| payload.clone()).collect();
+    let messages = entries
+        .iter()
+        .zip(payloads.iter())
+        .map(|((msg_type, _), payload)| FfiControlMessage {
+            msg_type: *msg_type,
+            payload: FfiSlice {
+                data: payload.as_ptr(),
+                len: payload.len(),
+            },
+        })
+        .collect();
+    Some(DecodedControls {
+        _payloads: payloads,
+        messages,
+    })
 }
 
 struct TimerDispatch {
@@ -410,6 +584,134 @@ struct BuiltinState {
     arp_cache_mode: bool,
     arp_priority: u8,
     unknown_priorities: HashMap<u16, u8>,
+    phy: PhyState,
+}
+
+struct PhyState {
+    frequency_hz: u64,
+    frequencies_of_interest: Vec<u64>,
+    bandwidth_hz: u64,
+    tx_power_dbm: f64,
+    fixed_antenna_gain_db: f64,
+    fixed_antenna_gain_enabled: bool,
+    propagation_model: PropagationModel,
+    locations: HashMap<u16, Location>,
+    pathloss: HashMap<u16, HashMap<u64, f64>>,
+    sub_id: u16,
+    noise_mode: NoiseMode,
+    noise_bin_size: i64,
+    max_segment_offset: i64,
+    max_message_propagation: i64,
+    max_segment_duration: i64,
+    time_sync_threshold: i64,
+    noise_max_clamp: bool,
+    system_noise_figure_db: f64,
+    monitor: SpectrumMonitor,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PropagationModel {
+    Precomputed,
+    FreeSpace,
+    TwoRay,
+}
+
+#[derive(Clone, Copy)]
+struct Location {
+    latitude_degrees: f64,
+    longitude_degrees: f64,
+    altitude_meters: f64,
+}
+
+impl PhyState {
+    fn new() -> Self {
+        Self {
+            frequency_hz: 2_347_000_000,
+            frequencies_of_interest: vec![2_347_000_000],
+            bandwidth_hz: 1_000_000,
+            tx_power_dbm: 0.0,
+            fixed_antenna_gain_db: 0.0,
+            fixed_antenna_gain_enabled: true,
+            propagation_model: PropagationModel::Precomputed,
+            locations: HashMap::new(),
+            pathloss: HashMap::new(),
+            sub_id: 1,
+            noise_mode: NoiseMode::All,
+            noise_bin_size: 20,
+            max_segment_offset: 300_000,
+            max_message_propagation: 200_000,
+            max_segment_duration: 1_000_000,
+            time_sync_threshold: 10_000,
+            noise_max_clamp: false,
+            system_noise_figure_db: 4.0,
+            monitor: SpectrumMonitor::new(),
+        }
+    }
+
+    fn receiver_sensitivity_dbm(&self) -> f64 {
+        -174.0 + 10.0 * (self.bandwidth_hz.max(1) as f64).log10() + self.system_noise_figure_db
+    }
+
+    fn initialize_monitor(&mut self) {
+        let sensitivity_mw = 10.0f64.powf(self.receiver_sensitivity_dbm() / 10.0);
+        self.monitor.initialize(
+            self.sub_id,
+            &self.frequencies_of_interest,
+            self.bandwidth_hz,
+            sensitivity_mw,
+            self.noise_mode,
+            self.noise_bin_size,
+            self.max_segment_offset,
+            self.max_message_propagation,
+            self.max_segment_duration,
+            self.time_sync_threshold,
+            self.noise_max_clamp,
+            false,
+        );
+    }
+
+    fn propagation(&self, local_id: u16, source: u16, frequency_hz: u64) -> Option<(f64, i64)> {
+        match self.propagation_model {
+            PropagationModel::Precomputed => {
+                let values = self.pathloss.get(&source)?;
+                let pathloss = values
+                    .get(&frequency_hz)
+                    .or_else(|| values.get(&0))
+                    .copied()?;
+                Some((pathloss, 0))
+            }
+            PropagationModel::FreeSpace | PropagationModel::TwoRay => {
+                let local = self.locations.get(&local_id)?;
+                let remote = self.locations.get(&source)?;
+                let distance = distance_meters(*local, *remote);
+                let pathloss = match self.propagation_model {
+                    PropagationModel::FreeSpace => {
+                        crate::emane_rs_freespace_pathloss_single(distance, frequency_hz as f64)
+                    }
+                    PropagationModel::TwoRay => crate::emane_rs_tworay_pathloss(
+                        distance,
+                        local.altitude_meters,
+                        remote.altitude_meters,
+                    ),
+                    PropagationModel::Precomputed => unreachable!(),
+                };
+                let delay = (distance / 299_792_458.0 * 1_000_000.0).round();
+                Some((pathloss, delay.clamp(0.0, i64::MAX as f64) as i64))
+            }
+        }
+    }
+}
+
+fn distance_meters(a: Location, b: Location) -> f64 {
+    const EARTH_RADIUS_METERS: f64 = 6_371_000.0;
+    let latitude_a = a.latitude_degrees.to_radians();
+    let latitude_b = b.latitude_degrees.to_radians();
+    let delta_latitude = (b.latitude_degrees - a.latitude_degrees).to_radians();
+    let delta_longitude = (b.longitude_degrees - a.longitude_degrees).to_radians();
+    let haversine = (delta_latitude / 2.0).sin().powi(2)
+        + latitude_a.cos() * latitude_b.cos() * (delta_longitude / 2.0).sin().powi(2);
+    let surface = 2.0 * EARTH_RADIUS_METERS * haversine.sqrt().atan2((1.0 - haversine).sqrt());
+    surface.hypot(b.altitude_meters - a.altitude_meters)
 }
 
 fn builtin_init(id: u16, framework: *const FfiFrameworkService, kind: BuiltinKind) -> *mut c_void {
@@ -430,6 +732,7 @@ fn builtin_init(id: u16, framework: *const FfiFrameworkService, kind: BuiltinKin
         arp_cache_mode: true,
         arp_priority: 0,
         unknown_priorities: HashMap::new(),
+        phy: PhyState::new(),
     });
     let state_ptr = state.as_mut() as *mut BuiltinState;
     match kind {
@@ -472,6 +775,20 @@ fn parse_bool(value: &str) -> Option<bool> {
     }
 }
 
+fn parse_scaled_u64(value: &str) -> Option<u64> {
+    let value = value.trim();
+    let (number, multiplier) = match value.as_bytes().last().copied() {
+        Some(b'K' | b'k') => (&value[..value.len() - 1], 1_000.0),
+        Some(b'M' | b'm') => (&value[..value.len() - 1], 1_000_000.0),
+        Some(b'G' | b'g') => (&value[..value.len() - 1], 1_000_000_000.0),
+        _ => (value, 1.0),
+    };
+    let number = number.parse::<f64>().ok()?;
+    let scaled = number * multiplier;
+    (number >= 0.0 && scaled.is_finite() && scaled <= u64::MAX as f64)
+        .then_some(scaled.round() as u64)
+}
+
 fn parse_u16(value: &str) -> Option<u16> {
     value
         .strip_prefix("0x")
@@ -480,6 +797,13 @@ fn parse_u16(value: &str) -> Option<u16> {
             || value.parse().ok(),
             |value| u16::from_str_radix(value, 16).ok(),
         )
+}
+
+fn parse_i64_config(value: &str) -> Option<i64> {
+    value
+        .parse::<u64>()
+        .ok()
+        .and_then(|value| i64::try_from(value).ok())
 }
 
 unsafe fn config_items(request: *const c_void) -> Option<Vec<(String, Vec<String>)>> {
@@ -569,11 +893,157 @@ extern "C" fn builtin_configure(state: *mut c_void, request: *const c_void) -> b
                     state.unknown_priorities.insert(ether_type, priority);
                 }
             }
+            "frequency" => {
+                let Some(value) = parse_scaled_u64(value) else {
+                    return false;
+                };
+                if value == 0 {
+                    return false;
+                }
+                state.phy.frequency_hz = value;
+            }
+            "frequencyofinterest" => {
+                let mut frequencies = Vec::with_capacity(values.len());
+                for value in values {
+                    let Some(value) = parse_scaled_u64(&value) else {
+                        return false;
+                    };
+                    if value == 0 {
+                        return false;
+                    }
+                    frequencies.push(value);
+                }
+                if frequencies.is_empty() {
+                    return false;
+                }
+                state.phy.frequencies_of_interest = frequencies;
+            }
+            "bandwidth" => {
+                let Some(value) = parse_scaled_u64(value) else {
+                    return false;
+                };
+                if value == 0 {
+                    return false;
+                }
+                state.phy.bandwidth_hz = value;
+            }
+            "txpower" => {
+                let Ok(value) = value.parse::<f64>() else {
+                    return false;
+                };
+                if !value.is_finite() {
+                    return false;
+                }
+                state.phy.tx_power_dbm = value;
+            }
+            "fixedantennagain" => {
+                let Ok(value) = value.parse::<f64>() else {
+                    return false;
+                };
+                if !value.is_finite() {
+                    return false;
+                }
+                state.phy.fixed_antenna_gain_db = value;
+            }
+            "subid" => {
+                let Ok(value) = value.parse::<u16>() else {
+                    return false;
+                };
+                if value == 0 {
+                    return false;
+                }
+                state.phy.sub_id = value;
+            }
+            "noisemode" => {
+                state.phy.noise_mode = match value.as_str() {
+                    "none" => NoiseMode::None,
+                    "all" => NoiseMode::All,
+                    "outofband" => NoiseMode::OutOfBand,
+                    "passthrough" => NoiseMode::PassThrough,
+                    _ => return false,
+                };
+            }
+            "noisebinsize" => {
+                let Some(value) = parse_i64_config(value) else {
+                    return false;
+                };
+                if value == 0 {
+                    return false;
+                }
+                state.phy.noise_bin_size = value;
+            }
+            "noisemaxsegmentoffset" => {
+                let Some(value) = parse_i64_config(value) else {
+                    return false;
+                };
+                state.phy.max_segment_offset = value;
+            }
+            "noisemaxmessagepropagation" => {
+                let Some(value) = parse_i64_config(value) else {
+                    return false;
+                };
+                state.phy.max_message_propagation = value;
+            }
+            "noisemaxsegmentduration" => {
+                let Some(value) = parse_i64_config(value) else {
+                    return false;
+                };
+                state.phy.max_segment_duration = value;
+            }
+            "timesyncthreshold" => {
+                let Some(value) = parse_i64_config(value) else {
+                    return false;
+                };
+                state.phy.time_sync_threshold = value;
+            }
+            "noisemaxclampenable" => {
+                let Some(value) = parse_bool(value) else {
+                    return false;
+                };
+                state.phy.noise_max_clamp = value;
+            }
+            "systemnoisefigure" => {
+                let Ok(value) = value.parse::<f64>() else {
+                    return false;
+                };
+                if !value.is_finite() {
+                    return false;
+                }
+                state.phy.system_noise_figure_db = value;
+            }
+            "fixedantennagainenable" => {
+                let Some(value) = parse_bool(value) else {
+                    return false;
+                };
+                state.phy.fixed_antenna_gain_enabled = value;
+            }
+            "propagationmodel" => {
+                state.phy.propagation_model = match value.as_str() {
+                    "precomputed" => PropagationModel::Precomputed,
+                    "freespace" => PropagationModel::FreeSpace,
+                    "2ray" => PropagationModel::TwoRay,
+                    _ => return false,
+                };
+            }
             // These settings are consumed by higher-level services in the
             // original transport and do not alter Ethernet frame routing.
             "bitrate" | "flowcontrolenable" | "address" | "mask" => {}
             _ => {}
         }
+    }
+    if state.kind == BuiltinKind::Phy {
+        if state.phy.max_segment_duration < state.phy.noise_bin_size
+            || state
+                .phy
+                .max_segment_offset
+                .saturating_add(state.phy.max_message_propagation)
+                .saturating_add(state.phy.max_segment_duration.saturating_mul(2))
+                % state.phy.noise_bin_size
+                != 0
+        {
+            return false;
+        }
+        state.phy.initialize_monitor();
     }
     true
 }
@@ -709,13 +1179,109 @@ extern "C" fn builtin_upstream(
         return;
     };
     match state.kind {
-        BuiltinKind::Phy => (state.framework.send_upstream_packet)(
-            state.framework.framework_ctx,
-            state.id,
-            packet,
-            messages,
-            count,
-        ),
+        BuiltinKind::Phy => {
+            let Some(packet) = (unsafe { packet.as_ref() }) else {
+                (state.framework.send_upstream_control)(
+                    state.framework.framework_ctx,
+                    state.id,
+                    messages,
+                    count,
+                );
+                return;
+            };
+            let Some(incoming) = ffi_control_messages(messages, count) else {
+                return;
+            };
+            let Some(tx) = find_tx_properties(incoming) else {
+                // Keep bypass and third-party MAC plugins interoperable.
+                (state.framework.send_upstream_packet)(
+                    state.framework.framework_ctx,
+                    state.id,
+                    packet,
+                    messages,
+                    count,
+                );
+                return;
+            };
+
+            let Some((pathloss_db, propagation_microseconds)) =
+                state
+                    .phy
+                    .propagation(state.id, packet.info.source, tx.frequency_hz)
+            else {
+                return;
+            };
+
+            let now = unix_time_microseconds();
+            let segment = FfiFrequencySegment {
+                frequency_hz: tx.frequency_hz,
+                rx_power_dbm: tx.tx_power_dbm - pathloss_db
+                    + if state.phy.fixed_antenna_gain_enabled {
+                        state.phy.fixed_antenna_gain_db
+                    } else {
+                        0.0
+                    },
+                duration_microsec: i64::try_from(tx.duration_microseconds).unwrap_or(i64::MAX),
+                offset_microsec: i64::try_from(tx.offset_microseconds).unwrap_or(i64::MAX),
+            };
+            let rx_power_dbm = segment.rx_power_dbm;
+            let rx_power_mw = 10.0f64.powf(rx_power_dbm / 10.0);
+            let is_in_band = tx.sub_id == state.phy.sub_id
+                && state.phy.frequencies_of_interest.contains(&tx.frequency_hz);
+            let (tx_time, propagation, duration, report, report_in_band, sensitivity_mw) =
+                state.phy.monitor.update(
+                    now,
+                    tx.tx_time_microseconds,
+                    propagation_microseconds,
+                    0.0,
+                    std::slice::from_ref(&segment),
+                    tx.bandwidth_hz,
+                    std::slice::from_ref(&rx_power_mw),
+                    is_in_band,
+                    std::slice::from_ref(&packet.info.source),
+                    tx.sub_id,
+                    tx.antenna_index,
+                    tx.spectral_mask_index,
+                    std::ptr::null(),
+                    0,
+                );
+            if report.is_empty() || !report_in_band {
+                return;
+            }
+
+            let rx = RxProperties {
+                frequency_hz: report[0].frequency_hz,
+                bandwidth_hz: tx.bandwidth_hz,
+                rx_power_dbm: report[0].rx_power_dbm,
+                noise_floor_dbm: 10.0 * sensitivity_mw.log10(),
+                tx_time_microseconds: tx_time,
+                propagation_microseconds: propagation.max(0) as u64,
+                duration_microseconds: duration.max(0) as u64,
+                antenna_index: tx.antenna_index,
+                sub_id: tx.sub_id,
+                signal_in_noise: state.phy.noise_mode == NoiseMode::All,
+            };
+            let rx_bytes = rx.encode();
+            let mut outgoing: Vec<_> = incoming
+                .iter()
+                .copied()
+                .filter(|message| message.msg_type != CONTROL_RX_PROPERTIES)
+                .collect();
+            outgoing.push(FfiControlMessage {
+                msg_type: CONTROL_RX_PROPERTIES,
+                payload: FfiSlice {
+                    data: rx_bytes.as_ptr(),
+                    len: rx_bytes.len(),
+                },
+            });
+            (state.framework.send_upstream_packet)(
+                state.framework.framework_ctx,
+                state.id,
+                packet,
+                outgoing.as_ptr(),
+                outgoing.len(),
+            );
+        }
         BuiltinKind::VirtualTransport | BuiltinKind::RawTransport if !packet.is_null() => {
             let packet = unsafe { &*packet };
             if packet.payload.len != 0 && packet.payload.data.is_null() {
@@ -757,9 +1323,84 @@ extern "C" fn builtin_downstream(
     messages: *const FfiControlMessage,
     count: usize,
 ) {
-    let Some(state) = (unsafe { (state as *const BuiltinState).as_ref() }) else {
+    let Some(state) = (unsafe { (state as *mut BuiltinState).as_mut() }) else {
         return;
     };
+    if state.kind == BuiltinKind::Phy {
+        let Some(incoming) = ffi_control_messages(messages, count) else {
+            return;
+        };
+        if let Some(foi) = incoming.iter().find_map(|message| {
+            if message.msg_type != CONTROL_FREQUENCY_INTEREST || message.payload.data.is_null() {
+                return None;
+            }
+            FrequencyOfInterest::decode(unsafe {
+                std::slice::from_raw_parts(message.payload.data, message.payload.len)
+            })
+        }) {
+            state.phy.bandwidth_hz = foi.bandwidth_hz;
+            state.phy.frequencies_of_interest = foi.frequencies_hz;
+            state.phy.initialize_monitor();
+        }
+        if packet.is_null() {
+            return;
+        }
+        let packet = unsafe { &*packet };
+        let now = unix_time_microseconds();
+        let mut tx = find_tx_properties(incoming).unwrap_or(TxProperties {
+            frequency_hz: state.phy.frequency_hz,
+            bandwidth_hz: state.phy.bandwidth_hz,
+            tx_power_dbm: state.phy.tx_power_dbm,
+            duration_microseconds: 1,
+            offset_microseconds: 0,
+            tx_time_microseconds: now,
+            antenna_index: 0,
+            spectral_mask_index: 0,
+            sub_id: state.phy.sub_id,
+        });
+        if tx.frequency_hz == 0 {
+            tx.frequency_hz = state.phy.frequency_hz;
+        }
+        if tx.bandwidth_hz == 0 {
+            tx.bandwidth_hz = state.phy.bandwidth_hz;
+        }
+        if !tx.tx_power_dbm.is_finite() {
+            tx.tx_power_dbm = state.phy.tx_power_dbm;
+        }
+        if tx.duration_microseconds == 0 {
+            tx.duration_microseconds = 1;
+        }
+        if tx.tx_time_microseconds == 0 {
+            tx.tx_time_microseconds = now;
+        }
+        if tx.sub_id == 0 {
+            tx.sub_id = state.phy.sub_id;
+        }
+        if state.phy.fixed_antenna_gain_enabled {
+            tx.tx_power_dbm += state.phy.fixed_antenna_gain_db;
+        }
+        let tx_bytes = tx.encode();
+        let mut outgoing: Vec<_> = incoming
+            .iter()
+            .copied()
+            .filter(|message| message.msg_type != CONTROL_TX_PROPERTIES)
+            .collect();
+        outgoing.push(FfiControlMessage {
+            msg_type: CONTROL_TX_PROPERTIES,
+            payload: FfiSlice {
+                data: tx_bytes.as_ptr(),
+                len: tx_bytes.len(),
+            },
+        });
+        (state.framework.send_downstream_packet)(
+            state.framework.framework_ctx,
+            state.id,
+            packet,
+            outgoing.as_ptr(),
+            outgoing.len(),
+        );
+        return;
+    }
     (state.framework.send_downstream_packet)(
         state.framework.framework_ctx,
         state.id,
@@ -769,7 +1410,118 @@ extern "C" fn builtin_downstream(
     );
 }
 
+fn ffi_control_messages<'a>(
+    messages: *const FfiControlMessage,
+    count: usize,
+) -> Option<&'a [FfiControlMessage]> {
+    if count > 4096 || (count != 0 && messages.is_null()) {
+        None
+    } else if count == 0 {
+        Some(&[])
+    } else {
+        Some(unsafe { std::slice::from_raw_parts(messages, count) })
+    }
+}
+
+fn find_tx_properties(messages: &[FfiControlMessage]) -> Option<TxProperties> {
+    messages.iter().find_map(|message| {
+        if message.msg_type != CONTROL_TX_PROPERTIES
+            || message.payload.len != TxProperties::ENCODED_LEN
+            || message.payload.data.is_null()
+        {
+            return None;
+        }
+        TxProperties::decode(unsafe {
+            std::slice::from_raw_parts(message.payload.data, message.payload.len)
+        })
+    })
+}
+
+fn unix_time_microseconds() -> i64 {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    i64::try_from(now.as_micros()).unwrap_or(i64::MAX)
+}
+
 extern "C" fn builtin_timed(_: *mut c_void, _: u64, _: u32, _: *const u8, _: usize) {}
+extern "C" fn builtin_event(state: *mut c_void, event_id: u16, data: *const u8, len: usize) {
+    let Some(state) = (unsafe { (state as *mut BuiltinState).as_mut() }) else {
+        return;
+    };
+    if state.kind != BuiltinKind::Phy || len > 16 * 1024 * 1024 || (len != 0 && data.is_null()) {
+        return;
+    }
+    let bytes = if len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(data, len) }
+    };
+    use crate::protobufs::emane_message::{LocationEvent, PathlossEvent, PathlossExEvent};
+    match event_id {
+        100 => {
+            let Ok(event) = LocationEvent::decode(bytes) else {
+                return;
+            };
+            for location in event.locations {
+                let Ok(nem_id) = u16::try_from(location.nem_id) else {
+                    continue;
+                };
+                let position = location.position;
+                if position.latitude_degrees.is_finite()
+                    && position.longitude_degrees.is_finite()
+                    && position.altitude_meters.is_finite()
+                {
+                    state.phy.locations.insert(
+                        nem_id,
+                        Location {
+                            latitude_degrees: position.latitude_degrees,
+                            longitude_degrees: position.longitude_degrees,
+                            altitude_meters: position.altitude_meters,
+                        },
+                    );
+                }
+            }
+        }
+        101 => {
+            let Ok(event) = PathlossEvent::decode(bytes) else {
+                return;
+            };
+            for pathloss in event.pathlosses {
+                let Ok(nem_id) = u16::try_from(pathloss.nem_id) else {
+                    continue;
+                };
+                let value = f64::from(pathloss.forward_pathlossd_b);
+                if value.is_finite() {
+                    state
+                        .phy
+                        .pathloss
+                        .entry(nem_id)
+                        .or_default()
+                        .insert(0, value);
+                }
+            }
+        }
+        107 => {
+            let Ok(event) = PathlossExEvent::decode(bytes) else {
+                return;
+            };
+            for pathloss in event.pathlosses {
+                let Ok(nem_id) = u16::try_from(pathloss.nem_id) else {
+                    continue;
+                };
+                let values = state.phy.pathloss.entry(nem_id).or_default();
+                for entry in pathloss.entries {
+                    let value = f64::from(entry.pathlossd_b);
+                    if value.is_finite() {
+                        values.insert(entry.frequency_hz, value);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
 
 fn builtin_api(plugin: &str, plugin_type: u32) -> &'static PluginApi {
     static PHY: OnceLock<PluginApi> = OnceLock::new();
@@ -801,6 +1553,7 @@ fn builtin_api(plugin: &str, plugin_type: u32) -> &'static PluginApi {
         process_upstream: builtin_upstream,
         process_downstream: builtin_downstream,
         process_timed_event: builtin_timed,
+        process_event: builtin_event,
     })
 }
 
@@ -962,10 +1715,14 @@ impl NemManager {
             api: api as usize,
             plugin_ctx: plugin_context as usize,
         };
+        let framework_context_ptr =
+            framework_context.as_mut() as *mut FrameworkContext as *mut c_void;
+        let event_build_id = next_event_build_id();
         self.layers.entry(nem_id).or_default().push(NemLayer {
             _library: library,
             invocation,
             _framework_context: framework_context,
+            event_build_id,
             started: false,
             destroyed: false,
         });
@@ -976,6 +1733,23 @@ impl NemManager {
             .entry(nem_id)
             .or_default()
             .push(invocation);
+        register_event_user(
+            event_build_id,
+            nem_id,
+            framework_context_ptr,
+            framework_event,
+        );
+        for event_id in 100..=107 {
+            if !emane_rs_event_service_register_event(event_build_id, event_id) {
+                unregister_event_user(event_build_id);
+                return Err(format!(
+                    "failed to register plugin {plugin} for event {event_id}"
+                ));
+            }
+        }
+        if expected_type == 2 {
+            register_native_user(nem_id, framework_context_ptr, ota_packet);
+        }
         Ok(())
     }
 
@@ -1067,6 +1841,20 @@ impl NemManager {
 impl Drop for NemManager {
     fn drop(&mut self) {
         self.stop();
+        for (nem_id, layers) in &self.layers {
+            for layer in layers
+                .iter()
+                .filter(|layer| layer.invocation.api().plugin_type == 2)
+            {
+                unregister_native_user(
+                    *nem_id,
+                    layer._framework_context.as_ref() as *const FrameworkContext as *mut c_void,
+                );
+            }
+        }
+        for layer in self.layers.values().flatten() {
+            unregister_event_user(layer.event_build_id);
+        }
         if let Ok(mut runtime_layers) = self.runtime.invocations.write() {
             runtime_layers.clear();
         }
@@ -1085,6 +1873,135 @@ impl Drop for NemManager {
 mod tests {
     use super::*;
     use crate::plugin_interface::{FfiPacketInfo, FfiSlice};
+    use std::sync::atomic::AtomicUsize;
+
+    static LOCAL_OTA_HITS: AtomicUsize = AtomicUsize::new(0);
+
+    extern "C" fn test_init(_: u16, _: *const FfiFrameworkService) -> *mut c_void {
+        std::ptr::dangling_mut::<u8>().cast()
+    }
+    extern "C" fn test_configure(_: *mut c_void, _: *const c_void) -> bool {
+        true
+    }
+    extern "C" fn test_start(_: *mut c_void) -> bool {
+        true
+    }
+    extern "C" fn test_lifecycle(_: *mut c_void) {}
+    extern "C" fn test_packet(
+        _: *mut c_void,
+        _: *const FfiPacket,
+        _: *const FfiControlMessage,
+        _: usize,
+    ) {
+    }
+    extern "C" fn test_upstream(
+        _: *mut c_void,
+        _: *const FfiPacket,
+        _: *const FfiControlMessage,
+        _: usize,
+    ) {
+        LOCAL_OTA_HITS.fetch_add(1, Ordering::Relaxed);
+    }
+    extern "C" fn test_timed(_: *mut c_void, _: u64, _: u32, _: *const u8, _: usize) {}
+    extern "C" fn test_event(_: *mut c_void, _: u16, _: *const u8, _: usize) {}
+
+    fn test_api() -> &'static PluginApi {
+        static API: OnceLock<PluginApi> = OnceLock::new();
+        API.get_or_init(|| PluginApi {
+            abi_version: PLUGIN_ABI_VERSION,
+            struct_size: std::mem::size_of::<PluginApi>(),
+            name: c"test".as_ptr(),
+            plugin_type: 2,
+            init: test_init,
+            configure: test_configure,
+            start: test_start,
+            post_start: test_lifecycle,
+            stop: test_lifecycle,
+            destroy: test_lifecycle,
+            process_upstream: test_upstream,
+            process_downstream: test_packet,
+            process_timed_event: test_timed,
+            process_event: test_event,
+        })
+    }
+
+    #[test]
+    fn scaled_frequency_values_match_emane_configuration_syntax() {
+        assert_eq!(parse_scaled_u64("1M"), Some(1_000_000));
+        assert_eq!(parse_scaled_u64("2.347G"), Some(2_347_000_000));
+        assert_eq!(parse_scaled_u64("500k"), Some(500_000));
+        assert_eq!(parse_scaled_u64("-1M"), None);
+        assert_eq!(parse_scaled_u64("garbage"), None);
+    }
+
+    #[test]
+    fn precomputed_propagation_prefers_frequency_specific_pathloss() {
+        let mut phy = PhyState::new();
+        phy.pathloss
+            .insert(2, HashMap::from([(0, 50.0), (2_347_000_000, 72.5)]));
+        assert_eq!(phy.propagation(1, 2, 2_347_000_000), Some((72.5, 0)));
+        assert_eq!(phy.propagation(1, 2, 915_000_000), Some((50.0, 0)));
+        assert_eq!(phy.propagation(1, 3, 915_000_000), None);
+    }
+
+    #[test]
+    fn location_models_compute_distance_and_nonnegative_pathloss() {
+        let mut phy = PhyState::new();
+        phy.locations.insert(
+            1,
+            Location {
+                latitude_degrees: 40.0,
+                longitude_degrees: -74.0,
+                altitude_meters: 10.0,
+            },
+        );
+        phy.locations.insert(
+            2,
+            Location {
+                latitude_degrees: 40.001,
+                longitude_degrees: -74.0,
+                altitude_meters: 20.0,
+            },
+        );
+        phy.propagation_model = PropagationModel::FreeSpace;
+        let (pathloss, delay) = phy.propagation(1, 2, 2_347_000_000).unwrap();
+        assert!(pathloss > 0.0);
+        assert!(delay >= 0);
+        phy.propagation_model = PropagationModel::TwoRay;
+        assert!(phy.propagation(1, 2, 2_347_000_000).unwrap().0 >= 0.0);
+    }
+
+    #[test]
+    fn local_ota_is_observed_by_every_other_nem() {
+        LOCAL_OTA_HITS.store(0, Ordering::Relaxed);
+        let invocation = Invocation {
+            api: test_api() as *const PluginApi as usize,
+            plugin_ctx: std::ptr::dangling_mut::<u8>() as usize,
+        };
+        let runtime = Runtime {
+            invocations: RwLock::new(HashMap::from([
+                (1, vec![invocation]),
+                (2, vec![invocation]),
+                (3, vec![invocation]),
+            ])),
+        };
+        let payload = [1u8];
+        let packet = FfiPacket {
+            info: FfiPacketInfo {
+                source: 1,
+                destination: 2,
+                priority: 0,
+                creation_time_sec: 0,
+                creation_time_usec: 0,
+            },
+            payload: FfiSlice {
+                data: payload.as_ptr(),
+                len: payload.len(),
+            },
+        };
+        runtime.route_downstream(1, 0, &packet, std::ptr::null(), 0);
+        assert_eq!(LOCAL_OTA_HITS.load(Ordering::Relaxed), 2);
+    }
 
     #[test]
     fn builtin_stack_lifecycle_and_routing() {

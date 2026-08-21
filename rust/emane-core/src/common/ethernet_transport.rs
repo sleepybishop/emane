@@ -289,19 +289,18 @@ pub extern "C" fn emane_rs_ethernet_transport_update_arp_cache(
                 }
             }
         }
-        ETH_P_IPV6
-            if len >= ETH_HEADER_LEN + IPV6_HEADER_LEN + 8 => {
-                // +8 for ICMPv6 min
-                let next_header = buf_slice[ETH_HEADER_LEN + 6];
-                if next_header == IPV6_P_ICMP {
-                    let icmp_type = buf_slice[ETH_HEADER_LEN + IPV6_HEADER_LEN];
-                    if icmp_type == IP6_ICMP_NEIGH_SOLICIT || icmp_type == IP6_ICMP_NEIGH_ADVERT {
-                        if let Ok(mut cache) = state.mac_cache.lock() {
-                            cache.insert(src_mac, nem_id);
-                        }
+        ETH_P_IPV6 if len >= ETH_HEADER_LEN + IPV6_HEADER_LEN + 8 => {
+            // +8 for ICMPv6 min
+            let next_header = buf_slice[ETH_HEADER_LEN + 6];
+            if next_header == IPV6_P_ICMP {
+                let icmp_type = buf_slice[ETH_HEADER_LEN + IPV6_HEADER_LEN];
+                if icmp_type == IP6_ICMP_NEIGH_SOLICIT || icmp_type == IP6_ICMP_NEIGH_ADVERT {
+                    if let Ok(mut cache) = state.mac_cache.lock() {
+                        cache.insert(src_mac, nem_id);
                     }
                 }
             }
+        }
         _ => {}
     }
 }

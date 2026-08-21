@@ -172,10 +172,7 @@ pub extern "C" fn emane_rs_buildid_register_layer(
         unsafe { CStr::from_ptr(plugin_name).to_string_lossy().into_owned() }
     };
 
-    let entry = s
-        .nem_layer_components
-        .entry(nem_id)
-        .or_default();
+    let entry = s.nem_layer_components.entry(nem_id).or_default();
     entry.push(NEMLayerComponent {
         build_id,
         layer_type,
@@ -260,12 +257,17 @@ pub extern "C" fn emane_rs_buildid_free_nem_layer_component_map(map: FfiNEMLayer
                     }
                 }
                 unsafe {
-                    drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(list.components, list.len)));
+                    drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                        list.components,
+                        list.len,
+                    )));
                 }
             }
         }
         unsafe {
-            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(map.nems, map.len)));
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                map.nems, map.len,
+            )));
         }
     }
 }

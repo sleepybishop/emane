@@ -55,10 +55,7 @@ impl QueueMetricManager {
         num_discards: u32,
         delay_microseconds: u64,
     ) {
-        let data = self
-            .queue_data_map
-            .entry(queue_id)
-            .or_default();
+        let data = self.queue_data_map.entry(queue_id).or_default();
 
         data.num_samples += 1;
         data.sum_delay_microseconds += delay_microseconds;

@@ -99,10 +99,7 @@ impl RFSignalTable {
 
         let key = format!("{}:{}:{}", src, rx_antenna_id, frequency_hz);
 
-        let entry = self
-            .rf_receive_metric_cache
-            .entry(key)
-            .or_default();
+        let entry = self.rf_receive_metric_cache.entry(key).or_default();
 
         entry.update(
             rx_power_dbm,

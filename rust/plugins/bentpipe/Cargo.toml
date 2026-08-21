@@ -8,3 +8,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 emane-plugin-api = { path = "../../emane-plugin-api" }
+roxmltree = "0.19"
