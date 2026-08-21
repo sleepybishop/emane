@@ -1,3 +1,9 @@
 [workspace]
-resolver = "2"
-members = ["emane-core"]
+members = [
+    "emane-core",
+    "plugins/dummy-mac",
+    "plugins/ieee80211abg",
+    "plugins/bentpipe",
+    "plugins/tdma",
+    "plugins/rfpipe"
+]

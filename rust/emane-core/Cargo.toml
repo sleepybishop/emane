@@ -14,12 +14,12 @@ socket2 = "0.5"
 libc = "0.2"
 pcap = "2.5.0"
 lazy_static = "1.5.0"
+libloading = "0.9.0"
 
 [lib]
 crate-type = ["staticlib", "lib"]
 
 [build-dependencies]
 cc = "1.0"
-bindgen = "0.69.5"
 prost-build = "0.12"
 

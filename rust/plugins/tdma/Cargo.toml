@@ -1,0 +1,13 @@
+[package]
+name = "tdma"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+emane-core = { path = "../../emane-core" }
+libc = "0.2"
+rand = "0.8"
+roxmltree = "0.19"

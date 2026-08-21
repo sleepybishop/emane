@@ -1,4 +1,12 @@
-use emane_core::nem_manager::NemManager;
+import sys
+
+with open("rust/emane-core/src/bin/emane.rs", "r") as f:
+    content = f.read()
+
+# I will write a simple emane.rs that parses the args and XML,
+# and uses NemManager.
+
+new_content = """use emane_core::nem_manager::NemManager;
 use emane_core::xml_parser::{parse_platform, ParamMap};
 use std::env;
 use std::path::Path;
@@ -64,19 +72,19 @@ fn main() {
         }
     };
 
-    let mut nem_manager = NemManager::new([0; 16]);
+    let mut nem_manager = NemManager::new();
 
     for nem in platform.nems {
         for layer in nem.layers {
             // Very hacky mapping of old C++ plugin names to our new cdylib filenames!
-            let lib_name = match layer.plugin.as_deref().unwrap_or("") {
+            let lib_name = match layer.plugin_name.as_str() {
                 "ieee80211abgmaclayer" => "libieee80211abg.so",
                 "emane-model-bentpipe" => "libbentpipe.so",
                 "rfpipemaclayer" => "librfpipe.so",
                 "tdmaeventschedulerradiomodel" => "libtdma.so",
                 "virtualtransport" => "libvirtual_transport.so",
                 _ => {
-                    println!("WARNING: Unsupported layer {}", layer.plugin.as_deref().unwrap_or(""));
+                    println!("WARNING: Unsupported layer {}", layer.plugin_name);
                     continue;
                 }
             };
@@ -90,3 +98,7 @@ fn main() {
     println!("Emulator started! Parking thread.");
     std::thread::park();
 }
+"""
+
+with open("rust/emane-core/src/bin/emane.rs", "w") as f:
+    f.write(new_content)

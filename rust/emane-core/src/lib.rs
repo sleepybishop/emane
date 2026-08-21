@@ -19,8 +19,6 @@ pub mod ota_manager;
 pub mod pcr_manager;
 pub mod queue_metric_manager;
 pub mod rf_signal_table;
-pub mod rfpipe_mac;
-pub mod rfpipe_message;
 pub mod statistics;
 pub mod tdma_message;
 
@@ -233,12 +231,11 @@ pub mod phy_layer;
 pub mod transport_layer;
 
 pub mod agents;
-pub mod bentpipe;
 pub mod factory_manager;
 pub mod generators;
-pub mod ieee80211abg;
 pub mod raw_transport;
 pub mod shim;
-pub mod tdma;
 pub mod r#virtual;
 pub mod xml_parser;
+pub mod plugin_interface;
+pub mod types;

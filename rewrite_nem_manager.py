@@ -1,4 +1,7 @@
+import sys
 
+with open("rust/emane-core/src/nem_manager.rs", "w") as f:
+    f.write("""
 use std::os::raw::{c_char, c_void};
 use std::ffi::CStr;
 use std::collections::HashMap;
@@ -64,3 +67,4 @@ extern "C" fn log(_ctx: *mut c_void, _level: u32, msg: *const c_char) {
     let s = unsafe { CStr::from_ptr(msg) };
     println!("[EMANE] {}", s.to_string_lossy());
 }
+""")
