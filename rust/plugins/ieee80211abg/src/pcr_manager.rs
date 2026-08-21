@@ -1,4 +1,3 @@
-use roxmltree;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr};
 use std::fs;
@@ -29,6 +28,7 @@ impl PCRManager {
     }
 
     pub fn load(&mut self, uri: &str) -> Result<(), String> {
+        let uri = uri.strip_prefix("file://").unwrap_or(uri);
         let content = fs::read_to_string(uri).map_err(|e| format!("Failed to read file: {}", e))?;
         let doc = roxmltree::Document::parse(&content)
             .map_err(|e| format!("Failed to parse XML: {}", e))?;

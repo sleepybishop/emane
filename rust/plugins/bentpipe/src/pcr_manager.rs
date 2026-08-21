@@ -23,6 +23,7 @@ impl PCRManager {
     }
 
     pub fn load(&mut self, file_name: &str) -> Result<(), String> {
+        let file_name = file_name.strip_prefix("file://").unwrap_or(file_name);
         let content =
             fs::read_to_string(file_name).map_err(|e| format!("Failed to read file: {}", e))?;
         let doc = roxmltree::Document::parse(&content)
