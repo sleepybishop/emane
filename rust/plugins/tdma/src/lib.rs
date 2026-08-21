@@ -1,10 +1,11 @@
 mod pcr;
 
 use emane_plugin_api::{
-    FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket, FfiPacketInfo, FfiSlice,
-    FrequencyOfInterest, ModelHeader, PluginApi, RxProperties, TxProperties,
-    CONTROL_FREQUENCY_INTEREST, CONTROL_MODEL_HEADER, CONTROL_RX_PROPERTIES, CONTROL_TX_PROPERTIES,
-    MAC_REGISTRATION_TDMA, PLUGIN_ABI_VERSION,
+    CommonLayerCounters, FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket,
+    FfiPacketInfo, FfiSlice, FlowControlToken, FrequencyOfInterest, ModelHeader, PluginApi,
+    RxProperties, TxProperties, CONTROL_FLOW_CONTROL_TOKEN, CONTROL_FREQUENCY_INTEREST,
+    CONTROL_MODEL_HEADER, CONTROL_RX_PROPERTIES, CONTROL_TX_PROPERTIES, MAC_REGISTRATION_TDMA,
+    PLUGIN_ABI_VERSION,
 };
 use pcr::PcrManager;
 use prost::Message;
@@ -204,6 +205,7 @@ struct State {
 struct TdmaMac {
     id: u16,
     framework: FfiFrameworkService,
+    counters: CommonLayerCounters,
     state: Mutex<State>,
 }
 
@@ -212,6 +214,7 @@ impl TdmaMac {
         Self {
             id,
             framework,
+            counters: CommonLayerCounters::register(framework),
             state: Mutex::new(State {
                 promiscuous: false,
                 flow_control_enable: false,
@@ -430,6 +433,18 @@ fn parse_schedule(data: &[u8], current: Option<&Schedule>) -> Result<(Schedule, 
     Ok((schedule, full))
 }
 
+fn send_flow_update(mac: &TdmaMac, tokens: u16) {
+    let bytes = FlowControlToken { tokens }.encode();
+    let control = FfiControlMessage {
+        msg_type: CONTROL_FLOW_CONTROL_TOKEN,
+        payload: FfiSlice {
+            data: bytes.as_ptr(),
+            len: bytes.len(),
+        },
+    };
+    (mac.framework.send_upstream_control)(mac.framework.framework_ctx, mac.id, &control, 1);
+}
+
 extern "C" fn init(id: u16, framework: *const FfiFrameworkService) -> *mut c_void {
     let Some(framework) = (unsafe { framework.as_ref() }) else {
         return std::ptr::null_mut();
@@ -457,10 +472,10 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                 state.promiscuous = v;
             }
             "flowcontrolenable" => {
-                if parse_bool(value) != Some(false) {
-                    return false;
-                }
-                state.flow_control_enable = false;
+                state.flow_control_enable = match parse_bool(value) {
+                    Some(value) => value,
+                    None => return false,
+                };
             }
             "flowcontroltokens" => {
                 let Ok(v) = value.parse::<u16>() else {
@@ -546,16 +561,22 @@ extern "C" fn start(plugin: *mut c_void) -> bool {
     let Some(mac) = (unsafe { (plugin as *mut TdmaMac).as_ref() }) else {
         return false;
     };
-    let mut state = mac.state.lock().unwrap();
-    if state.pcr_uri.is_empty() {
-        return false;
-    }
-    let Ok(pcr) = PcrManager::load(&state.pcr_uri) else {
-        return false;
+    let flow_update = {
+        let mut state = mac.state.lock().unwrap();
+        if state.pcr_uri.is_empty() {
+            return false;
+        }
+        let Ok(pcr) = PcrManager::load(&state.pcr_uri) else {
+            return false;
+        };
+        state.pcr = Some(pcr);
+        state.available_tokens = state.flow_control_tokens;
+        state.started = true;
+        state.flow_control_enable.then_some(state.available_tokens)
     };
-    state.pcr = Some(pcr);
-    state.started = true;
-    drop(state);
+    if let Some(tokens) = flow_update {
+        send_flow_update(mac, tokens);
+    }
     schedule_next_tx(mac, true);
     schedule_reassembly_check(mac);
     true
@@ -748,6 +769,12 @@ fn take_transmission(state: &mut State, absolute_slot: u64, used: usize) -> Opti
     let remaining = front.packet.payload.len().saturating_sub(front.offset);
     if remaining > available && !state.fragmentation_enable {
         state.queues[index].remove(position);
+        if state.flow_control_enable {
+            state.available_tokens = state
+                .available_tokens
+                .saturating_add(1)
+                .min(state.flow_control_tokens);
+        }
         return take_transmission(state, absolute_slot, used);
     }
     let take = remaining.min(available);
@@ -793,7 +820,7 @@ fn take_transmission(state: &mut State, absolute_slot: u64, used: usize) -> Opti
 fn transmit_slot(mac: &TdmaMac, absolute_slot: u64) {
     let mut used = 0usize;
     loop {
-        let (transmission, aggregate, threshold, capacity) = {
+        let (transmission, aggregate, threshold, capacity, flow_update) = {
             let mut state = mac.state.lock().unwrap();
             let Some(schedule) = state.schedule.as_ref() else {
                 return;
@@ -811,10 +838,17 @@ fn transmit_slot(mac: &TdmaMac, absolute_slot: u64) {
                 .min(usize::MAX as u128) as usize;
             let aggregate = state.aggregation_enable;
             let threshold = state.aggregation_threshold;
+            let previous_tokens = state.available_tokens;
             let transmission = take_transmission(&mut state, absolute_slot, used);
-            (transmission, aggregate, threshold, capacity)
+            let flow_update = (state.flow_control_enable
+                && state.available_tokens != previous_tokens)
+                .then_some(state.available_tokens);
+            (transmission, aggregate, threshold, capacity, flow_update)
         };
         let Some(tx_item) = transmission else {
+            if let Some(tokens) = flow_update {
+                send_flow_update(mac, tokens);
+            }
             return;
         };
         let header = encode_header(
@@ -871,6 +905,11 @@ fn transmit_slot(mac: &TdmaMac, absolute_slot: u64) {
             messages.as_ptr(),
             messages.len(),
         );
+        mac.counters
+            .downstream_tx(mac.framework, tx_item.info.destination, tx_item.bytes.len());
+        if let Some(tokens) = flow_update {
+            send_flow_update(mac, tokens);
+        }
         used = used.saturating_add(tx_item.bytes.len() + FRAME_OVERHEAD_BYTES);
         if !aggregate
             || tx_item.more
@@ -894,12 +933,23 @@ extern "C" fn downstream(
     let Some(packet) = own_packet(packet) else {
         return;
     };
+    mac.counters
+        .downstream_rx(mac.framework, packet.info.destination, packet.payload.len());
     let mut state = mac.state.lock().unwrap();
     if state.flow_control_enable && state.available_tokens == 0 {
+        mac.counters
+            .downstream_drop(mac.framework, packet.info.destination);
         return;
     }
     let index = usize::from(packet.info.priority.min(3));
     if state.queues[index].len() >= state.queue_depth {
+        let update = state.flow_control_enable.then_some(state.available_tokens);
+        drop(state);
+        if let Some(tokens) = update {
+            send_flow_update(mac, tokens);
+        }
+        mac.counters
+            .downstream_drop(mac.framework, packet.info.destination);
         return;
     }
     if state.flow_control_enable {
@@ -930,6 +980,8 @@ fn send_upstream(mac: &TdmaMac, packet: OwnedPacket) {
         std::ptr::null(),
         0,
     );
+    mac.counters
+        .upstream_tx(mac.framework, packet.info.destination, packet.payload.len());
 }
 
 extern "C" fn upstream(
@@ -944,6 +996,8 @@ extern "C" fn upstream(
     let Some(packet) = own_packet(packet) else {
         return;
     };
+    mac.counters
+        .upstream_rx(mac.framework, packet.info.destination, packet.payload.len());
     let Some(messages) = controls(messages, count) else {
         return;
     };

@@ -47,10 +47,8 @@ impl NemImpl {
     }
 
     pub fn post_start(&self) {
-        unsafe {
-            if !self.stack.is_null() {
-                crate::nem_layer_stack::emane_rs_nem_layer_stack_post_start(self.stack);
-            }
+        if !self.stack.is_null() {
+            crate::nem_layer_stack::emane_rs_nem_layer_stack_post_start(self.stack);
         }
     }
 
@@ -69,10 +67,8 @@ impl NemImpl {
     }
 
     pub fn destroy(&self) {
-        unsafe {
-            if !self.stack.is_null() {
-                crate::nem_layer_stack::emane_rs_nem_layer_stack_destroy_layers(self.stack);
-            }
+        if !self.stack.is_null() {
+            crate::nem_layer_stack::emane_rs_nem_layer_stack_destroy_layers(self.stack);
         }
     }
 }

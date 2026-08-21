@@ -1,6 +1,9 @@
 use emane_plugin_api::{
-    FfiConfigItem, FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket,
-    FfiPacketInfo, FfiSlice, PluginApi, TxProperties, CONTROL_TX_PROPERTIES, PLUGIN_ABI_VERSION,
+    CommonLayerCounters, FfiConfigItem, FfiConfigRequest, FfiControlMessage, FfiFrameworkService,
+    FfiPacket, FfiPacketInfo, FfiSlice, PluginApi, TxAntennaProfile, TxFrequencySegment,
+    TxFrequencySegments, TxProperties, TxTransmitter, TxTransmitters, CONTROL_TX_ANTENNA_PROFILE,
+    CONTROL_TX_FREQUENCY_SEGMENTS, CONTROL_TX_PROPERTIES, CONTROL_TX_TRANSMITTERS,
+    PLUGIN_ABI_VERSION,
 };
 use std::ffi::{c_void, CStr};
 use std::sync::OnceLock;
@@ -19,11 +22,14 @@ struct FrequencySegment {
 struct PhyApiTest {
     id: u16,
     framework: FfiFrameworkService,
+    counters: CommonLayerCounters,
     packet_size: u16,
     interval_microseconds: u64,
     destination: u16,
     bandwidth_hz: u64,
-    frequency: FrequencySegment,
+    frequencies: Vec<FrequencySegment>,
+    transmitters: Vec<TxTransmitter>,
+    antenna_profile: Option<TxAntennaProfile>,
     tx_power_dbm: f64,
     timer_id: u64,
     bandwidth_configured: bool,
@@ -105,21 +111,25 @@ fn parse_frequency(value: &str) -> Option<FrequencySegment> {
         duration_microseconds: seconds_to_microseconds(fields.next()?)?,
         offset_microseconds: seconds_to_microseconds(fields.next()?)?,
     };
-    (fields.next().is_none() && result.frequency_hz != 0).then_some(result)
+    fields.next().is_none().then_some(result)
 }
 
 extern "C" fn init(id: u16, framework: *const FfiFrameworkService) -> *mut c_void {
     let Some(framework) = (unsafe { framework.as_ref() }) else {
         return std::ptr::null_mut();
     };
+    let framework = *framework;
     Box::into_raw(Box::new(PhyApiTest {
         id,
-        framework: *framework,
+        framework,
+        counters: CommonLayerCounters::register(framework),
         packet_size: 128,
         interval_microseconds: 1_000_000,
         destination: BROADCAST_NEM,
         bandwidth_hz: 0,
-        frequency: FrequencySegment::default(),
+        frequencies: Vec::new(),
+        transmitters: Vec::new(),
+        antenna_profile: None,
         tx_power_dbm: 0.0,
         timer_id: 0,
         bandwidth_configured: false,
@@ -178,12 +188,13 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                 state.bandwidth_hz = value;
                 state.bandwidth_configured = true;
             }
-            "frequency" if values.len() <= 1 => {
-                if let Some(value) = values.first() {
-                    let Some(segment) = parse_frequency(value) else {
+            "frequency" if values.len() <= 255 => {
+                state.frequencies.clear();
+                for value in values {
+                    let Some(segment) = parse_frequency(&value) else {
                         return false;
                     };
-                    state.frequency = segment;
+                    state.frequencies.push(segment);
                 }
             }
             "txpower" if values.len() == 1 => {
@@ -195,10 +206,76 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                 }
                 state.tx_power_dbm = value;
             }
-            // Collaborative transmitters and per-packet antenna pointing need
-            // controls not present in the native ABI. Reject them explicitly.
-            "transmitter" | "antennaprofileid" | "antennaazimuth" | "antennaelevation" => {
-                return false;
+            "transmitter" if values.len() <= 255 => {
+                state.transmitters.clear();
+                for value in values {
+                    let mut fields = value.split(':');
+                    let (Some(nem_id), Some(tx_power_dbm), None) =
+                        (fields.next(), fields.next(), fields.next())
+                    else {
+                        return false;
+                    };
+                    let (Ok(nem_id), Ok(tx_power_dbm)) =
+                        (nem_id.parse::<u16>(), tx_power_dbm.parse::<f64>())
+                    else {
+                        return false;
+                    };
+                    if nem_id == 0 || !tx_power_dbm.is_finite() {
+                        return false;
+                    }
+                    state.transmitters.push(TxTransmitter {
+                        nem_id,
+                        tx_power_dbm,
+                    });
+                }
+            }
+            "antennaprofileid" if values.len() == 1 => {
+                let Ok(profile_id) = values[0].parse::<u16>() else {
+                    return false;
+                };
+                if profile_id == 0 {
+                    return false;
+                }
+                state
+                    .antenna_profile
+                    .get_or_insert(TxAntennaProfile {
+                        profile_id,
+                        azimuth_degrees: 0.0,
+                        elevation_degrees: 0.0,
+                    })
+                    .profile_id = profile_id;
+            }
+            "antennaazimuth" if values.len() == 1 => {
+                let Ok(azimuth_degrees) = values[0].parse::<f64>() else {
+                    return false;
+                };
+                if !azimuth_degrees.is_finite() || !(0.0..=360.0).contains(&azimuth_degrees) {
+                    return false;
+                }
+                state
+                    .antenna_profile
+                    .get_or_insert(TxAntennaProfile {
+                        profile_id: 0,
+                        azimuth_degrees,
+                        elevation_degrees: 0.0,
+                    })
+                    .azimuth_degrees = azimuth_degrees;
+            }
+            "antennaelevation" if values.len() == 1 => {
+                let Ok(elevation_degrees) = values[0].parse::<f64>() else {
+                    return false;
+                };
+                if !elevation_degrees.is_finite() || !(-90.0..=90.0).contains(&elevation_degrees) {
+                    return false;
+                }
+                state
+                    .antenna_profile
+                    .get_or_insert(TxAntennaProfile {
+                        profile_id: 0,
+                        azimuth_degrees: 0.0,
+                        elevation_degrees,
+                    })
+                    .elevation_degrees = elevation_degrees;
             }
             _ => return false,
         }
@@ -285,32 +362,82 @@ extern "C" fn timed(plugin: *mut c_void, _: u64, event_id: u32, _: *const u8, _:
             len: payload.len(),
         },
     };
+    let first_segment = state.frequencies.first().copied().unwrap_or_default();
     let properties = TxProperties {
-        frequency_hz: state.frequency.frequency_hz,
+        frequency_hz: first_segment.frequency_hz,
         bandwidth_hz: state.bandwidth_hz,
         tx_power_dbm: state.tx_power_dbm,
-        duration_microseconds: state.frequency.duration_microseconds,
-        offset_microseconds: state.frequency.offset_microseconds,
+        duration_microseconds: first_segment.duration_microseconds,
+        offset_microseconds: first_segment.offset_microseconds,
         tx_time_microseconds: now as i64,
         antenna_index: 0,
         spectral_mask_index: 0,
         sub_id: 0,
     }
     .encode();
-    let control = FfiControlMessage {
+    let mut controls = vec![FfiControlMessage {
         msg_type: CONTROL_TX_PROPERTIES,
         payload: FfiSlice {
             data: properties.as_ptr(),
             len: properties.len(),
         },
-    };
+    }];
+    let segment_bytes = (!state.frequencies.is_empty())
+        .then(|| TxFrequencySegments {
+            segments: state
+                .frequencies
+                .iter()
+                .map(|segment| TxFrequencySegment {
+                    frequency_hz: segment.frequency_hz,
+                    duration_microseconds: segment.duration_microseconds,
+                    offset_microseconds: segment.offset_microseconds,
+                })
+                .collect(),
+        })
+        .and_then(|segments| segments.encode());
+    if let Some(bytes) = &segment_bytes {
+        controls.push(FfiControlMessage {
+            msg_type: CONTROL_TX_FREQUENCY_SEGMENTS,
+            payload: FfiSlice {
+                data: bytes.as_ptr(),
+                len: bytes.len(),
+            },
+        });
+    }
+    let transmitter_bytes = (!state.transmitters.is_empty())
+        .then(|| TxTransmitters {
+            transmitters: state.transmitters.clone(),
+        })
+        .and_then(|transmitters| transmitters.encode());
+    if let Some(bytes) = &transmitter_bytes {
+        controls.push(FfiControlMessage {
+            msg_type: CONTROL_TX_TRANSMITTERS,
+            payload: FfiSlice {
+                data: bytes.as_ptr(),
+                len: bytes.len(),
+            },
+        });
+    }
+    let antenna_bytes = state.antenna_profile.and_then(TxAntennaProfile::encode);
+    if let Some(bytes) = &antenna_bytes {
+        controls.push(FfiControlMessage {
+            msg_type: CONTROL_TX_ANTENNA_PROFILE,
+            payload: FfiSlice {
+                data: bytes.as_ptr(),
+                len: bytes.len(),
+            },
+        });
+    }
     (state.framework.send_downstream_packet)(
         state.framework.framework_ctx,
         state.id,
         &packet,
-        &control,
-        1,
+        controls.as_ptr(),
+        controls.len(),
     );
+    state
+        .counters
+        .downstream_tx(state.framework, packet.info.destination, packet.payload.len);
     schedule_next(state);
 }
 
@@ -347,6 +474,6 @@ mod tests {
         assert_eq!(segment.frequency_hz, 2_400_000_000);
         assert_eq!(segment.duration_microseconds, 1_000);
         assert_eq!(segment.offset_microseconds, 250);
-        assert!(parse_frequency("0:1:0").is_none());
+        assert_eq!(parse_frequency("0:1:0").unwrap().frequency_hz, 0);
     }
 }

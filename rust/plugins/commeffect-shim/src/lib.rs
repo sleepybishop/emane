@@ -1,6 +1,7 @@
 use emane_plugin_api::{
-    CommEffectHeader, FfiConfigItem, FfiConfigRequest, FfiControlMessage, FfiFrameworkService,
-    FfiPacket, FfiPacketInfo, FfiSlice, PluginApi, CONTROL_COMM_EFFECT_HEADER, PLUGIN_ABI_VERSION,
+    CommEffectHeader, CommonLayerCounters, FfiConfigItem, FfiConfigRequest, FfiControlMessage,
+    FfiFrameworkService, FfiPacket, FfiPacketInfo, FfiSlice, PluginApi, CONTROL_COMM_EFFECT_HEADER,
+    PLUGIN_ABI_VERSION,
 };
 use prost::Message;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -151,6 +152,7 @@ impl Target {
 struct CommEffectShim {
     id: u16,
     framework: FfiFrameworkService,
+    counters: CommonLayerCounters,
     default_connectivity: bool,
     promiscuous: bool,
     group_id: u32,
@@ -233,9 +235,11 @@ extern "C" fn init(id: u16, framework: *const FfiFrameworkService) -> *mut c_voi
     let Some(framework) = (unsafe { framework.as_ref() }) else {
         return std::ptr::null_mut();
     };
+    let framework = *framework;
     Box::into_raw(Box::new(CommEffectShim {
         id,
-        framework: *framework,
+        framework,
+        counters: CommonLayerCounters::register(framework),
         default_connectivity: true,
         promiscuous: false,
         group_id: 0,
@@ -354,6 +358,12 @@ extern "C" fn downstream(
         sequence: state.sequence,
         tx_time_microseconds: unix_microseconds() as i64,
     };
+    let packet_ref = unsafe { &*packet };
+    state.counters.downstream_rx(
+        state.framework,
+        packet_ref.info.destination,
+        packet_ref.payload.len,
+    );
     state.sequence = state.sequence.wrapping_add(1);
     let encoded = header.encode();
     let mut outgoing: Vec<_> = incoming
@@ -374,6 +384,11 @@ extern "C" fn downstream(
         packet,
         outgoing.as_ptr(),
         outgoing.len(),
+    );
+    state.counters.downstream_tx(
+        state.framework,
+        packet_ref.info.destination,
+        packet_ref.payload.len,
     );
 }
 
@@ -399,6 +414,9 @@ extern "C" fn upstream(
         return;
     }
     let packet = unsafe { &*packet };
+    state
+        .counters
+        .upstream_rx(state.framework, packet.info.destination, packet.payload.len);
     if packet.payload.len != 0 && packet.payload.data.is_null() {
         return;
     }
@@ -504,6 +522,9 @@ fn send_upstream_now(state: &CommEffectShim, packet: &FfiPacket, incoming: &[Ffi
         outgoing.as_ptr(),
         outgoing.len(),
     );
+    state
+        .counters
+        .upstream_tx(state.framework, packet.info.destination, packet.payload.len);
 }
 
 fn task_count(rng: &mut StdRng, loss: f32, duplicate: f32) -> usize {
@@ -566,6 +587,11 @@ extern "C" fn timed(plugin: *mut c_void, _: u64, event_id: u32, data: *const u8,
         &pending.packet,
         pending.messages.as_ptr(),
         pending.messages.len(),
+    );
+    state.counters.upstream_tx(
+        state.framework,
+        pending.packet.info.destination,
+        pending.packet.payload.len,
     );
 }
 
@@ -920,6 +946,53 @@ mod tests {
 
     extern "C" fn capture_cancel(_: *mut c_void, _: u16, _: u64) {}
     extern "C" fn capture_log(_: *mut c_void, _: u32, _: *const c_char) {}
+    extern "C" fn capture_register(
+        _: *mut c_void,
+        _: *const c_char,
+        _: *const c_char,
+        _: bool,
+    ) -> u64 {
+        0
+    }
+    extern "C" fn capture_increment(_: *mut c_void, _: u64, _: u64) -> bool {
+        false
+    }
+    extern "C" fn capture_neighbor_tx(_: *mut c_void, _: u16, _: u64, _: u64) {}
+    extern "C" fn capture_neighbor_rx(
+        _: *mut c_void,
+        _: u16,
+        _: u64,
+        _: f64,
+        _: f64,
+        _: u64,
+        _: u64,
+        _: u64,
+    ) {
+    }
+    extern "C" fn capture_queue(_: *mut c_void, _: u16, _: u32, _: u32, _: u32, _: u64) {}
+    extern "C" fn capture_publish(_: *mut c_void, _: u64, _: u64, _: u64, _: u64) {}
+    extern "C" fn capture_register_rf(_: *mut c_void, _: u16) -> u64 {
+        1
+    }
+    extern "C" fn capture_configure_rf(_: *mut c_void, _: u64, _: bool, _: bool) -> bool {
+        true
+    }
+    extern "C" fn capture_update_rf(
+        _: *mut c_void,
+        _: u64,
+        _: u16,
+        _: u16,
+        _: u64,
+        _: f64,
+        _: f64,
+        _: f64,
+        _: f64,
+    ) -> bool {
+        true
+    }
+    extern "C" fn capture_publish_event(_: *mut c_void, _: u16, _: *const u8, _: usize) -> bool {
+        true
+    }
 
     #[test]
     fn header_and_event_round_trip() {
@@ -988,6 +1061,16 @@ mod tests {
             schedule_timed_event: capture_schedule,
             cancel_timed_event: capture_cancel,
             log: capture_log,
+            register_counter: capture_register,
+            increment_counter: capture_increment,
+            update_neighbor_tx: capture_neighbor_tx,
+            update_neighbor_rx: capture_neighbor_rx,
+            update_queue_metric: capture_queue,
+            publish_r2ri: capture_publish,
+            register_rf_signal_table: capture_register_rf,
+            configure_rf_signal_table: capture_configure_rf,
+            update_rf_signal_table: capture_update_rf,
+            publish_event: capture_publish_event,
         };
         let plugin = init(1, &framework);
         let request = FfiConfigRequest {

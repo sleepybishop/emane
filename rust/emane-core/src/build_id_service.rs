@@ -180,6 +180,18 @@ pub extern "C" fn emane_rs_buildid_register_layer(
     });
 }
 
+pub fn unregister_native_layer(nem_id: u16, build_id: u16) {
+    let Ok(mut service) = get_build_id_service().lock() else {
+        return;
+    };
+    if let Some(components) = service.nem_layer_components.get_mut(&nem_id) {
+        components.retain(|component| component.build_id != build_id);
+        if components.is_empty() {
+            service.nem_layer_components.remove(&nem_id);
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn emane_rs_buildid_register_transport(nem_id: u16, build_id: u16) {
     let mut s = get_build_id_service().lock().unwrap();

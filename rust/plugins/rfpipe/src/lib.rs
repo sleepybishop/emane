@@ -1,9 +1,10 @@
 mod pcr;
 
 use emane_plugin_api::{
-    FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket, FfiPacketInfo, FfiSlice,
-    ModelHeader, PluginApi, RxProperties, TxProperties, CONTROL_MODEL_HEADER,
-    CONTROL_RX_PROPERTIES, CONTROL_TX_PROPERTIES, MAC_REGISTRATION_RFPIPE, PLUGIN_ABI_VERSION,
+    CommonLayerCounters, FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket,
+    FfiPacketInfo, FfiSlice, FlowControlToken, ModelHeader, PluginApi, RxProperties, TxProperties,
+    CONTROL_FLOW_CONTROL_TOKEN, CONTROL_MODEL_HEADER, CONTROL_RX_PROPERTIES, CONTROL_TX_PROPERTIES,
+    MAC_REGISTRATION_RFPIPE, PLUGIN_ABI_VERSION,
 };
 use pcr::PcrCurve;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -13,6 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const EVENT_TRANSMIT: u32 = 1;
 const EVENT_RECEIVE: u32 = 2;
+const EVENT_R2RI_REPORT: u32 = 3;
 const QUEUE_CAPACITY: usize = 255;
 const BROADCAST_NEM: u16 = u16::MAX;
 
@@ -50,6 +52,13 @@ struct State {
     next_transmit_wakeup: i64,
     pending_receptions: HashMap<u64, OwnedPacket>,
     next_reception_id: u64,
+    radiometric_enabled: bool,
+    radiometric_report_interval_microseconds: u64,
+    neighbor_metric_delete_microseconds: u64,
+    rf_signal_table_handle: u64,
+    rf_signal_average_all_antennas: bool,
+    rf_signal_average_all_frequencies: bool,
+    queue_discards: u32,
     timers: HashSet<u64>,
     random_state: u64,
     started: bool,
@@ -58,6 +67,7 @@ struct State {
 struct RfpipeMac {
     id: u16,
     framework: FfiFrameworkService,
+    counters: CommonLayerCounters,
     state: Mutex<State>,
 }
 
@@ -66,6 +76,7 @@ impl RfpipeMac {
         Self {
             id,
             framework,
+            counters: CommonLayerCounters::register(framework),
             state: Mutex::new(State {
                 promiscuous_mode: false,
                 data_rate_bps: 1_000_000,
@@ -82,6 +93,16 @@ impl RfpipeMac {
                 next_transmit_wakeup: 0,
                 pending_receptions: HashMap::new(),
                 next_reception_id: 0,
+                radiometric_enabled: false,
+                radiometric_report_interval_microseconds: 1_000_000,
+                neighbor_metric_delete_microseconds: 60_000_000,
+                rf_signal_table_handle: (framework.register_rf_signal_table)(
+                    framework.framework_ctx,
+                    id,
+                ),
+                rf_signal_average_all_antennas: false,
+                rf_signal_average_all_frequencies: false,
+                queue_discards: 0,
                 timers: HashSet::new(),
                 random_state: 0x9E37_79B9_7F4A_7C15 ^ u64::from(id),
                 started: false,
@@ -349,10 +370,30 @@ fn send_packet(mac: &RfpipeMac, packet: OwnedPacket, header: ModelHeader, durati
         message_views.as_ptr(),
         message_views.len(),
     );
+    mac.counters
+        .downstream_tx(mac.framework, packet.info.destination, packet.payload.len());
+    (mac.framework.update_neighbor_tx)(
+        mac.framework.framework_ctx,
+        packet.info.destination,
+        header.data_rate_bps,
+        now_microseconds().max(0) as u64,
+    );
+}
+
+fn send_flow_update(mac: &RfpipeMac, tokens: u16) {
+    let bytes = FlowControlToken { tokens }.encode();
+    let control = FfiControlMessage {
+        msg_type: CONTROL_FLOW_CONTROL_TOKEN,
+        payload: FfiSlice {
+            data: bytes.as_ptr(),
+            len: bytes.len(),
+        },
+    };
+    (mac.framework.send_upstream_control)(mac.framework.framework_ctx, mac.id, &control, 1);
 }
 
 fn drive_transmit(mac: &RfpipeMac, now: i64) {
-    let (transmission, next_wakeup) = {
+    let (transmission, next_wakeup, flow_update) = {
         let mut state = mac.state.lock().unwrap();
         if !state.started {
             return;
@@ -362,6 +403,7 @@ fn drive_transmit(mac: &RfpipeMac, now: i64) {
                 .queue
                 .front()
                 .is_some_and(|entry| entry.ready_at <= now);
+        let mut flow_update = None;
         let transmission = if can_send {
             let pending = state.queue.pop_front().unwrap();
             if state.flow_control_enable {
@@ -369,6 +411,7 @@ fn drive_transmit(mac: &RfpipeMac, now: i64) {
                     .available_tokens
                     .saturating_add(1)
                     .min(state.flow_control_tokens);
+                flow_update = Some(state.available_tokens);
             }
             let header = ModelHeader {
                 registration_id: MAC_REGISTRATION_RFPIPE,
@@ -390,10 +433,13 @@ fn drive_transmit(mac: &RfpipeMac, now: i64) {
                 .max(state.current_end_of_transmission)
                 .max(now)
         });
-        (transmission, next_wakeup)
+        (transmission, next_wakeup, flow_update)
     };
     if let Some((packet, header, duration)) = transmission {
         send_packet(mac, packet, header, duration);
+    }
+    if let Some(tokens) = flow_update {
+        send_flow_update(mac, tokens);
     }
     if let Some(when) = next_wakeup {
         schedule_transmit(mac, when);
@@ -426,6 +472,8 @@ fn send_upstream(mac: &RfpipeMac, packet: OwnedPacket) {
         messages.as_ptr(),
         messages.len(),
     );
+    mac.counters
+        .upstream_tx(mac.framework, packet.info.destination, packet.payload.len());
 }
 
 extern "C" fn init(id: u16, framework: *const FfiFrameworkService) -> *mut c_void {
@@ -476,10 +524,10 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                 state.jitter_microseconds = value;
             }
             "flowcontrolenable" => {
-                if parse_bool(value) != Some(false) {
-                    return false;
-                }
-                state.flow_control_enable = false;
+                state.flow_control_enable = match parse_bool(value) {
+                    Some(value) => value,
+                    None => return false,
+                };
             }
             "flowcontroltokens" => {
                 let Ok(value) = value.parse::<u16>() else {
@@ -493,43 +541,79 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
             }
             "pcrcurveuri" => state.pcr_curve_uri.clone_from(value),
             "radiometricenable" => {
-                // R2RI publication is not part of this plugin ABI. Do not
-                // claim to enable it when no metrics can be emitted.
-                if parse_bool(value) != Some(false) {
+                let Some(value) = parse_bool(value) else {
                     return false;
-                }
+                };
+                state.radiometric_enabled = value;
             }
-            "radiometricreportinterval" | "neighbormetricdeletetime" => {
-                if value
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|value| value.is_finite() && *value >= 0.0)
-                    .is_none()
-                {
+            "radiometricreportinterval" => {
+                let Some(value) = seconds_to_microseconds(value) else {
                     return false;
-                }
+                };
+                state.radiometric_report_interval_microseconds = value.max(1) as u64;
             }
-            name if name.starts_with("rfsignaltable.") => return false,
+            "neighbormetricdeletetime" => {
+                let Some(value) = seconds_to_microseconds(value) else {
+                    return false;
+                };
+                state.neighbor_metric_delete_microseconds = value.max(1) as u64;
+            }
+            "rfsignaltable.averageallantenna" => {
+                let Some(value) = parse_bool(value) else {
+                    return false;
+                };
+                state.rf_signal_average_all_antennas = value;
+            }
+            "rfsignaltable.averageallfrequencies" => {
+                let Some(value) = parse_bool(value) else {
+                    return false;
+                };
+                state.rf_signal_average_all_frequencies = value;
+            }
             _ => return false,
         }
     }
-    true
+    state.rf_signal_table_handle != 0
+        && (mac.framework.configure_rf_signal_table)(
+            mac.framework.framework_ctx,
+            state.rf_signal_table_handle,
+            state.rf_signal_average_all_antennas,
+            state.rf_signal_average_all_frequencies,
+        )
 }
 
 extern "C" fn start(plugin: *mut c_void) -> bool {
     let Some(mac) = (unsafe { (plugin as *mut RfpipeMac).as_ref() }) else {
         return false;
     };
-    let mut state = mac.state.lock().unwrap();
-    if state.pcr_curve_uri.is_empty() {
-        return false;
-    }
-    state.pcr_curve = match PcrCurve::load(&state.pcr_curve_uri) {
-        Ok(curve) => Some(curve),
-        Err(_) => return false,
+    let (flow_update, report) = {
+        let mut state = mac.state.lock().unwrap();
+        if state.pcr_curve_uri.is_empty() {
+            return false;
+        }
+        state.pcr_curve = match PcrCurve::load(&state.pcr_curve_uri) {
+            Ok(curve) => Some(curve),
+            Err(_) => return false,
+        };
+        state.available_tokens = state.flow_control_tokens;
+        state.started = true;
+        (
+            state.flow_control_enable.then_some(state.available_tokens),
+            state
+                .radiometric_enabled
+                .then_some(state.radiometric_report_interval_microseconds),
+        )
     };
-    state.available_tokens = state.flow_control_tokens;
-    state.started = true;
+    if let Some(tokens) = flow_update {
+        send_flow_update(mac, tokens);
+    }
+    if let Some(interval) = report {
+        let when = now_microseconds().saturating_add(interval as i64);
+        let timer = schedule(mac, when, EVENT_R2RI_REPORT, &when.to_be_bytes());
+        if timer != 0 {
+            mac.state.lock().unwrap().timers.insert(timer);
+        }
+    }
     true
 }
 
@@ -584,6 +668,34 @@ extern "C" fn process_upstream(
         return;
     }
     let packet_ref = unsafe { &*packet };
+    mac.counters.upstream_rx(
+        mac.framework,
+        packet_ref.info.destination,
+        packet_ref.payload.len,
+    );
+    (mac.framework.update_neighbor_rx)(
+        mac.framework.framework_ctx,
+        packet_ref.info.source,
+        header.sequence,
+        rx.rx_power_dbm - rx.noise_floor_dbm,
+        rx.noise_floor_dbm,
+        now_microseconds().max(0) as u64,
+        rx.duration_microseconds,
+        header.data_rate_bps,
+    );
+    let receiver_sensitivity_dbm = -174.0 + 10.0 * (rx.bandwidth_hz.max(1) as f64).log10() + 4.0;
+    let table_handle = mac.state.lock().unwrap().rf_signal_table_handle;
+    (mac.framework.update_rf_signal_table)(
+        mac.framework.framework_ctx,
+        table_handle,
+        packet_ref.info.source,
+        0,
+        rx.frequency_hz,
+        rx.rx_power_dbm,
+        rx.rx_power_dbm - rx.noise_floor_dbm,
+        rx.noise_floor_dbm,
+        receiver_sensitivity_dbm,
+    );
     let accepted = {
         let mut state = mac.state.lock().unwrap();
         let sinr = rx.rx_power_dbm - rx.noise_floor_dbm;
@@ -597,6 +709,8 @@ extern "C" fn process_upstream(
                 || packet_ref.info.destination == BROADCAST_NEM)
     };
     if !accepted {
+        mac.counters
+            .upstream_drop(mac.framework, packet_ref.info.destination);
         return;
     }
     let Some(packet) = own_packet(packet, messages, count) else {
@@ -649,10 +763,14 @@ extern "C" fn process_downstream(
     let Some(packet) = own_packet(packet, messages, count) else {
         return;
     };
+    mac.counters
+        .downstream_rx(mac.framework, packet.info.destination, packet.payload.len());
     let now = now_microseconds();
-    let ready_at = {
+    let (ready_at, queue_depth, queue_discards) = {
         let mut state = mac.state.lock().unwrap();
         if !state.started || (state.flow_control_enable && state.available_tokens == 0) {
+            mac.counters
+                .downstream_drop(mac.framework, packet.info.destination);
             return;
         }
         if state.flow_control_enable {
@@ -670,7 +788,11 @@ extern "C" fn process_downstream(
             .saturating_add(jitter)
             .max(now);
         while state.queue.len() >= QUEUE_CAPACITY {
-            state.queue.pop_front();
+            if let Some(dropped) = state.queue.pop_front() {
+                mac.counters
+                    .downstream_drop(mac.framework, dropped.packet.info.destination);
+            }
+            state.queue_discards = state.queue_discards.saturating_add(1);
             if state.flow_control_enable {
                 state.available_tokens = state
                     .available_tokens
@@ -684,8 +806,20 @@ extern "C" fn process_downstream(
             duration,
             data_rate,
         });
-        ready_at.max(state.current_end_of_transmission).max(now)
+        (
+            ready_at.max(state.current_end_of_transmission).max(now),
+            state.queue.len(),
+            state.queue_discards,
+        )
     };
+    (mac.framework.update_queue_metric)(
+        mac.framework.framework_ctx,
+        0,
+        QUEUE_CAPACITY as u32,
+        u32::try_from(queue_depth).unwrap_or(u32::MAX),
+        queue_discards,
+        0,
+    );
     if ready_at <= now {
         drive_transmit(mac, now);
     } else {
@@ -728,6 +862,30 @@ extern "C" fn process_timed_event(
             let packet = mac.state.lock().unwrap().pending_receptions.remove(&value);
             if let Some(packet) = packet {
                 send_upstream(mac, packet);
+            }
+        }
+        EVENT_R2RI_REPORT => {
+            let report = {
+                let state = mac.state.lock().unwrap();
+                (state.started && state.radiometric_enabled).then_some((
+                    state.data_rate_bps,
+                    state.radiometric_report_interval_microseconds,
+                    state.neighbor_metric_delete_microseconds,
+                ))
+            };
+            if let Some((data_rate, interval, delete_time)) = report {
+                (mac.framework.publish_r2ri)(
+                    mac.framework.framework_ctx,
+                    data_rate,
+                    data_rate,
+                    interval,
+                    delete_time,
+                );
+                let when = now_microseconds().saturating_add(interval as i64);
+                let timer = schedule(mac, when, EVENT_R2RI_REPORT, &when.to_be_bytes());
+                if timer != 0 {
+                    mac.state.lock().unwrap().timers.insert(timer);
+                }
             }
         }
         _ => {}

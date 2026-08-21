@@ -1,6 +1,6 @@
 use emane_plugin_api::{
-    FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket, PluginApi,
-    PLUGIN_ABI_VERSION,
+    CommonLayerCounters, FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket,
+    PluginApi, PLUGIN_ABI_VERSION,
 };
 use std::ffi::c_void;
 use std::sync::OnceLock;
@@ -8,15 +8,18 @@ use std::sync::OnceLock;
 struct DummyMac {
     id: u16,
     framework: FfiFrameworkService,
+    counters: CommonLayerCounters,
 }
 
 extern "C" fn init(id: u16, framework: *const FfiFrameworkService) -> *mut c_void {
     if framework.is_null() {
         return std::ptr::null_mut();
     }
+    let framework = unsafe { *framework };
     Box::into_raw(Box::new(DummyMac {
         id,
-        framework: unsafe { *framework },
+        framework,
+        counters: CommonLayerCounters::register(framework),
     })) as *mut c_void
 }
 
@@ -45,6 +48,13 @@ extern "C" fn process_upstream(
     let Some(plugin) = (unsafe { (plugin as *const DummyMac).as_ref() }) else {
         return;
     };
+    if let Some(packet) = unsafe { packet.as_ref() } {
+        plugin.counters.upstream_rx(
+            plugin.framework,
+            packet.info.destination,
+            packet.payload.len,
+        );
+    }
     (plugin.framework.send_upstream_packet)(
         plugin.framework.framework_ctx,
         plugin.id,
@@ -52,6 +62,13 @@ extern "C" fn process_upstream(
         messages,
         count,
     );
+    if let Some(packet) = unsafe { packet.as_ref() } {
+        plugin.counters.upstream_tx(
+            plugin.framework,
+            packet.info.destination,
+            packet.payload.len,
+        );
+    }
 }
 
 extern "C" fn process_downstream(
@@ -63,6 +80,13 @@ extern "C" fn process_downstream(
     let Some(plugin) = (unsafe { (plugin as *const DummyMac).as_ref() }) else {
         return;
     };
+    if let Some(packet) = unsafe { packet.as_ref() } {
+        plugin.counters.downstream_rx(
+            plugin.framework,
+            packet.info.destination,
+            packet.payload.len,
+        );
+    }
     (plugin.framework.send_downstream_packet)(
         plugin.framework.framework_ctx,
         plugin.id,
@@ -70,6 +94,13 @@ extern "C" fn process_downstream(
         messages,
         count,
     );
+    if let Some(packet) = unsafe { packet.as_ref() } {
+        plugin.counters.downstream_tx(
+            plugin.framework,
+            packet.info.destination,
+            packet.payload.len,
+        );
+    }
 }
 
 extern "C" fn process_timed_event(_: *mut c_void, _: u64, _: u32, _: *const u8, _: usize) {}

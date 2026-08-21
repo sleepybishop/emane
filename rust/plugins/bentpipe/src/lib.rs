@@ -1,9 +1,12 @@
 mod pcr_manager;
 
 use emane_plugin_api::{
-    FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket, FfiPacketInfo, FfiSlice,
-    ModelHeader, PluginApi, RxProperties, TxProperties, CONTROL_MODEL_HEADER,
-    CONTROL_RX_PROPERTIES, CONTROL_TX_PROPERTIES, MAC_REGISTRATION_BENTPIPE, PLUGIN_ABI_VERSION,
+    AntennaPattern, CommonLayerCounters, FfiConfigRequest, FfiControlMessage, FfiFrameworkService,
+    FfiPacket, FfiPacketInfo, FfiSlice, MimoRxProperties, MimoTxAntenna, MimoTxFrequencySegment,
+    MimoTxProperties, ModelHeader, PluginApi, RxAntennaAdd, RxProperties, TxAntennaProfile,
+    TxProperties, CONTROL_MIMO_RX_PROPERTIES, CONTROL_MIMO_TX_PROPERTIES, CONTROL_MODEL_HEADER,
+    CONTROL_RX_ANTENNA_ADD, CONTROL_RX_PROPERTIES, CONTROL_TX_PROPERTIES,
+    MAC_REGISTRATION_BENTPIPE, PLUGIN_ABI_VERSION,
 };
 use pcr_manager::PCRManager;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -104,7 +107,7 @@ struct Reassembly {
 
 #[derive(Clone, Copy)]
 struct AntennaDefinition {
-    fixed_gain_db: f64,
+    pattern: AntennaPattern,
     spectral_mask_index: u16,
 }
 
@@ -131,6 +134,7 @@ struct State {
 struct BentpipeMac {
     id: u16,
     framework: FfiFrameworkService,
+    counters: CommonLayerCounters,
     state: Mutex<State>,
 }
 
@@ -139,6 +143,7 @@ impl BentpipeMac {
         Self {
             id,
             framework,
+            counters: CommonLayerCounters::register(framework),
             state: Mutex::new(State {
                 transponders: BTreeMap::new(),
                 configured_transponder_fields: HashMap::new(),
@@ -216,17 +221,29 @@ fn transponder_config_bit(name: &str) -> Option<u32> {
 fn parse_antenna(value: &str) -> Option<(u16, AntennaDefinition)> {
     let (index, definition) = split_index(value)?;
     let fields: Vec<_> = definition.split(';').collect();
-    if fields.len() != 3 || fields[0] != "omni" {
-        // Profile-defined antennas require the PHY antenna-profile path. They
-        // are rejected until that path can preserve their directional gain.
-        return None;
-    }
-    let fixed_gain_db = fields[1].parse::<f64>().ok()?;
-    let spectral_mask_index = fields[2].parse::<u16>().ok()?;
-    fixed_gain_db.is_finite().then_some((
+    let (pattern, spectral_mask_index) = match fields.as_slice() {
+        ["omni", gain, mask] => {
+            let gain_db = gain.parse::<f64>().ok()?;
+            if !gain_db.is_finite() {
+                return None;
+            }
+            (AntennaPattern::IdealOmni { gain_db }, mask.parse().ok()?)
+        }
+        [profile, azimuth, elevation, mask] => {
+            let profile = TxAntennaProfile {
+                profile_id: profile.parse().ok()?,
+                azimuth_degrees: azimuth.parse().ok()?,
+                elevation_degrees: elevation.parse().ok()?,
+            };
+            profile.encode()?;
+            (AntennaPattern::Profile(profile), mask.parse().ok()?)
+        }
+        _ => return None,
+    };
+    Some((
         index,
         AntennaDefinition {
-            fixed_gain_db,
+            pattern,
             spectral_mask_index,
         },
     ))
@@ -556,7 +573,11 @@ fn send_downstream(
     let tx_bytes = TxProperties {
         frequency_hz: transponder.transmit_frequency_hz,
         bandwidth_hz: transponder.transmit_bandwidth_hz,
-        tx_power_dbm: transponder.transmit_power_dbm + antenna.fixed_gain_db,
+        tx_power_dbm: transponder.transmit_power_dbm
+            + match antenna.pattern {
+                AntennaPattern::IdealOmni { gain_db } => gain_db,
+                _ => 0.0,
+            },
         duration_microseconds: duration,
         offset_microseconds: 0,
         tx_time_microseconds: now_us(),
@@ -565,12 +586,31 @@ fn send_downstream(
         sub_id: 0,
     }
     .encode();
+    let mimo_bytes = MimoTxProperties {
+        frequency_groups: vec![vec![MimoTxFrequencySegment {
+            frequency_hz: transponder.transmit_frequency_hz,
+            tx_power_dbm: transponder.transmit_power_dbm,
+            duration_microseconds: duration,
+            offset_microseconds: 0,
+        }]],
+        transmit_antennas: vec![MimoTxAntenna {
+            frequency_group_index: 0,
+            antenna_index: transponder.transmit_antenna_index,
+            bandwidth_hz: transponder.transmit_bandwidth_hz,
+            spectral_mask_index: antenna.spectral_mask_index,
+            pattern: antenna.pattern,
+        }],
+    }
+    .encode()
+    .expect("validated BentPipe antenna");
     let mut messages: Vec<_> = pending
         .packet
         .controls
         .iter()
         .filter(|control| {
-            control.msg_type != CONTROL_MODEL_HEADER && control.msg_type != CONTROL_TX_PROPERTIES
+            control.msg_type != CONTROL_MODEL_HEADER
+                && control.msg_type != CONTROL_TX_PROPERTIES
+                && control.msg_type != CONTROL_MIMO_TX_PROPERTIES
         })
         .map(|control| FfiControlMessage {
             msg_type: control.msg_type,
@@ -585,6 +625,13 @@ fn send_downstream(
         payload: FfiSlice {
             data: header_bytes.as_ptr(),
             len: header_bytes.len(),
+        },
+    });
+    messages.push(FfiControlMessage {
+        msg_type: CONTROL_MIMO_TX_PROPERTIES,
+        payload: FfiSlice {
+            data: mimo_bytes.as_ptr(),
+            len: mimo_bytes.len(),
         },
     });
     messages.push(FfiControlMessage {
@@ -607,6 +654,11 @@ fn send_downstream(
         &packet,
         messages.as_ptr(),
         messages.len(),
+    );
+    mac.counters.downstream_tx(
+        mac.framework,
+        pending.packet.info.destination,
+        pending.packet.payload.len(),
     );
 }
 
@@ -694,6 +746,8 @@ fn send_upstream(mac: &BentpipeMac, packet: OwnedPacket) {
         messages.as_ptr(),
         messages.len(),
     );
+    mac.counters
+        .upstream_tx(mac.framework, packet.info.destination, packet.payload.len());
 }
 
 extern "C" fn init(id: u16, framework: *const FfiFrameworkService) -> *mut c_void {
@@ -931,6 +985,7 @@ extern "C" fn start(plugin: *mut c_void) -> bool {
     }
     const REQUIRED_FIELDS: u32 = (1 << 18) - 1;
     let mut receive_channels = HashSet::new();
+    let mut receive_antennas: HashMap<u16, (u64, Vec<u64>)> = HashMap::new();
     for (index, transponder) in &state.transponders {
         let slotted = transponder.transmit_slots_per_frame != 0
             || transponder.transmit_slot_size_us != 0
@@ -965,9 +1020,61 @@ extern "C" fn start(plugin: *mut c_void) -> bool {
         {
             return false;
         }
+        let receive = receive_antennas
+            .entry(transponder.receive_antenna_index)
+            .or_insert_with(|| (transponder.receive_bandwidth_hz, Vec::new()));
+        if receive.0 != transponder.receive_bandwidth_hz {
+            return false;
+        }
+        receive.1.push(transponder.receive_frequency_hz);
     }
     state.started = true;
+    let definitions = receive_antennas
+        .into_iter()
+        .map(|(antenna_index, (bandwidth_hz, mut frequencies_hz))| {
+            frequencies_hz.sort_unstable();
+            frequencies_hz.dedup();
+            let definition = *state.antennas.get(&antenna_index)?;
+            Some(RxAntennaAdd {
+                antenna: MimoTxAntenna {
+                    frequency_group_index: 0,
+                    antenna_index,
+                    bandwidth_hz,
+                    spectral_mask_index: definition.spectral_mask_index,
+                    pattern: definition.pattern,
+                },
+                frequencies_hz,
+            })
+        })
+        .collect::<Option<Vec<_>>>();
+    let Some(definitions) = definitions else {
+        state.started = false;
+        return false;
+    };
     drop(state);
+    let payloads = definitions
+        .iter()
+        .map(RxAntennaAdd::encode)
+        .collect::<Option<Vec<_>>>();
+    let Some(payloads) = payloads else {
+        return false;
+    };
+    let messages = payloads
+        .iter()
+        .map(|payload| FfiControlMessage {
+            msg_type: CONTROL_RX_ANTENNA_ADD,
+            payload: FfiSlice {
+                data: payload.as_ptr(),
+                len: payload.len(),
+            },
+        })
+        .collect::<Vec<_>>();
+    (mac.framework.send_downstream_control)(
+        mac.framework.framework_ctx,
+        mac.id,
+        messages.as_ptr(),
+        messages.len(),
+    );
     schedule_reassembly_check(mac);
     true
 }
@@ -1013,16 +1120,10 @@ extern "C" fn upstream(
     let Some(message_views) = controls(messages, count) else {
         return;
     };
-    let (Some(header_data), Some(rx_data)) = (
-        find_control(message_views, CONTROL_MODEL_HEADER),
-        find_control(message_views, CONTROL_RX_PROPERTIES),
-    ) else {
+    let Some(header_data) = find_control(message_views, CONTROL_MODEL_HEADER) else {
         return;
     };
-    let (Some(header), Some(rx)) = (
-        ModelHeader::decode(header_data),
-        RxProperties::decode(rx_data),
-    ) else {
+    let Some(header) = ModelHeader::decode(header_data) else {
         return;
     };
     if header.registration_id != MAC_REGISTRATION_BENTPIPE
@@ -1034,6 +1135,11 @@ extern "C" fn upstream(
     let offset = u32::from_be_bytes(header_data[28..32].try_into().unwrap()) as usize;
     let more = header_data[32] != 0;
     let packet_ref = unsafe { &*packet };
+    mac.counters.upstream_rx(
+        mac.framework,
+        packet_ref.info.destination,
+        packet_ref.payload.len,
+    );
     if offset
         .checked_add(packet_ref.payload.len)
         .is_none_or(|end| end > total)
@@ -1041,28 +1147,67 @@ extern "C" fn upstream(
     {
         return;
     }
+    let mimo_rx =
+        find_control(message_views, CONTROL_MIMO_RX_PROPERTIES).and_then(MimoRxProperties::decode);
+    let legacy_rx =
+        find_control(message_views, CONTROL_RX_PROPERTIES).and_then(RxProperties::decode);
     let decision = {
         let mut state = mac.state.lock().unwrap();
-        let Some((index, receive_action, transmit_delay_us, receive_gain_db)) = state
-            .transponders
-            .iter()
-            .find(|(_, transponder)| {
-                transponder.receive_enable
-                    && transponder.receive_frequency_hz == rx.frequency_hz
-                    && transponder.receive_antenna_index == rx.antenna_index
+        let observation = mimo_rx
+            .as_ref()
+            .and_then(|mimo| {
+                mimo.antenna_infos.iter().find_map(|info| {
+                    info.segments.iter().find_map(|segment| {
+                        state
+                            .transponders
+                            .iter()
+                            .find(|(_, transponder)| {
+                                transponder.receive_enable
+                                    && transponder.receive_antenna_index
+                                        == info.receive_antenna_index
+                                    && transponder.receive_frequency_hz == segment.frequency_hz
+                            })
+                            .map(|(index, transponder)| {
+                                (
+                                    *index,
+                                    transponder.receive_action,
+                                    transponder.transmit_delay_us,
+                                    segment.rx_power_dbm,
+                                    info.noise_floor_dbm,
+                                )
+                            })
+                    })
+                })
             })
-            .map(|(index, transponder)| {
-                (
-                    *index,
-                    transponder.receive_action,
-                    transponder.transmit_delay_us,
-                    state
-                        .antennas
-                        .get(&transponder.receive_antenna_index)
-                        .map(|antenna| antenna.fixed_gain_db)
-                        .unwrap_or(0.0),
-                )
-            })
+            .or_else(|| {
+                let rx = legacy_rx?;
+                state
+                    .transponders
+                    .iter()
+                    .find(|(_, transponder)| {
+                        transponder.receive_enable
+                            && transponder.receive_frequency_hz == rx.frequency_hz
+                            && transponder.receive_antenna_index == rx.antenna_index
+                    })
+                    .map(|(index, transponder)| {
+                        (
+                            *index,
+                            transponder.receive_action,
+                            transponder.transmit_delay_us,
+                            rx.rx_power_dbm
+                                + state
+                                    .antennas
+                                    .get(&transponder.receive_antenna_index)
+                                    .map_or(0.0, |antenna| match antenna.pattern {
+                                        AntennaPattern::IdealOmni { gain_db } => gain_db,
+                                        _ => 0.0,
+                                    }),
+                            rx.noise_floor_dbm,
+                        )
+                    })
+            });
+        let Some((index, receive_action, transmit_delay_us, rx_power_dbm, noise_floor_dbm)) =
+            observation
         else {
             return;
         };
@@ -1070,7 +1215,7 @@ extern "C" fn upstream(
             .pcr
             .get_por(
                 header.flags,
-                (rx.rx_power_dbm + receive_gain_db - rx.noise_floor_dbm) as f32,
+                (rx_power_dbm - noise_floor_dbm) as f32,
                 packet_ref.payload.len,
             )
             .unwrap_or(1.0);
@@ -1170,6 +1315,8 @@ extern "C" fn downstream(
     let Some(packet) = own_packet(packet, messages, count) else {
         return;
     };
+    mac.counters
+        .downstream_rx(mac.framework, packet.info.destination, packet.payload.len());
     let index = {
         let state = mac.state.lock().unwrap();
         state
@@ -1263,8 +1410,16 @@ mod tests {
         assert_eq!(parse_slots("1-2;4").unwrap(), vec![1, 2, 4]);
         let (index, antenna) = parse_antenna("7:omni;3.5;2").unwrap();
         assert_eq!(index, 7);
-        assert_eq!(antenna.fixed_gain_db, 3.5);
+        assert_eq!(antenna.pattern, AntennaPattern::IdealOmni { gain_db: 3.5 });
         assert_eq!(antenna.spectral_mask_index, 2);
-        assert!(parse_antenna("7:42;0;0;2").is_none());
+        assert_eq!(
+            parse_antenna("7:42;20;-5;2").unwrap().1.pattern,
+            AntennaPattern::Profile(TxAntennaProfile {
+                profile_id: 42,
+                azimuth_degrees: 20.0,
+                elevation_degrees: -5.0,
+            })
+        );
+        assert!(parse_antenna("7:0;0;0;2").is_none());
     }
 }

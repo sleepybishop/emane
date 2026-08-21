@@ -28,6 +28,43 @@ extern "C" fn schedule(
 }
 extern "C" fn cancel(_: *mut c_void, _: u16, _: u64) {}
 extern "C" fn log(_: *mut c_void, _: u32, _: *const std::os::raw::c_char) {}
+extern "C" fn register_counter(
+    _: *mut c_void,
+    _: *const std::os::raw::c_char,
+    _: *const std::os::raw::c_char,
+    _: bool,
+) -> u64 {
+    0
+}
+extern "C" fn increment_counter(_: *mut c_void, _: u64, _: u64) -> bool {
+    false
+}
+extern "C" fn neighbor_tx(_: *mut c_void, _: u16, _: u64, _: u64) {}
+extern "C" fn neighbor_rx(_: *mut c_void, _: u16, _: u64, _: f64, _: f64, _: u64, _: u64, _: u64) {}
+extern "C" fn queue(_: *mut c_void, _: u16, _: u32, _: u32, _: u32, _: u64) {}
+extern "C" fn publish(_: *mut c_void, _: u64, _: u64, _: u64, _: u64) {}
+extern "C" fn register_rf(_: *mut c_void, _: u16) -> u64 {
+    1
+}
+extern "C" fn configure_rf(_: *mut c_void, _: u64, _: bool, _: bool) -> bool {
+    true
+}
+extern "C" fn update_rf(
+    _: *mut c_void,
+    _: u64,
+    _: u16,
+    _: u16,
+    _: u64,
+    _: f64,
+    _: f64,
+    _: f64,
+    _: f64,
+) -> bool {
+    true
+}
+extern "C" fn publish_event(_: *mut c_void, _: u16, _: *const u8, _: usize) -> bool {
+    true
+}
 
 fn main() -> Result<(), String> {
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -57,6 +94,16 @@ fn main() -> Result<(), String> {
         schedule_timed_event: schedule,
         cancel_timed_event: cancel,
         log,
+        register_counter,
+        increment_counter,
+        update_neighbor_tx: neighbor_tx,
+        update_neighbor_rx: neighbor_rx,
+        update_queue_metric: queue,
+        publish_r2ri: publish,
+        register_rf_signal_table: register_rf,
+        configure_rf_signal_table: configure_rf,
+        update_rf_signal_table: update_rf,
+        publish_event,
     };
     let instance = (api.init)(42, &framework);
     if instance.is_null() {

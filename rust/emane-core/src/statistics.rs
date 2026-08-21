@@ -1,9 +1,39 @@
+#[cfg(feature = "legacy-ffi")]
 use crate::config::{FfiAny, FfiAnyArray, VoidPtr};
 use std::collections::HashMap;
+#[cfg(not(feature = "legacy-ffi"))]
+use std::ffi::c_void;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use std::sync::Mutex;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+
+use crate::rf_signal_table::RFSignalTable;
+
+#[cfg(not(feature = "legacy-ffi"))]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FfiAny {
+    pub any_type: i32,
+    pub i64_value: i64,
+    pub u64_value: u64,
+    pub d_value: f64,
+    pub s_value: *const c_char,
+}
+
+#[cfg(not(feature = "legacy-ffi"))]
+#[repr(C)]
+pub struct FfiAnyArray {
+    pub data: *const FfiAny,
+    pub len: usize,
+}
+
+#[cfg(not(feature = "legacy-ffi"))]
+#[derive(Clone, Copy)]
+struct VoidPtr(*mut c_void);
+
+#[cfg(not(feature = "legacy-ffi"))]
+unsafe impl Send for VoidPtr {}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -64,6 +94,7 @@ pub struct FfiStatisticTableQueryItem {
     pub labels: FfiStringArray,
     pub rows: *mut FfiTableRow,
     pub rows_len: usize,
+    pub native: bool,
 }
 
 #[repr(C)]
@@ -72,7 +103,7 @@ pub struct FfiStatisticTableQueryResult {
     pub len: usize,
 }
 
-#[cfg(not(test))]
+#[cfg(all(feature = "legacy-ffi", not(test)))]
 extern "C" {
     fn emane_c_statistic_as_any(p_statistic: *mut std::ffi::c_void) -> FfiAny;
     fn emane_c_statistic_free_any_string(s: *const c_char);
@@ -94,7 +125,7 @@ extern "C" {
     );
 }
 
-#[cfg(test)]
+#[cfg(any(test, not(feature = "legacy-ffi")))]
 unsafe extern "C" fn emane_c_statistic_as_any(_: *mut std::ffi::c_void) -> FfiAny {
     FfiAny {
         any_type: 1,
@@ -105,20 +136,20 @@ unsafe extern "C" fn emane_c_statistic_as_any(_: *mut std::ffi::c_void) -> FfiAn
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, not(feature = "legacy-ffi")))]
 unsafe extern "C" fn emane_c_statistic_free_any_string(_: *const c_char) {}
 
-#[cfg(test)]
+#[cfg(any(test, not(feature = "legacy-ffi")))]
 unsafe extern "C" fn emane_c_statistic_clear(_: *mut std::ffi::c_void) {}
 
-#[cfg(test)]
+#[cfg(any(test, not(feature = "legacy-ffi")))]
 unsafe extern "C" fn emane_c_statistic_table_clear(
     _: *mut std::ffi::c_void,
     _: *mut std::ffi::c_void,
 ) {
 }
 
-#[cfg(test)]
+#[cfg(any(test, not(feature = "legacy-ffi")))]
 unsafe extern "C" fn emane_c_statistic_table_get_values(
     _: *mut std::ffi::c_void,
     out_labels: *mut FfiStringArray,
@@ -137,7 +168,7 @@ unsafe extern "C" fn emane_c_statistic_table_get_values(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, not(feature = "legacy-ffi")))]
 unsafe extern "C" fn emane_c_statistic_table_free_values(
     _: FfiStringArray,
     _: *mut FfiTableRow,
@@ -146,24 +177,40 @@ unsafe extern "C" fn emane_c_statistic_table_free_values(
 }
 
 pub struct StatisticInfo {
-    name: String,
     any_type: i32,
     properties: u64,
     description: String,
-    p_statistic: VoidPtr,
+    source: StatisticSource,
+}
+
+enum StatisticSource {
+    Legacy(VoidPtr),
+    NativeU64 { handle: u64, value: Arc<AtomicU64> },
 }
 
 pub struct StatisticTableInfo {
-    name: String,
     properties: u64,
     description: String,
-    p_table: VoidPtr,
-    p_clear_func: VoidPtr,
+    source: StatisticTableSource,
+}
+
+enum StatisticTableSource {
+    Legacy {
+        p_table: VoidPtr,
+        p_clear_func: VoidPtr,
+    },
+    NativeRfSignal {
+        handle: u64,
+        table: Arc<Mutex<RFSignalTable>>,
+    },
 }
 
 pub struct StatisticService {
     stats: HashMap<u16, HashMap<String, StatisticInfo>>,
     tables: HashMap<u16, HashMap<String, StatisticTableInfo>>,
+    native_counters: HashMap<u64, Arc<AtomicU64>>,
+    native_rf_signal_tables: HashMap<u64, Arc<Mutex<RFSignalTable>>>,
+    next_native_handle: u64,
 }
 
 fn get_statistic_service() -> &'static Mutex<StatisticService> {
@@ -172,6 +219,9 @@ fn get_statistic_service() -> &'static Mutex<StatisticService> {
         Mutex::new(StatisticService {
             stats: HashMap::new(),
             tables: HashMap::new(),
+            native_counters: HashMap::new(),
+            native_rf_signal_tables: HashMap::new(),
+            next_native_handle: 1,
         })
     })
 }
@@ -190,7 +240,178 @@ fn write_error(msg: &str, err_buf: *mut c_char, err_len: usize) {
 }
 
 fn is_clearable(properties: u64) -> bool {
-    (properties & 1) != 0 // Assuming EMANE::StatisticProperties::CLEARABLE is bit 0, let's just say true if non-zero. Wait, EMANE's `isClearable` checks `properties_ == StatisticProperties::CLEARABLE`. Wait, enum class!
+    properties == 1
+}
+
+fn valid_name(name: &str) -> bool {
+    !name.is_empty() && !name.chars().any(|c| !c.is_alphanumeric() && c != '.')
+}
+
+fn statistic_value(info: &StatisticInfo) -> FfiAny {
+    match &info.source {
+        StatisticSource::Legacy(pointer) => unsafe { emane_c_statistic_as_any(pointer.0) },
+        StatisticSource::NativeU64 { value, .. } => FfiAny {
+            any_type: 8,
+            i64_value: 0,
+            u64_value: value.load(Ordering::Relaxed),
+            d_value: 0.0,
+            s_value: std::ptr::null(),
+        },
+    }
+}
+
+fn clear_statistic(info: &StatisticInfo) {
+    match &info.source {
+        StatisticSource::Legacy(pointer) => unsafe { emane_c_statistic_clear(pointer.0) },
+        StatisticSource::NativeU64 { value, .. } => value.store(0, Ordering::Relaxed),
+    }
+}
+
+pub fn register_native_counter(
+    build_id: u16,
+    name: &str,
+    description: &str,
+    clearable: bool,
+) -> Option<u64> {
+    if !valid_name(name) {
+        return None;
+    }
+    let mut service = get_statistic_service().lock().ok()?;
+    if service
+        .stats
+        .get(&build_id)
+        .is_some_and(|store| store.contains_key(name))
+    {
+        return None;
+    }
+    let handle = service.next_native_handle.max(1);
+    service.next_native_handle = handle.wrapping_add(1).max(1);
+    let value = Arc::new(AtomicU64::new(0));
+    service.native_counters.insert(handle, Arc::clone(&value));
+    service.stats.entry(build_id).or_default().insert(
+        name.to_string(),
+        StatisticInfo {
+            any_type: 8,
+            properties: u64::from(clearable),
+            description: description.to_string(),
+            source: StatisticSource::NativeU64 { handle, value },
+        },
+    );
+    Some(handle)
+}
+
+pub fn increment_native_counter(handle: u64, amount: u64) -> bool {
+    let Ok(service) = get_statistic_service().lock() else {
+        return false;
+    };
+    let Some(value) = service.native_counters.get(&handle) else {
+        return false;
+    };
+    value.fetch_add(amount, Ordering::Relaxed);
+    true
+}
+
+pub fn register_native_rf_signal_table(build_id: u16, nem_id: u16) -> Option<u64> {
+    let mut service = get_statistic_service().lock().ok()?;
+    if service
+        .tables
+        .get(&build_id)
+        .is_some_and(|store| store.contains_key("ReceiveMetricTable"))
+    {
+        return None;
+    }
+    let handle = service.next_native_handle.max(1);
+    service.next_native_handle = handle.wrapping_add(1).max(1);
+    let table = Arc::new(Mutex::new(RFSignalTable::new(nem_id)));
+    service
+        .native_rf_signal_tables
+        .insert(handle, Arc::clone(&table));
+    service.tables.entry(build_id).or_default().insert(
+        "ReceiveMetricTable".to_string(),
+        StatisticTableInfo {
+            properties: 1,
+            description: "Table of RF receive metrics from peering NEMs".to_string(),
+            source: StatisticTableSource::NativeRfSignal { handle, table },
+        },
+    );
+    Some(handle)
+}
+
+pub fn configure_native_rf_signal_table(
+    handle: u64,
+    average_all_antennas: bool,
+    average_all_frequencies: bool,
+) -> bool {
+    let Ok(service) = get_statistic_service().lock() else {
+        return false;
+    };
+    let Some(table) = service.native_rf_signal_tables.get(&handle) else {
+        return false;
+    };
+    let Ok(mut table) = table.lock() else {
+        return false;
+    };
+    table.set_average_all_antennas(average_all_antennas);
+    table.set_average_all_frequencies(average_all_frequencies);
+    true
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn update_native_rf_signal_table(
+    handle: u64,
+    source: u16,
+    antenna: u16,
+    frequency_hz: u64,
+    rx_power_dbm: f64,
+    sinr_db: f64,
+    noise_floor_dbm: f64,
+    receiver_sensitivity_dbm: f64,
+) -> bool {
+    let Ok(service) = get_statistic_service().lock() else {
+        return false;
+    };
+    let Some(table) = service.native_rf_signal_tables.get(&handle) else {
+        return false;
+    };
+    let Ok(mut table) = table.lock() else {
+        return false;
+    };
+    table.update(
+        source,
+        antenna,
+        frequency_hz,
+        rx_power_dbm,
+        sinr_db,
+        noise_floor_dbm,
+        receiver_sensitivity_dbm,
+    );
+    true
+}
+
+pub fn unregister_native_statistics(build_id: u16) {
+    let Ok(mut service) = get_statistic_service().lock() else {
+        return;
+    };
+    let handles: Vec<_> = service
+        .stats
+        .remove(&build_id)
+        .into_iter()
+        .flat_map(|store| store.into_values())
+        .filter_map(|info| match info.source {
+            StatisticSource::NativeU64 { handle, .. } => Some(handle),
+            StatisticSource::Legacy(_) => None,
+        })
+        .collect();
+    for handle in handles {
+        service.native_counters.remove(&handle);
+    }
+    if let Some(tables) = service.tables.remove(&build_id) {
+        for info in tables.into_values() {
+            if let StatisticTableSource::NativeRfSignal { handle, .. } = info.source {
+                service.native_rf_signal_tables.remove(&handle);
+            }
+        }
+    }
 }
 
 #[no_mangle]
@@ -208,7 +429,7 @@ pub extern "C" fn emane_rs_statistic_register(
     let store = s.stats.entry(build_id).or_default();
     let name = unsafe { CStr::from_ptr(s_name).to_string_lossy().into_owned() };
 
-    if name.chars().any(|c| !c.is_alphanumeric() && c != '.') {
+    if !valid_name(&name) {
         write_error(
             &format!("Invalid character in the statistic name: {}", name),
             err_buf,
@@ -229,11 +450,10 @@ pub extern "C" fn emane_rs_statistic_register(
     store.insert(
         name.clone(),
         StatisticInfo {
-            name,
             any_type,
             properties,
             description: unsafe { CStr::from_ptr(s_desc).to_string_lossy().into_owned() },
-            p_statistic: VoidPtr(p_statistic),
+            source: StatisticSource::Legacy(VoidPtr(p_statistic)),
         },
     );
 }
@@ -274,11 +494,12 @@ pub extern "C" fn emane_rs_statistic_register_table(
     store.insert(
         name.clone(),
         StatisticTableInfo {
-            name,
             properties,
             description: unsafe { CStr::from_ptr(s_desc).to_string_lossy().into_owned() },
-            p_table: VoidPtr(p_table),
-            p_clear_func: VoidPtr(p_clear_func),
+            source: StatisticTableSource::Legacy {
+                p_table: VoidPtr(p_table),
+                p_clear_func: VoidPtr(p_clear_func),
+            },
         },
     );
 }
@@ -296,10 +517,9 @@ pub extern "C" fn emane_rs_statistic_query(
     if let Some(store) = s.stats.get(&build_id) {
         if names.len == 0 {
             for (name, info) in store {
-                let ffi_any = unsafe { emane_c_statistic_as_any(info.p_statistic.0) };
                 res.push(FfiStatisticQueryItem {
                     name: CString::new(name.clone()).unwrap().into_raw(),
-                    value: ffi_any,
+                    value: statistic_value(info),
                 });
             }
         } else {
@@ -307,10 +527,9 @@ pub extern "C" fn emane_rs_statistic_query(
             for &c_name in slice {
                 let name = unsafe { CStr::from_ptr(c_name).to_string_lossy().into_owned() };
                 if let Some(info) = store.get(&name) {
-                    let ffi_any = unsafe { emane_c_statistic_as_any(info.p_statistic.0) };
                     res.push(FfiStatisticQueryItem {
                         name: CString::new(name).unwrap().into_raw(),
-                        value: ffi_any,
+                        value: statistic_value(info),
                     });
                 } else {
                     write_error(
@@ -341,7 +560,7 @@ pub extern "C" fn emane_rs_statistic_free_query_result(res: FfiStatisticQueryRes
         for item in slice {
             unsafe {
                 let _ = CString::from_raw(item.name as *mut c_char);
-                if item.value.any_type == 4 {
+                if item.value.any_type == 11 {
                     // STRING
                     emane_c_statistic_free_any_string(item.value.s_value);
                 }
@@ -366,21 +585,17 @@ pub extern "C" fn emane_rs_statistic_clear(
     if let Some(store) = s.stats.get(&build_id) {
         if names.len == 0 {
             for info in store.values() {
-                if info.properties == 1 {
-                    // CLEARABLE
-                    unsafe {
-                        emane_c_statistic_clear(info.p_statistic.0);
-                    }
+                if is_clearable(info.properties) {
+                    clear_statistic(info);
                 }
             }
         } else {
             let slice = unsafe { std::slice::from_raw_parts(names.data, names.len) };
-            let mut to_clear = Vec::new();
             for &c_name in slice {
                 let name = unsafe { CStr::from_ptr(c_name).to_string_lossy().into_owned() };
                 if let Some(info) = store.get(&name) {
-                    if info.properties == 1 {
-                        to_clear.push(info.p_statistic.0);
+                    if is_clearable(info.properties) {
+                        clear_statistic(info);
                     } else {
                         write_error(
                             &format!("Statistic not clearable: {}", name),
@@ -398,9 +613,155 @@ pub extern "C" fn emane_rs_statistic_clear(
                     return;
                 }
             }
-            for p in to_clear {
-                unsafe {
-                    emane_c_statistic_clear(p);
+        }
+    }
+}
+
+fn native_rf_signal_table_values(
+    table: &Arc<Mutex<RFSignalTable>>,
+) -> (FfiStringArray, *mut FfiTableRow, usize) {
+    let labels = [
+        "NEM",
+        "Antenna",
+        "Frequency",
+        "Samples",
+        "Avg Rx Power",
+        "Avg Noise",
+        "Avg SINR",
+        "Avg INR",
+    ];
+    let mut label_ptrs = labels
+        .into_iter()
+        .map(|label| CString::new(label).unwrap().into_raw() as *const c_char)
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    let ffi_labels = FfiStringArray {
+        data: label_ptrs.as_mut_ptr(),
+        len: label_ptrs.len(),
+    };
+    std::mem::forget(label_ptrs);
+
+    let rows = table.lock().map(|table| table.rows()).unwrap_or_default();
+    let mut ffi_rows = rows
+        .into_iter()
+        .map(|row| {
+            let antenna = row
+                .antenna
+                .map(|value| (8, value as u64, None))
+                .unwrap_or_else(|| (11, 0, Some("NA")));
+            let frequency = row
+                .frequency_hz
+                .map(|value| (8, value, None))
+                .unwrap_or_else(|| (11, 0, Some("NA")));
+            let mut values = vec![
+                FfiAny {
+                    any_type: 8,
+                    i64_value: 0,
+                    u64_value: u64::from(row.source),
+                    d_value: 0.0,
+                    s_value: std::ptr::null(),
+                },
+                FfiAny {
+                    any_type: antenna.0,
+                    i64_value: 0,
+                    u64_value: antenna.1,
+                    d_value: 0.0,
+                    s_value: antenna
+                        .2
+                        .map(|value| CString::new(value).unwrap().into_raw() as *const c_char)
+                        .unwrap_or(std::ptr::null()),
+                },
+                FfiAny {
+                    any_type: frequency.0,
+                    i64_value: 0,
+                    u64_value: frequency.1,
+                    d_value: 0.0,
+                    s_value: frequency
+                        .2
+                        .map(|value| CString::new(value).unwrap().into_raw() as *const c_char)
+                        .unwrap_or(std::ptr::null()),
+                },
+                FfiAny {
+                    any_type: 8,
+                    i64_value: 0,
+                    u64_value: row.samples,
+                    d_value: 0.0,
+                    s_value: std::ptr::null(),
+                },
+                FfiAny {
+                    any_type: 10,
+                    i64_value: 0,
+                    u64_value: 0,
+                    d_value: row.average_rx_power_dbm,
+                    s_value: std::ptr::null(),
+                },
+                FfiAny {
+                    any_type: 10,
+                    i64_value: 0,
+                    u64_value: 0,
+                    d_value: row.average_noise_floor_dbm,
+                    s_value: std::ptr::null(),
+                },
+                FfiAny {
+                    any_type: 10,
+                    i64_value: 0,
+                    u64_value: 0,
+                    d_value: row.average_sinr_db,
+                    s_value: std::ptr::null(),
+                },
+                FfiAny {
+                    any_type: 10,
+                    i64_value: 0,
+                    u64_value: 0,
+                    d_value: row.average_inr_db,
+                    s_value: std::ptr::null(),
+                },
+            ]
+            .into_boxed_slice();
+            let result = FfiTableRow {
+                values: FfiAnyArray {
+                    data: values.as_mut_ptr(),
+                    len: values.len(),
+                },
+            };
+            std::mem::forget(values);
+            result
+        })
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    let rows_len = ffi_rows.len();
+    let rows_ptr = ffi_rows.as_mut_ptr();
+    std::mem::forget(ffi_rows);
+    (ffi_labels, rows_ptr, rows_len)
+}
+
+unsafe fn free_native_table_values(
+    labels: FfiStringArray,
+    rows: *mut FfiTableRow,
+    rows_len: usize,
+) {
+    if !labels.data.is_null() {
+        let pointers =
+            Vec::from_raw_parts(labels.data as *mut *const c_char, labels.len, labels.len);
+        for pointer in pointers {
+            if !pointer.is_null() {
+                drop(CString::from_raw(pointer as *mut c_char));
+            }
+        }
+    }
+    if !rows.is_null() {
+        let rows = Vec::from_raw_parts(rows, rows_len, rows_len);
+        for row in rows {
+            if !row.values.data.is_null() {
+                let values = Vec::from_raw_parts(
+                    row.values.data as *mut FfiAny,
+                    row.values.len,
+                    row.values.len,
+                );
+                for value in values {
+                    if value.any_type == 11 && !value.s_value.is_null() {
+                        drop(CString::from_raw(value.s_value as *mut c_char));
+                    }
                 }
             }
         }
@@ -420,26 +781,36 @@ pub extern "C" fn emane_rs_statistic_query_table(
     if let Some(store) = s.tables.get(&build_id) {
         if names.len == 0 {
             for (name, info) in store {
-                let mut c_labels = FfiStringArray {
-                    data: std::ptr::null(),
-                    len: 0,
+                let (c_labels, c_rows, c_rows_len, native) = match &info.source {
+                    StatisticTableSource::Legacy { p_table, .. } => {
+                        let mut labels = FfiStringArray {
+                            data: std::ptr::null(),
+                            len: 0,
+                        };
+                        let mut rows = std::ptr::null_mut();
+                        let mut rows_len = 0;
+                        unsafe {
+                            emane_c_statistic_table_get_values(
+                                p_table.0,
+                                &mut labels,
+                                &mut rows,
+                                &mut rows_len,
+                            )
+                        };
+                        (labels, rows, rows_len, false)
+                    }
+                    StatisticTableSource::NativeRfSignal { table, .. } => {
+                        let (labels, rows, rows_len) = native_rf_signal_table_values(table);
+                        (labels, rows, rows_len, true)
+                    }
                 };
-                let mut c_rows = std::ptr::null_mut();
-                let mut c_rows_len = 0;
-                unsafe {
-                    emane_c_statistic_table_get_values(
-                        info.p_table.0,
-                        &mut c_labels,
-                        &mut c_rows,
-                        &mut c_rows_len,
-                    );
-                }
 
                 res.push(FfiStatisticTableQueryItem {
                     name: CString::new(name.clone()).unwrap().into_raw(),
                     labels: c_labels,
                     rows: c_rows,
                     rows_len: c_rows_len,
+                    native,
                 });
             }
         } else {
@@ -447,26 +818,36 @@ pub extern "C" fn emane_rs_statistic_query_table(
             for &c_name in slice {
                 let name = unsafe { CStr::from_ptr(c_name).to_string_lossy().into_owned() };
                 if let Some(info) = store.get(&name) {
-                    let mut c_labels = FfiStringArray {
-                        data: std::ptr::null(),
-                        len: 0,
+                    let (c_labels, c_rows, c_rows_len, native) = match &info.source {
+                        StatisticTableSource::Legacy { p_table, .. } => {
+                            let mut labels = FfiStringArray {
+                                data: std::ptr::null(),
+                                len: 0,
+                            };
+                            let mut rows = std::ptr::null_mut();
+                            let mut rows_len = 0;
+                            unsafe {
+                                emane_c_statistic_table_get_values(
+                                    p_table.0,
+                                    &mut labels,
+                                    &mut rows,
+                                    &mut rows_len,
+                                )
+                            };
+                            (labels, rows, rows_len, false)
+                        }
+                        StatisticTableSource::NativeRfSignal { table, .. } => {
+                            let (labels, rows, rows_len) = native_rf_signal_table_values(table);
+                            (labels, rows, rows_len, true)
+                        }
                     };
-                    let mut c_rows = std::ptr::null_mut();
-                    let mut c_rows_len = 0;
-                    unsafe {
-                        emane_c_statistic_table_get_values(
-                            info.p_table.0,
-                            &mut c_labels,
-                            &mut c_rows,
-                            &mut c_rows_len,
-                        );
-                    }
 
                     res.push(FfiStatisticTableQueryItem {
                         name: CString::new(name).unwrap().into_raw(),
                         labels: c_labels,
                         rows: c_rows,
                         rows_len: c_rows_len,
+                        native,
                     });
                 } else {
                     write_error(
@@ -497,7 +878,11 @@ pub extern "C" fn emane_rs_statistic_free_table_query_result(res: FfiStatisticTa
         for item in slice {
             unsafe {
                 let _ = CString::from_raw(item.name as *mut c_char);
-                emane_c_statistic_table_free_values(item.labels, item.rows, item.rows_len);
+                if item.native {
+                    free_native_table_values(item.labels, item.rows, item.rows_len);
+                } else {
+                    emane_c_statistic_table_free_values(item.labels, item.rows, item.rows_len);
+                }
             }
         }
         unsafe {
@@ -520,8 +905,18 @@ pub extern "C" fn emane_rs_statistic_clear_table(
         if names.len == 0 {
             for info in store.values() {
                 if info.properties == 1 {
-                    unsafe {
-                        emane_c_statistic_table_clear(info.p_clear_func.0, info.p_table.0);
+                    match &info.source {
+                        StatisticTableSource::Legacy {
+                            p_table,
+                            p_clear_func,
+                        } => unsafe {
+                            emane_c_statistic_table_clear(p_clear_func.0, p_table.0);
+                        },
+                        StatisticTableSource::NativeRfSignal { table, .. } => {
+                            if let Ok(mut table) = table.lock() {
+                                table.reset_all();
+                            }
+                        }
                     }
                 }
             }
@@ -532,7 +927,7 @@ pub extern "C" fn emane_rs_statistic_clear_table(
                 let name = unsafe { CStr::from_ptr(c_name).to_string_lossy().into_owned() };
                 if let Some(info) = store.get(&name) {
                     if info.properties == 1 {
-                        to_clear.push((info.p_clear_func.0, info.p_table.0));
+                        to_clear.push(&info.source);
                     } else {
                         write_error(&format!("Table not clearable: {}", name), err_buf, err_len);
                         return;
@@ -542,9 +937,19 @@ pub extern "C" fn emane_rs_statistic_clear_table(
                     return;
                 }
             }
-            for (f, t) in to_clear {
-                unsafe {
-                    emane_c_statistic_table_clear(f, t);
+            for source in to_clear {
+                match source {
+                    StatisticTableSource::Legacy {
+                        p_table,
+                        p_clear_func,
+                    } => unsafe {
+                        emane_c_statistic_table_clear(p_clear_func.0, p_table.0);
+                    },
+                    StatisticTableSource::NativeRfSignal { table, .. } => {
+                        if let Ok(mut table) = table.lock() {
+                            table.reset_all();
+                        }
+                    }
                 }
             }
         }
@@ -562,7 +967,7 @@ pub extern "C" fn emane_rs_statistic_get_manifest(build_id: u16) -> FfiStatistic
                 any_type: info.any_type,
                 properties: info.properties,
                 description: CString::new(info.description.clone()).unwrap().into_raw(),
-                is_clearable: info.properties == 1,
+                is_clearable: is_clearable(info.properties),
             });
         }
     }
@@ -603,7 +1008,7 @@ pub extern "C" fn emane_rs_statistic_get_table_manifest(
                 name: CString::new(name.clone()).unwrap().into_raw(),
                 properties: info.properties,
                 description: CString::new(info.description.clone()).unwrap().into_raw(),
-                is_clearable: info.properties == 1,
+                is_clearable: is_clearable(info.properties),
             });
         }
     }
@@ -696,6 +1101,46 @@ mod tests {
     }
 
     #[test]
+    fn native_rf_signal_table_is_manifested_queried_and_clearable() {
+        let build_id = 60_001;
+        let handle = register_native_rf_signal_table(build_id, 1).unwrap();
+        assert!(update_native_rf_signal_table(
+            handle,
+            2,
+            3,
+            2_400_000_000,
+            -50.0,
+            10.0,
+            -60.0,
+            -90.0,
+        ));
+        let manifest = emane_rs_statistic_get_table_manifest(build_id);
+        assert_eq!(manifest.len, 1);
+        emane_rs_statistic_free_table_manifest(manifest);
+
+        let empty = FfiStringArray {
+            data: ptr::null(),
+            len: 0,
+        };
+        let mut error = [0i8; 128];
+        let result =
+            emane_rs_statistic_query_table(build_id, empty, error.as_mut_ptr(), error.len());
+        assert_eq!(result.len, 1);
+        let table = unsafe { &*result.data };
+        assert!(table.native);
+        assert_eq!(table.labels.len, 8);
+        assert_eq!(table.rows_len, 1);
+        emane_rs_statistic_free_table_query_result(result);
+
+        emane_rs_statistic_clear_table(build_id, empty, error.as_mut_ptr(), error.len());
+        let result =
+            emane_rs_statistic_query_table(build_id, empty, error.as_mut_ptr(), error.len());
+        assert_eq!(unsafe { &*result.data }.rows_len, 0);
+        emane_rs_statistic_free_table_query_result(result);
+        unregister_native_statistics(build_id);
+    }
+
+    #[test]
     fn test_register_invalid_name() {
         let build_id = 3;
         let s_name = CString::new("invalid name!").unwrap();
@@ -758,7 +1203,7 @@ mod tests {
             err_buf.len(),
         );
 
-        let names = vec![s_name.as_ptr()];
+        let names = [s_name.as_ptr()];
         let ffi_names = FfiStringArray {
             data: names.as_ptr(),
             len: names.len(),
@@ -777,7 +1222,7 @@ mod tests {
         let s_name = CString::new("unknown.stat").unwrap();
         let mut err_buf = [0i8; 256];
 
-        let names = vec![s_name.as_ptr()];
+        let names = [s_name.as_ptr()];
         let ffi_names = FfiStringArray {
             data: names.as_ptr(),
             len: names.len(),
@@ -820,7 +1265,7 @@ mod tests {
             err_buf.len(),
         );
 
-        let names = vec![s_name.as_ptr()];
+        let names = [s_name.as_ptr()];
         let ffi_names = FfiStringArray {
             data: names.as_ptr(),
             len: names.len(),
@@ -853,13 +1298,54 @@ mod tests {
         );
 
         let manifest = emane_rs_statistic_get_manifest(build_id);
-        assert_eq!(manifest.len, 1);
-
         let slice = unsafe { std::slice::from_raw_parts(manifest.data, manifest.len) };
-        let name = unsafe { CStr::from_ptr(slice[0].name) }.to_string_lossy();
-        assert_eq!(name, "manifest.stat");
-        assert!(slice[0].is_clearable);
+        let entry = slice
+            .iter()
+            .find(|entry| unsafe { CStr::from_ptr(entry.name) }.to_bytes() == b"manifest.stat")
+            .expect("manifest statistic");
+        assert!(entry.is_clearable);
 
         emane_rs_statistic_free_manifest(manifest);
+    }
+
+    #[test]
+    fn native_counter_registers_queries_clears_and_unregisters() {
+        let build_id = 90;
+        let handle = register_native_counter(build_id, "numPackets", "Packet count", true)
+            .expect("counter registration");
+        assert!(increment_native_counter(handle, 3));
+
+        let mut error = [0i8; 64];
+        let query = emane_rs_statistic_query(
+            build_id,
+            FfiStringArray {
+                data: std::ptr::null(),
+                len: 0,
+            },
+            error.as_mut_ptr(),
+            error.len(),
+        );
+        assert_eq!(query.len, 1);
+        let item = unsafe { &*query.data };
+        assert_eq!(item.value.any_type, 8);
+        assert_eq!(item.value.u64_value, 3);
+        emane_rs_statistic_free_query_result(query);
+
+        emane_rs_statistic_clear(
+            build_id,
+            FfiStringArray {
+                data: std::ptr::null(),
+                len: 0,
+            },
+            error.as_mut_ptr(),
+            error.len(),
+        );
+        assert_eq!(
+            get_statistic_service().lock().unwrap().native_counters[&handle]
+                .load(Ordering::Relaxed),
+            0
+        );
+        unregister_native_statistics(build_id);
+        assert!(!increment_native_counter(handle, 1));
     }
 }

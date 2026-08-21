@@ -371,14 +371,12 @@ fn process_request(req: Request) -> Response {
                             };
 
                             let mut err_buf = vec![0i8; 1024];
-                            unsafe {
-                                emane_rs_config_update(
-                                    c.build_id as u16,
-                                    ffi_req,
-                                    err_buf.as_mut_ptr(),
-                                    err_buf.len(),
-                                );
-                            }
+                            emane_rs_config_update(
+                                c.build_id as u16,
+                                ffi_req,
+                                err_buf.as_mut_ptr(),
+                                err_buf.len(),
+                            );
                         }
                     }
                     2 => {

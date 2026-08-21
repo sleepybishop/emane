@@ -1,6 +1,7 @@
 use emane_plugin_api::{
-    FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket, FfiSlice, ModelHeader,
-    PluginApi, CONTROL_MODEL_HEADER, MAC_REGISTRATION_BYPASS, PLUGIN_ABI_VERSION,
+    CommonLayerCounters, FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket,
+    FfiSlice, ModelHeader, PluginApi, CONTROL_MODEL_HEADER, MAC_REGISTRATION_BYPASS,
+    PLUGIN_ABI_VERSION,
 };
 use std::ffi::c_void;
 use std::sync::OnceLock;
@@ -8,6 +9,7 @@ use std::sync::OnceLock;
 struct BypassMac {
     id: u16,
     framework: FfiFrameworkService,
+    counters: CommonLayerCounters,
     sequence: u64,
 }
 
@@ -28,9 +30,11 @@ extern "C" fn init(id: u16, framework: *const FfiFrameworkService) -> *mut c_voi
     let Some(framework) = (unsafe { framework.as_ref() }) else {
         return std::ptr::null_mut();
     };
+    let framework = *framework;
     Box::into_raw(Box::new(BypassMac {
         id,
-        framework: *framework,
+        framework,
+        counters: CommonLayerCounters::register(framework),
         sequence: 0,
     }))
     .cast()
@@ -71,6 +75,12 @@ extern "C" fn upstream(
     let Some(messages) = controls(messages, count) else {
         return;
     };
+    let packet_ref = unsafe { &*packet };
+    mac.counters.upstream_rx(
+        mac.framework,
+        packet_ref.info.destination,
+        packet_ref.payload.len,
+    );
     let valid = messages.iter().any(|message| {
         message.msg_type == CONTROL_MODEL_HEADER
             && message.payload.len == ModelHeader::ENCODED_LEN
@@ -81,6 +91,8 @@ extern "C" fn upstream(
             .is_some_and(|header| header.registration_id == MAC_REGISTRATION_BYPASS)
     });
     if !valid {
+        mac.counters
+            .upstream_drop(mac.framework, packet_ref.info.destination);
         return;
     }
     let outgoing: Vec<_> = messages
@@ -94,6 +106,11 @@ extern "C" fn upstream(
         packet,
         outgoing.as_ptr(),
         outgoing.len(),
+    );
+    mac.counters.upstream_tx(
+        mac.framework,
+        packet_ref.info.destination,
+        packet_ref.payload.len,
     );
 }
 
@@ -118,6 +135,12 @@ extern "C" fn downstream(
     let Some(messages) = controls(messages, count) else {
         return;
     };
+    let packet_ref = unsafe { &*packet };
+    mac.counters.downstream_rx(
+        mac.framework,
+        packet_ref.info.destination,
+        packet_ref.payload.len,
+    );
     let header = ModelHeader {
         registration_id: MAC_REGISTRATION_BYPASS,
         sequence: mac.sequence,
@@ -146,6 +169,11 @@ extern "C" fn downstream(
         packet,
         outgoing.as_ptr(),
         outgoing.len(),
+    );
+    mac.counters.downstream_tx(
+        mac.framework,
+        packet_ref.info.destination,
+        packet_ref.payload.len,
     );
 }
 

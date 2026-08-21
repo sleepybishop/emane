@@ -299,14 +299,12 @@ pub extern "C" fn emane_rs_receive_processor_process(
                 && !pathloss_info.pathlosses.is_null()
                 && pathloss_info.count == num_segments
             {
-                let gain_result = unsafe {
-                    emane_rs_gain_manager_determine_gain(
-                        rp.antenna_manager,
-                        tx_nem_id,
-                        ant_idx,
-                        loc_ptr,
-                    )
-                };
+                let gain_result = emane_rs_gain_manager_determine_gain(
+                    rp.antenna_manager,
+                    tx_nem_id,
+                    ant_idx,
+                    loc_ptr,
+                );
 
                 if gain_result.status == 0 {
                     // SUCCESS

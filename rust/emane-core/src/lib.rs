@@ -42,7 +42,6 @@ pub mod ota_manager;
 pub mod pcr_manager;
 pub mod queue_metric_manager;
 pub mod rf_signal_table;
-#[cfg(feature = "legacy-ffi")]
 pub mod statistics;
 pub mod tdma_message;
 

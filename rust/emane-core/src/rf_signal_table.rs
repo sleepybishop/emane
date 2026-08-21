@@ -42,6 +42,18 @@ pub struct RFSignalTable {
     antenna_tracker: HashMap<u16, HashSet<(u16, u64)>>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct RFSignalRow {
+    pub source: u16,
+    pub antenna: Option<u16>,
+    pub frequency_hz: Option<u64>,
+    pub samples: u64,
+    pub average_rx_power_dbm: f64,
+    pub average_noise_floor_dbm: f64,
+    pub average_sinr_db: f64,
+    pub average_inr_db: f64,
+}
+
 impl RFSignalTable {
     pub fn new(nem_id: u16) -> Self {
         Self {
@@ -63,7 +75,7 @@ impl RFSignalTable {
 
     pub fn reset(&mut self, mut rx_antenna_id: u16) {
         if self.average_all_antennas {
-            rx_antenna_id = 0;
+            rx_antenna_id = u16::MAX;
         }
 
         if let Some(set) = self.antenna_tracker.remove(&rx_antenna_id) {
@@ -90,11 +102,11 @@ impl RFSignalTable {
         receiver_sensitivity_db: f64,
     ) {
         if self.average_all_antennas {
-            rx_antenna_id = 0;
+            rx_antenna_id = u16::MAX;
         }
 
         if self.average_all_frequencies {
-            frequency_hz = 0;
+            frequency_hz = u64::MAX;
         }
 
         let key = format!("{}:{}:{}", src, rx_antenna_id, frequency_hz);
@@ -112,6 +124,33 @@ impl RFSignalTable {
             .entry(rx_antenna_id)
             .or_default()
             .insert((src, frequency_hz));
+    }
+
+    pub fn rows(&self) -> Vec<RFSignalRow> {
+        let mut rows = self
+            .rf_receive_metric_cache
+            .iter()
+            .filter_map(|(key, entry)| {
+                let mut fields = key.split(':');
+                let source = fields.next()?.parse().ok()?;
+                let antenna = fields.next()?.parse::<u16>().ok()?;
+                let frequency_hz = fields.next()?.parse::<u64>().ok()?;
+                let samples = entry.num_samples;
+                let divisor = samples.max(1) as f64;
+                Some(RFSignalRow {
+                    source,
+                    antenna: (antenna != u16::MAX).then_some(antenna),
+                    frequency_hz: (frequency_hz != u64::MAX).then_some(frequency_hz),
+                    samples,
+                    average_rx_power_dbm: entry.rx_power_accum_dbm / divisor,
+                    average_noise_floor_dbm: entry.noise_floor_accum_db / divisor,
+                    average_sinr_db: entry.sinr_accum_db / divisor,
+                    average_inr_db: entry.inr_accum_db / divisor,
+                })
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by_key(|row| (row.source, row.antenna, row.frequency_hz));
+        rows
     }
 }
 
@@ -274,4 +313,29 @@ pub extern "C" fn emane_rs_rf_signal_table_free_keys(keys_ptr: *mut *mut c_char,
 pub extern "C" fn emane_rs_rf_signal_table_reset_all(ptr: *mut RFSignalTable) {
     let table = unsafe { &mut *ptr };
     table.reset_all();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn averages_and_collapses_requested_dimensions() {
+        let mut table = RFSignalTable::new(1);
+        table.set_average_all_antennas(true);
+        table.set_average_all_frequencies(true);
+        table.update(2, 4, 2_400_000_000, -50.0, 10.0, -60.0, -90.0);
+        table.update(2, 7, 2_410_000_000, -40.0, 20.0, -55.0, -90.0);
+        let rows = table.rows();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source, 2);
+        assert_eq!(rows[0].antenna, None);
+        assert_eq!(rows[0].frequency_hz, None);
+        assert_eq!(rows[0].samples, 2);
+        assert_eq!(rows[0].average_rx_power_dbm, -45.0);
+        assert_eq!(rows[0].average_sinr_db, 15.0);
+        assert_eq!(rows[0].average_inr_db, 32.5);
+        table.reset(4);
+        assert!(table.rows().is_empty());
+    }
 }

@@ -240,7 +240,7 @@ pub extern "C" fn emane_rs_config_register_numeric_any(
 
     if !regex_pattern.is_empty() {
         let mut regex_err = [0i8; 256];
-        regex_ptr = unsafe { emane_rs_regex_compile(s_regex, regex_err.as_mut_ptr(), 256) };
+        regex_ptr = emane_rs_regex_compile(s_regex, regex_err.as_mut_ptr(), 256);
         if regex_ptr.is_null() {
             let err_msg = unsafe { CStr::from_ptr(regex_err.as_ptr()).to_string_lossy() };
             write_error(
@@ -330,7 +330,7 @@ pub extern "C" fn emane_rs_config_register_non_numeric_any(
 
     if !regex_pattern.is_empty() {
         let mut regex_err = [0i8; 256];
-        regex_ptr = unsafe { emane_rs_regex_compile(s_regex, regex_err.as_mut_ptr(), 256) };
+        regex_ptr = emane_rs_regex_compile(s_regex, regex_err.as_mut_ptr(), 256);
         if regex_ptr.is_null() {
             let err_msg = unsafe { CStr::from_ptr(regex_err.as_ptr()).to_string_lossy() };
             write_error(
@@ -777,7 +777,7 @@ pub extern "C" fn emane_rs_config_build_updates(
 
                 // check regex
                 if !info.regex_ptr.0.is_null() {
-                    let matched = unsafe { emane_rs_regex_match(info.regex_ptr.0, c_str) };
+                    let matched = emane_rs_regex_match(info.regex_ptr.0, c_str);
                     if !matched {
                         write_error(
                             &format!(

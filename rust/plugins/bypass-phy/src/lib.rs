@@ -1,6 +1,6 @@
 use emane_plugin_api::{
-    FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket, PluginApi,
-    PLUGIN_ABI_VERSION,
+    CommonLayerCounters, FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket,
+    PluginApi, PLUGIN_ABI_VERSION,
 };
 use std::ffi::c_void;
 use std::sync::OnceLock;
@@ -8,15 +8,18 @@ use std::sync::OnceLock;
 struct BypassPhy {
     id: u16,
     framework: FfiFrameworkService,
+    counters: CommonLayerCounters,
 }
 
 extern "C" fn init(id: u16, framework: *const FfiFrameworkService) -> *mut c_void {
     let Some(framework) = (unsafe { framework.as_ref() }) else {
         return std::ptr::null_mut();
     };
+    let framework = *framework;
     Box::into_raw(Box::new(BypassPhy {
         id,
-        framework: *framework,
+        framework,
+        counters: CommonLayerCounters::register(framework),
     }))
     .cast()
 }
@@ -52,12 +55,23 @@ extern "C" fn upstream(
     if packet.is_null() {
         (phy.framework.send_upstream_control)(phy.framework.framework_ctx, phy.id, messages, count);
     } else {
+        let packet_ref = unsafe { &*packet };
+        phy.counters.upstream_rx(
+            phy.framework,
+            packet_ref.info.destination,
+            packet_ref.payload.len,
+        );
         (phy.framework.send_upstream_packet)(
             phy.framework.framework_ctx,
             phy.id,
             packet,
             messages,
             count,
+        );
+        phy.counters.upstream_tx(
+            phy.framework,
+            packet_ref.info.destination,
+            packet_ref.payload.len,
         );
     }
 }
@@ -79,12 +93,23 @@ extern "C" fn downstream(
             count,
         );
     } else {
+        let packet_ref = unsafe { &*packet };
+        phy.counters.downstream_rx(
+            phy.framework,
+            packet_ref.info.destination,
+            packet_ref.payload.len,
+        );
         (phy.framework.send_downstream_packet)(
             phy.framework.framework_ctx,
             phy.id,
             packet,
             messages,
             count,
+        );
+        phy.counters.downstream_tx(
+            phy.framework,
+            packet_ref.info.destination,
+            packet_ref.payload.len,
         );
     }
 }
