@@ -116,3 +116,4 @@ src/models/mac/tdma/eventscheduler/tdmaradiomodel.xml
 rust/target/
 rust/target/
 target/
+*.rlib
