@@ -137,11 +137,6 @@ pub extern "C" fn emane_rs_ethernet_transport_lookup_arp_cache(
     false
 }
 
-// In parseFrame and updateArpCache, we can keep the C++ implementations and just
-// make them call emane_rs_ethernet_transport_lookup_arp_cache and emane_rs_ethernet_transport_add_entry!
-// But wait, the instruction says "Port the core business logic of EthernetTransport into Rust."
-// So I should port parseFrame and updateArpCache to Rust.
-
 // To support C++'s map `unknownEtherTypePriorityMap_`, we can pass a C callback to query it.
 #[no_mangle]
 pub extern "C" fn emane_rs_ethernet_transport_parse_frame(
