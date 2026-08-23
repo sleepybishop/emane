@@ -132,7 +132,7 @@ pub struct NoiseRecorder {
     u64_band_end_frequency_hz: u64,
 
     wheel: Wheel,
-    d_rx_sensitivity_milli_watt: f64,
+    _d_rx_sensitivity_milli_watt: f64,
     max_end_of_reception_bin: i64,
     min_start_of_reception_bin: i64,
 
@@ -248,7 +248,7 @@ impl NoiseRecorder {
             total_sub_band_bins,
             u64_band_end_frequency_hz,
             wheel: Wheel::new(total_wheel_bins as usize, total_sub_band_bins),
-            d_rx_sensitivity_milli_watt,
+            _d_rx_sensitivity_milli_watt: d_rx_sensitivity_milli_watt,
             max_end_of_reception_bin: 0,
             min_start_of_reception_bin: 0,
             nem_antenna_index_eor_bin_map: HashMap::new(),
@@ -390,172 +390,173 @@ impl NoiseRecorder {
                 self.min_start_of_reception_bin = 0;
             }
 
-            let mut gap_bin_duration_count = 0;
-            let mut within_min_sor_max_eor_bin_count = 0;
-            let mut before_min_sor_bin_duration_count = 0;
-            let mut after_max_eor_bin_duration_count = 0;
-            let mut start_index = start_of_reception_bin;
+            let start_index = start_of_reception_bin as usize % self.total_wheel_bins as usize;
+            let bin_power_applies = self
+                .bin_power_apply_map
+                .get(&(u64_start_frequency_hz, u64_end_frequency_hz))
+                .cloned()
+                .unwrap_or_default();
 
-            if self.min_start_of_reception_bin > 0 && self.max_end_of_reception_bin > 0 {
-                if end_of_reception_bin < self.min_start_of_reception_bin {
-                    gap_bin_duration_count =
-                        self.min_start_of_reception_bin - end_of_reception_bin - 1;
-                    before_min_sor_bin_duration_count = duration_bin_count;
-                } else if start_of_reception_bin > self.max_end_of_reception_bin {
-                    gap_bin_duration_count =
-                        start_of_reception_bin - self.max_end_of_reception_bin - 1;
-                    after_max_eor_bin_duration_count = duration_bin_count;
-                    start_index = self.max_end_of_reception_bin + 1;
+            if self.max_end_of_reception_bin == 0 && self.min_start_of_reception_bin == 0 {
+                if self.total_sub_band_bins > 1 {
+                    for &(start, end, multiplier) in &bin_power_applies {
+                        self.wheel.set(
+                            start_index,
+                            duration_bin_count as usize,
+                            d_rx_power * multiplier,
+                            start,
+                            end - start + 1,
+                        );
+                    }
                 } else {
-                    if start_of_reception_bin < self.min_start_of_reception_bin {
-                        before_min_sor_bin_duration_count =
-                            self.min_start_of_reception_bin - start_of_reception_bin;
-                    }
-                    if end_of_reception_bin > self.max_end_of_reception_bin {
-                        after_max_eor_bin_duration_count =
-                            end_of_reception_bin - self.max_end_of_reception_bin;
-                    }
-                    within_min_sor_max_eor_bin_count = duration_bin_count
-                        - before_min_sor_bin_duration_count
-                        - after_max_eor_bin_duration_count;
+                    self.wheel.set(
+                        start_index,
+                        duration_bin_count as usize,
+                        d_rx_power,
+                        sub_band_bin_start,
+                        sub_band_bins,
+                    );
                 }
-            } else {
-                before_min_sor_bin_duration_count = duration_bin_count;
-                self.max_end_of_reception_bin = end_of_reception_bin;
+
                 self.min_start_of_reception_bin = start_of_reception_bin;
-            }
+                self.max_end_of_reception_bin = end_of_reception_bin;
+            } else {
+                let mut before_min_sor_bin_duration_count = 0;
+                let mut after_max_eor_bin_duration_count = 0;
 
-            if d_rx_power >= self.d_rx_sensitivity_milli_watt {
-                if gap_bin_duration_count > 0 {
-                    self.wheel.set(
-                        (end_of_reception_bin + 1) as usize % self.total_wheel_bins as usize,
-                        gap_bin_duration_count as usize,
-                        0.0,
-                        0,
-                        self.total_sub_band_bins,
-                    );
-                }
-
-                if before_min_sor_bin_duration_count > 0 || after_max_eor_bin_duration_count > 0 {
-                    let clear_count =
-                        before_min_sor_bin_duration_count + after_max_eor_bin_duration_count;
-
-                    self.wheel.set(
-                        (start_index) as usize % self.total_wheel_bins as usize,
-                        clear_count as usize,
-                        0.0,
-                        0,
-                        self.total_sub_band_bins,
-                    );
+                if start_of_reception_bin < self.min_start_of_reception_bin {
+                    before_min_sor_bin_duration_count =
+                        if end_of_reception_bin < self.min_start_of_reception_bin {
+                            duration_bin_count
+                        } else {
+                            self.min_start_of_reception_bin - start_of_reception_bin
+                        };
 
                     if self.total_sub_band_bins > 1 {
-                        let key = (u64_start_frequency_hz, u64_end_frequency_hz);
-                        let applies = self.bin_power_apply_map.get(&key).unwrap().clone();
-                        for &(start, end, multi) in &applies {
-                            let val = d_rx_power * multi;
-
-                            if before_min_sor_bin_duration_count > 0 {
-                                self.wheel.add(
-                                    (start_of_reception_bin) as usize
-                                        % self.total_wheel_bins as usize,
-                                    before_min_sor_bin_duration_count as usize,
-                                    val,
-                                    start,
-                                    end - start + 1,
-                                );
-                            }
-
-                            if after_max_eor_bin_duration_count > 0 {
-                                self.wheel.add(
-                                    (self.max_end_of_reception_bin + 1) as usize
-                                        % self.total_wheel_bins as usize,
-                                    after_max_eor_bin_duration_count as usize,
-                                    val,
-                                    start,
-                                    end - start + 1,
-                                );
-                            }
-                        }
-                    } else {
-                        if before_min_sor_bin_duration_count > 0 {
-                            self.wheel.add(
-                                (start_of_reception_bin) as usize % self.total_wheel_bins as usize,
-                                before_min_sor_bin_duration_count as usize,
-                                d_rx_power,
-                                sub_band_bin_start,
-                                sub_band_bins,
-                            );
-                        }
-
-                        if after_max_eor_bin_duration_count > 0 {
-                            self.wheel.add(
-                                (self.max_end_of_reception_bin + 1) as usize
-                                    % self.total_wheel_bins as usize,
-                                after_max_eor_bin_duration_count as usize,
-                                d_rx_power,
-                                sub_band_bin_start,
-                                sub_band_bins,
-                            );
-                        }
-                    }
-                }
-
-                if within_min_sor_max_eor_bin_count > 0 {
-                    if self.total_sub_band_bins > 1 {
-                        let key = (u64_start_frequency_hz, u64_end_frequency_hz);
-                        let applies = self.bin_power_apply_map.get(&key).unwrap().clone();
-                        for &(start, end, multi) in &applies {
-                            let val = d_rx_power * multi;
-                            self.wheel.add(
-                                (start_index + before_min_sor_bin_duration_count) as usize
-                                    % self.total_wheel_bins as usize,
-                                within_min_sor_max_eor_bin_count as usize,
-                                val,
+                        self.wheel.set(
+                            start_index,
+                            before_min_sor_bin_duration_count as usize,
+                            0.0,
+                            0,
+                            self.total_sub_band_bins,
+                        );
+                        for &(start, end, multiplier) in &bin_power_applies {
+                            self.wheel.set(
+                                start_index,
+                                duration_bin_count as usize,
+                                d_rx_power * multiplier,
                                 start,
                                 end - start + 1,
                             );
                         }
                     } else {
-                        self.wheel.add(
-                            (start_index + before_min_sor_bin_duration_count) as usize
-                                % self.total_wheel_bins as usize,
-                            within_min_sor_max_eor_bin_count as usize,
+                        self.wheel.set(
+                            start_index,
+                            before_min_sor_bin_duration_count as usize,
                             d_rx_power,
                             sub_band_bin_start,
                             sub_band_bins,
                         );
                     }
                 }
-            } else {
+
+                if end_of_reception_bin > self.max_end_of_reception_bin {
+                    after_max_eor_bin_duration_count =
+                        if start_of_reception_bin > self.max_end_of_reception_bin {
+                            duration_bin_count
+                        } else {
+                            end_of_reception_bin - self.max_end_of_reception_bin
+                        };
+                    let after_start_index = (start_index + duration_bin_count as usize
+                        - after_max_eor_bin_duration_count as usize)
+                        % self.total_wheel_bins as usize;
+
+                    if self.total_sub_band_bins > 1 {
+                        self.wheel.set(
+                            after_start_index,
+                            after_max_eor_bin_duration_count as usize,
+                            0.0,
+                            0,
+                            self.total_sub_band_bins,
+                        );
+                        for &(start, end, multiplier) in &bin_power_applies {
+                            self.wheel.set(
+                                start_index,
+                                duration_bin_count as usize,
+                                d_rx_power * multiplier,
+                                start,
+                                end - start + 1,
+                            );
+                        }
+                    } else {
+                        self.wheel.set(
+                            after_start_index,
+                            after_max_eor_bin_duration_count as usize,
+                            d_rx_power,
+                            sub_band_bin_start,
+                            sub_band_bins,
+                        );
+                    }
+                }
+
+                let within_min_sor_max_eor_bin_count = duration_bin_count
+                    - before_min_sor_bin_duration_count
+                    - after_max_eor_bin_duration_count;
+
+                if within_min_sor_max_eor_bin_count > 0 {
+                    let within_start_index = (start_index
+                        + before_min_sor_bin_duration_count as usize)
+                        % self.total_wheel_bins as usize;
+                    if self.total_sub_band_bins > 1 {
+                        for &(start, end, multiplier) in &bin_power_applies {
+                            self.wheel.add(
+                                within_start_index,
+                                within_min_sor_max_eor_bin_count as usize,
+                                d_rx_power * multiplier,
+                                start,
+                                end - start + 1,
+                            );
+                        }
+                    } else {
+                        self.wheel.add(
+                            within_start_index,
+                            within_min_sor_max_eor_bin_count as usize,
+                            d_rx_power,
+                            sub_band_bin_start,
+                            sub_band_bins,
+                        );
+                    }
+                } else {
+                    if before_min_sor_bin_duration_count > 0 {
+                        self.wheel.set(
+                            (start_index + before_min_sor_bin_duration_count as usize)
+                                % self.total_wheel_bins as usize,
+                            (self.min_start_of_reception_bin
+                                - (start_of_reception_bin + before_min_sor_bin_duration_count))
+                                as usize,
+                            0.0,
+                            0,
+                            self.total_sub_band_bins,
+                        );
+                    }
+                    if after_max_eor_bin_duration_count > 0 {
+                        self.wheel.set(
+                            (self.max_end_of_reception_bin + 1) as usize
+                                % self.total_wheel_bins as usize,
+                            (start_of_reception_bin - self.max_end_of_reception_bin - 1) as usize,
+                            0.0,
+                            0,
+                            self.total_sub_band_bins,
+                        );
+                    }
+                }
+
                 if before_min_sor_bin_duration_count > 0 {
-                    self.wheel.set(
-                        (start_index + before_min_sor_bin_duration_count) as usize
-                            % self.total_wheel_bins as usize,
-                        (self.min_start_of_reception_bin
-                            - (start_of_reception_bin + before_min_sor_bin_duration_count))
-                            as usize,
-                        0.0,
-                        0,
-                        self.total_sub_band_bins,
-                    );
+                    self.min_start_of_reception_bin = start_of_reception_bin;
                 }
                 if after_max_eor_bin_duration_count > 0 {
-                    self.wheel.set(
-                        (self.max_end_of_reception_bin + 1) as usize
-                            % self.total_wheel_bins as usize,
-                        (start_of_reception_bin - self.max_end_of_reception_bin - 1) as usize,
-                        0.0,
-                        0,
-                        self.total_sub_band_bins,
-                    );
+                    self.max_end_of_reception_bin = end_of_reception_bin;
                 }
-            }
-
-            if before_min_sor_bin_duration_count > 0 {
-                self.min_start_of_reception_bin = start_of_reception_bin;
-            }
-            if after_max_eor_bin_duration_count > 0 {
-                self.max_end_of_reception_bin = end_of_reception_bin;
             }
         }
 

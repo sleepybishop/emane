@@ -309,7 +309,7 @@ impl AntennaProfileManifest {
             let ant_idx = self.get_or_load_pattern(
                 antenna_path,
                 "antennapattern",
-                -300.0, /* DBM_MIN */
+                -327.0, /* legacy EMANE::DBM_MIN */
             )?;
 
             let mut blk_idx = usize::MAX;
@@ -492,7 +492,7 @@ mod tests {
         let manifest = directory.join("manifest.xml");
         std::fs::write(
             &pattern,
-            r#"<antennaprofile><antennapattern><elevation min="-90" max="90"><bearing min="0" max="359"><gain value="7.5"/></bearing></elevation></antennapattern></antennaprofile>"#,
+            r#"<antennaprofile><antennapattern><elevation min="-90" max="90"><bearing min="0" max="5"><gain value="7.5"/></bearing></elevation></antennapattern></antennaprofile>"#,
         )
         .unwrap();
         std::fs::write(
@@ -505,9 +505,10 @@ mod tests {
         profiles
             .load(&format!("file://{}", manifest.display()))
             .unwrap();
+        assert_eq!(profiles.get_profile_gain(3, 3.0, 0.0, 3.0, 0.0), Some(7.5));
         assert_eq!(
-            profiles.get_profile_gain(3, 10.0, 0.0, 10.0, 0.0),
-            Some(7.5)
+            profiles.get_profile_gain(3, 180.0, 0.0, 180.0, 0.0),
+            Some(-327.0)
         );
         assert!(profiles.get_profile_info(3).is_some());
         std::fs::remove_dir_all(directory).unwrap();

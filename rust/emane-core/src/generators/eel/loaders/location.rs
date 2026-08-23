@@ -277,13 +277,7 @@ pub extern "C" fn emane_location_loader_get_events(
 mod tests {
     use super::*;
 
-    extern "C" fn collect(
-        context: *mut c_void,
-        _: u16,
-        _: u16,
-        data: *const u8,
-        len: usize,
-    ) {
+    extern "C" fn collect(context: *mut c_void, _: u16, _: u16, data: *const u8, len: usize) {
         let output = unsafe { &mut *(context as *mut Vec<Vec<u8>>) };
         output.push(unsafe { std::slice::from_raw_parts(data, len) }.to_vec());
     }
@@ -304,12 +298,7 @@ mod tests {
         output.clear();
 
         loader
-            .load(
-                "nem",
-                7,
-                "orientation",
-                &["1,2,3,degrees".to_string()],
-            )
+            .load("nem", 7, "orientation", &["1,2,3,degrees".to_string()])
             .unwrap();
         loader.get_events(0, (&mut output as *mut Vec<Vec<u8>>).cast(), collect);
         let event = emane_message::LocationEvent::decode(output[0].as_slice()).unwrap();

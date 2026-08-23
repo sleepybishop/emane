@@ -1,6 +1,6 @@
 use crate::noise_recorder::NoiseRecorder;
 use crate::spectral_mask::get_manager as get_spectral_mask_manager;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::c_void;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -93,11 +93,12 @@ pub struct SpectrumMonitor {
     b_max_clamp: bool,
     b_exclude_same_sub_id_from_filter: bool,
     time_sync_threshold: i64,
+    last_update_clamp_error: bool,
 
     transmitter_bandwidth_cache: HashMap<u64, (HashMap<u64, Vec<NoiseRecord>>, HashSet<u64>)>,
-    _transmitter_spectral_mask_cache: HashMap<u64, (HashMap<u64, Vec<NoiseRecord>>, HashSet<u64>)>,
+    transmitter_spectral_mask_cache: HashMap<u64, (HashMap<u64, Vec<NoiseRecord>>, HashSet<u64>)>,
 
-    noise_recorder_map: HashMap<u64, Box<NoiseRecorder>>,
+    noise_recorder_map: BTreeMap<u64, Box<NoiseRecorder>>,
 
     u64_receiver_bandwidth_hz: u64,
     mode: NoiseMode,
@@ -105,10 +106,10 @@ pub struct SpectrumMonitor {
     u16_sub_id: u16,
     foi: HashSet<u64>,
 
-    filter_noise_recorder_map: HashMap<u16, (u64, u64, Box<NoiseRecorder>, *const c_void)>,
+    filter_noise_recorder_map: BTreeMap<u16, (u64, u64, Box<NoiseRecorder>, *const c_void)>,
     filter_transmitter_bandwidth_cache:
         HashMap<u64, (HashMap<u64, Vec<FilterRecord>>, HashSet<u64>)>,
-    _filter_transmitter_spectral_mask_cache:
+    filter_transmitter_spectral_mask_cache:
         HashMap<u64, (HashMap<u64, Vec<FilterRecord>>, HashSet<u64>)>,
 }
 
@@ -141,17 +142,18 @@ impl SpectrumMonitor {
             b_max_clamp: false,
             b_exclude_same_sub_id_from_filter: false,
             time_sync_threshold: 0,
+            last_update_clamp_error: false,
             transmitter_bandwidth_cache: HashMap::new(),
-            _transmitter_spectral_mask_cache: HashMap::new(),
-            noise_recorder_map: HashMap::new(),
+            transmitter_spectral_mask_cache: HashMap::new(),
+            noise_recorder_map: BTreeMap::new(),
             u64_receiver_bandwidth_hz: 0,
             mode: NoiseMode::None,
             d_receiver_sensitivity_milli_watt: 0.0,
             u16_sub_id: 0,
             foi: HashSet::new(),
-            filter_noise_recorder_map: HashMap::new(),
+            filter_noise_recorder_map: BTreeMap::new(),
             filter_transmitter_bandwidth_cache: HashMap::new(),
-            _filter_transmitter_spectral_mask_cache: HashMap::new(),
+            filter_transmitter_spectral_mask_cache: HashMap::new(),
         }
     }
 
@@ -305,6 +307,7 @@ impl SpectrumMonitor {
             panic!("Filter id already present");
         }
         self.filter_transmitter_bandwidth_cache.clear();
+        self.filter_transmitter_spectral_mask_cache.clear();
         self.filter_noise_recorder_map.insert(
             filter_index,
             (
@@ -332,6 +335,7 @@ impl SpectrumMonitor {
             .is_some()
         {
             self.filter_transmitter_bandwidth_cache.clear();
+            self.filter_transmitter_spectral_mask_cache.clear();
         }
     }
 
@@ -352,6 +356,7 @@ impl SpectrumMonitor {
         filter_data_ptr: *const u8,
         filter_data_len: usize,
     ) -> (i64, i64, i64, Vec<FfiFrequencySegment>, bool, f64) {
+        self.last_update_clamp_error = false;
         if segments.len() != rx_powers_milli_watt.len() {
             return (0, 0, 0, Vec::new(), false, 0.0);
         }
@@ -364,6 +369,7 @@ impl SpectrumMonitor {
         let Some(valid_propagation) =
             clamp_value(propagation_delay, self.max_propagation, self.b_max_clamp)
         else {
+            self.last_update_clamp_error = true;
             return (0, 0, 0, Vec::new(), false, 0.0);
         };
 
@@ -374,11 +380,15 @@ impl SpectrumMonitor {
         let simple_mode = self.mode == NoiseMode::None
             || self.mode == NoiseMode::PassThrough
             || (self.mode == NoiseMode::OutOfBand && b_in_band);
+        if simple_mode {
+            report_as_in_band = true;
+        }
 
         for (segment, rx_power_mw) in segments.iter().zip(rx_powers_milli_watt.iter().copied()) {
             let Some(offset) =
                 clamp_value(segment.offset_microsec, self.max_offset, self.b_max_clamp)
             else {
+                self.last_update_clamp_error = true;
                 return (0, 0, 0, Vec::new(), false, 0.0);
             };
             let Some(duration) = clamp_value(
@@ -386,6 +396,7 @@ impl SpectrumMonitor {
                 self.max_duration,
                 self.b_max_clamp,
             ) else {
+                self.last_update_clamp_error = true;
                 return (0, 0, 0, Vec::new(), false, 0.0);
             };
             let shifted_frequency = apply_doppler(segment.frequency_hz, d_doppler_factor);
@@ -394,9 +405,9 @@ impl SpectrumMonitor {
                 let frequency_match = self.mode == NoiseMode::PassThrough
                     || self.noise_recorder_map.contains_key(&segment.frequency_hz);
                 if !frequency_match {
+                    report_as_in_band = false;
                     continue;
                 }
-                report_as_in_band = true;
                 let overlap = get_spectral_mask_manager().get_spectral_overlap(
                     shifted_frequency,
                     segment.frequency_hz,
@@ -426,52 +437,102 @@ impl SpectrumMonitor {
                 continue;
             }
 
-            let mut matching_power = None;
-            let recorder_frequencies: Vec<u64> = self.noise_recorder_map.keys().copied().collect();
-            for recorder_frequency in recorder_frequencies {
-                let Some(overlap) = get_spectral_mask_manager().get_spectral_overlap(
-                    shifted_frequency,
-                    recorder_frequency,
-                    self.u64_receiver_bandwidth_hz,
-                    u64_segment_bandwidth_hz,
-                    spectral_mask_index,
-                ) else {
-                    continue;
+            let cache_key = if spectral_mask_index == 0 {
+                u64_segment_bandwidth_hz
+            } else {
+                u64::from(spectral_mask_index)
+            };
+            let cached_records = {
+                let cache = if spectral_mask_index == 0 {
+                    &mut self.transmitter_bandwidth_cache
+                } else {
+                    &mut self.transmitter_spectral_mask_cache
                 };
-                let overlap_power = overlap_power_mw(&overlap, rx_power_mw);
-                if overlap_power < self.d_receiver_sensitivity_milli_watt {
-                    continue;
+                let (frequencies, no_overlap) = cache
+                    .entry(cache_key)
+                    .or_insert_with(|| (HashMap::new(), HashSet::new()));
+                if let Some(records) = frequencies.get(&shifted_frequency) {
+                    Some(records.clone())
+                } else if no_overlap.contains(&shifted_frequency) {
+                    Some(Vec::new())
+                } else {
+                    None
                 }
-                let (_, lower, upper, _) = &overlap;
-                if let Some(recorder) = self.noise_recorder_map.get_mut(&recorder_frequency) {
-                    let (sor, eor) = recorder.update(
-                        now,
-                        valid_tx_time,
-                        offset,
-                        valid_propagation,
-                        duration,
-                        overlap_power,
-                        transmitters,
-                        *lower,
-                        *upper,
-                        tx_antenna_index,
-                        false,
-                    );
-                    if recorder_frequency == segment.frequency_hz {
-                        matching_power = Some((overlap_power, sor, eor));
+            };
+            let records = if let Some(records) = cached_records {
+                records
+            } else {
+                let mut records = Vec::with_capacity(self.noise_recorder_map.len());
+                let mut found_no_overlap = false;
+                for recorder_frequency in self.noise_recorder_map.keys().copied() {
+                    if let Some(overlap) = get_spectral_mask_manager().get_spectral_overlap(
+                        shifted_frequency,
+                        recorder_frequency,
+                        self.u64_receiver_bandwidth_hz,
+                        u64_segment_bandwidth_hz,
+                        spectral_mask_index,
+                    ) {
+                        records.push((recorder_frequency, overlap.clone(), overlap.1, overlap.2));
+                    } else {
+                        found_no_overlap = true;
                     }
+                }
+                let cache = if spectral_mask_index == 0 {
+                    &mut self.transmitter_bandwidth_cache
+                } else {
+                    &mut self.transmitter_spectral_mask_cache
+                };
+                let (frequencies, no_overlap) = cache
+                    .entry(cache_key)
+                    .or_insert_with(|| (HashMap::new(), HashSet::new()));
+                if found_no_overlap {
+                    no_overlap.insert(shifted_frequency);
+                }
+                if !records.is_empty() {
+                    frequencies.insert(shifted_frequency, records.clone());
+                }
+                records
+            };
+
+            let mut overlap_power = 0.0;
+            let mut frequency_match = false;
+            let mut above_sensitivity = false;
+            let mut start_of_reception = 0;
+            let mut end_of_reception = 0;
+            for (recorder_frequency, overlap, lower, upper) in &records {
+                overlap_power += overlap_power_mw(overlap, rx_power_mw);
+                if overlap_power >= self.d_receiver_sensitivity_milli_watt {
+                    above_sensitivity = true;
+                    if let Some(recorder) = self.noise_recorder_map.get_mut(recorder_frequency) {
+                        (start_of_reception, end_of_reception) = recorder.update(
+                            now,
+                            valid_tx_time,
+                            offset,
+                            valid_propagation,
+                            duration,
+                            overlap_power,
+                            transmitters,
+                            *lower,
+                            *upper,
+                            tx_antenna_index,
+                            false,
+                        );
+                    }
+                }
+                if !frequency_match {
+                    frequency_match = *recorder_frequency == segment.frequency_hz;
                 }
             }
 
-            if b_in_band && self.foi.contains(&segment.frequency_hz) {
+            if b_in_band && frequency_match {
                 report_as_in_band = true;
             }
-            if let Some((power, sor, eor)) = matching_power {
-                minimum_sor = minimum_sor.min(sor);
-                maximum_eor = maximum_eor.max(eor);
+            if frequency_match && above_sensitivity {
+                minimum_sor = minimum_sor.min(start_of_reception);
+                maximum_eor = maximum_eor.max(end_of_reception);
                 reportable.push(FfiFrequencySegment {
                     frequency_hz: segment.frequency_hz,
-                    rx_power_dbm: milliwatt_to_dbm(power),
+                    rx_power_dbm: milliwatt_to_dbm(overlap_power),
                     duration_microsec: duration,
                     offset_microsec: offset,
                 });
@@ -513,6 +574,10 @@ impl SpectrumMonitor {
         )
     }
 
+    pub fn last_update_had_clamp_error(&self) -> bool {
+        self.last_update_clamp_error
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn apply_energy_to_filters(
         &mut self,
@@ -532,75 +597,223 @@ impl SpectrumMonitor {
         filter_data_ptr: *const u8,
         filter_data_len: usize,
     ) {
-        for (_, (filter_frequency, filter_bandwidth, recorder, criterion)) in
-            self.filter_noise_recorder_map.iter_mut()
-        {
+        let cache_key = if spectral_mask_index == 0 {
+            tx_bandwidth
+        } else {
+            u64::from(spectral_mask_index)
+        };
+
+        let cached_records = {
+            let cache = if spectral_mask_index == 0 {
+                &mut self.filter_transmitter_bandwidth_cache
+            } else {
+                &mut self.filter_transmitter_spectral_mask_cache
+            };
+            cache
+                .entry(cache_key)
+                .or_insert_with(|| (HashMap::new(), HashSet::new()))
+                .0
+                .get(&shifted_tx_frequency)
+                .cloned()
+        };
+
+        if let Some(records) = cached_records {
+            for record in &records {
+                self.apply_filter_record(
+                    record,
+                    true,
+                    true,
+                    now,
+                    tx_time,
+                    propagation,
+                    offset,
+                    duration,
+                    original_tx_frequency,
+                    rx_power_mw,
+                    transmitters,
+                    sub_id,
+                    tx_antenna_index,
+                    filter_data_ptr,
+                    filter_data_len,
+                );
+            }
+            return;
+        }
+
+        let filters: Vec<_> = self
+            .filter_noise_recorder_map
+            .iter()
+            .map(
+                |(&filter_index, &(filter_frequency, filter_bandwidth, _, criterion))| {
+                    (filter_index, filter_frequency, filter_bandwidth, criterion)
+                },
+            )
+            .collect();
+        let mut records = Vec::with_capacity(filters.len());
+
+        for (filter_index, filter_frequency, filter_bandwidth, criterion) in filters {
             let Some(overlap) = get_spectral_mask_manager().get_spectral_overlap(
                 shifted_tx_frequency,
-                *filter_frequency,
-                *filter_bandwidth,
+                filter_frequency,
+                filter_bandwidth,
                 tx_bandwidth,
                 spectral_mask_index,
             ) else {
                 continue;
             };
-            let (_, lower, upper, total_segments) = &overlap;
-            let matches = if criterion.is_null() {
-                true
-            } else {
-                let criterion = unsafe { &*(*criterion as *const FfiFilterMatchCriterion) };
-                (criterion.matches)(
-                    criterion.context,
+            let lower = overlap.1;
+            let upper = overlap.2;
+            if overlap.0.is_empty()
+                || !filter_matches(
+                    criterion,
                     original_tx_frequency,
-                    upper.saturating_sub(*lower),
+                    upper.saturating_sub(lower),
                     if sub_id == self.u16_sub_id { 0 } else { sub_id },
                     filter_data_ptr,
                     filter_data_len,
                 )
-            };
-            if !matches {
+            {
                 continue;
             }
-            let aggregate_power = overlap_power_mw(&overlap, rx_power_mw);
-            if aggregate_power < self.d_receiver_sensitivity_milli_watt {
-                continue;
-            }
-            if recorder.get_sub_band_bin_count() > 1 {
-                let mut index = 0u64;
-                for (segments, _, _) in &overlap.0 {
-                    for (_, modifier, segment_lower, segment_upper) in segments {
-                        index += 1;
-                        recorder.update(
-                            now,
-                            tx_time,
-                            offset,
-                            propagation,
-                            duration,
-                            rx_power_mw * *modifier,
-                            transmitters,
-                            *segment_lower,
-                            *segment_upper,
-                            tx_antenna_index,
-                            index != *total_segments,
-                        );
-                    }
-                }
-            } else {
-                recorder.update(
-                    now,
-                    tx_time,
-                    offset,
-                    propagation,
-                    duration,
-                    aggregate_power,
-                    transmitters,
-                    *lower,
-                    *upper,
-                    tx_antenna_index,
-                    false,
-                );
-            }
+
+            let record = (
+                filter_index,
+                overlap,
+                original_tx_frequency,
+                criterion,
+                lower,
+                upper,
+            );
+            self.apply_filter_record(
+                &record,
+                false,
+                false,
+                now,
+                tx_time,
+                propagation,
+                offset,
+                duration,
+                original_tx_frequency,
+                rx_power_mw,
+                transmitters,
+                sub_id,
+                tx_antenna_index,
+                filter_data_ptr,
+                filter_data_len,
+            );
+            records.push(record);
         }
+
+        let cache = if spectral_mask_index == 0 {
+            &mut self.filter_transmitter_bandwidth_cache
+        } else {
+            &mut self.filter_transmitter_spectral_mask_cache
+        };
+        cache
+            .entry(cache_key)
+            .or_insert_with(|| (HashMap::new(), HashSet::new()))
+            .0
+            .insert(shifted_tx_frequency, records);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_filter_record(
+        &mut self,
+        record: &FilterRecord,
+        cached: bool,
+        check_match: bool,
+        now: i64,
+        tx_time: i64,
+        propagation: i64,
+        offset: i64,
+        duration: i64,
+        original_tx_frequency: u64,
+        rx_power_mw: f64,
+        transmitters: &[u16],
+        sub_id: u16,
+        tx_antenna_index: u16,
+        filter_data_ptr: *const u8,
+        filter_data_len: usize,
+    ) {
+        let (filter_index, overlap, _, criterion, lower, upper) = record;
+        let Some((_, _, recorder, _)) = self.filter_noise_recorder_map.get_mut(filter_index) else {
+            return;
+        };
+        if check_match
+            && !filter_matches(
+                *criterion,
+                original_tx_frequency,
+                upper.saturating_sub(*lower),
+                if sub_id == self.u16_sub_id { 0 } else { sub_id },
+                filter_data_ptr,
+                filter_data_len,
+            )
+        {
+            return;
+        }
+
+        let aggregate_power = overlap_power_mw(overlap, rx_power_mw);
+        if aggregate_power < self.d_receiver_sensitivity_milli_watt {
+            return;
+        }
+        if recorder.get_sub_band_bin_count() > 1 {
+            let mut index = 0u64;
+            for (segments, _, _) in &overlap.0 {
+                for (ratio, modifier, segment_lower, segment_upper) in segments {
+                    index += 1;
+                    recorder.update(
+                        now,
+                        tx_time,
+                        offset,
+                        propagation,
+                        duration,
+                        rx_power_mw * *modifier * if cached { *ratio } else { 1.0 },
+                        transmitters,
+                        *segment_lower,
+                        *segment_upper,
+                        tx_antenna_index,
+                        index != overlap.3,
+                    );
+                }
+            }
+        } else {
+            recorder.update(
+                now,
+                tx_time,
+                offset,
+                propagation,
+                duration,
+                aggregate_power,
+                transmitters,
+                *lower,
+                *upper,
+                tx_antenna_index,
+                false,
+            );
+        }
+    }
+}
+
+fn filter_matches(
+    criterion: *const c_void,
+    original_tx_frequency: u64,
+    overlap_bandwidth: u64,
+    sub_id: u16,
+    filter_data_ptr: *const u8,
+    filter_data_len: usize,
+) -> bool {
+    if criterion.is_null() {
+        true
+    } else {
+        let criterion = unsafe { &*(criterion as *const FfiFilterMatchCriterion) };
+        (criterion.matches)(
+            criterion.context,
+            original_tx_frequency,
+            overlap_bandwidth,
+            sub_id,
+            filter_data_ptr,
+            filter_data_len,
+        )
     }
 }
 
@@ -1120,5 +1333,586 @@ mod tests {
         );
         assert_eq!(result.segments_len, 0);
         emane_rs_spectrum_monitor_free(ptr);
+    }
+
+    fn wheel_transitions(values: &[f64]) -> Vec<(usize, f64)> {
+        let mut previous = 0.0;
+        values
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(index, value)| {
+                if value != previous {
+                    previous = value;
+                    Some((index, value))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn assert_legacy_window(
+        monitor: &SpectrumMonitor,
+        now: i64,
+        duration: i64,
+        timepoint: i64,
+        expected_start: i64,
+        expected: &[(usize, f64)],
+    ) {
+        let (values, start, bin_size, sensitivity, signal_in_noise) =
+            monitor.request_i(now, 3_000_000_000, duration, timepoint);
+        assert_eq!(start, expected_start);
+        assert_eq!(bin_size, 20);
+        assert_eq!(sensitivity, 0.0);
+        assert!(signal_in_noise);
+        assert_eq!(wheel_transitions(&values), expected);
+    }
+
+    #[test]
+    fn matches_legacy_noise_scenario_001_wheel_snapshots() {
+        const START: i64 = 3_000_000;
+        const SCENARIO_FREQUENCY: u64 = 3_000_000_000;
+        const SCENARIO_BANDWIDTH: u64 = 1_200_000;
+
+        let mut monitor = SpectrumMonitor::new();
+        monitor.initialize(
+            0,
+            &[SCENARIO_FREQUENCY],
+            SCENARIO_BANDWIDTH,
+            0.0,
+            NoiseMode::All,
+            20,
+            300_000,
+            200_000,
+            500_000,
+            1_000,
+            true,
+            true,
+        );
+
+        let cases: &[(i64, i64, i64, i64, i64, f64, u16, &[(usize, f64)])] = &[
+            (3_005, 3_200, 0, 0, 210, 1.0, 1, &[(160, 1.0), (171, 0.0)]),
+            (
+                3_008,
+                2_005,
+                0,
+                0,
+                217,
+                1.0,
+                2,
+                &[(150, 1.0), (160, 2.0), (162, 1.0), (171, 0.0)],
+            ),
+            (
+                3_025,
+                2_750,
+                0,
+                0,
+                500,
+                1.0,
+                3,
+                &[
+                    (137, 1.0),
+                    (150, 2.0),
+                    (160, 3.0),
+                    (162, 2.0),
+                    (163, 1.0),
+                    (171, 0.0),
+                ],
+            ),
+            (
+                3_055,
+                3_045,
+                610,
+                300,
+                1_005,
+                5.0,
+                4,
+                &[
+                    (137, 1.0),
+                    (150, 2.0),
+                    (160, 3.0),
+                    (162, 2.0),
+                    (163, 1.0),
+                    (171, 0.0),
+                    (197, 5.0),
+                    (248, 0.0),
+                ],
+            ),
+            (
+                3_200,
+                3_055,
+                200,
+                200,
+                600,
+                5.0,
+                5,
+                &[
+                    (137, 1.0),
+                    (150, 2.0),
+                    (160, 3.0),
+                    (162, 2.0),
+                    (163, 1.0),
+                    (171, 0.0),
+                    (172, 5.0),
+                    (197, 10.0),
+                    (203, 5.0),
+                    (248, 0.0),
+                ],
+            ),
+            (
+                3_700,
+                4_000,
+                407_001,
+                300_075,
+                400_030,
+                7.0,
+                6,
+                &[
+                    (137, 1.0),
+                    (150, 2.0),
+                    (160, 3.0),
+                    (162, 2.0),
+                    (163, 1.0),
+                    (171, 0.0),
+                    (172, 5.0),
+                    (197, 10.0),
+                    (203, 5.0),
+                    (248, 0.0),
+                    (25_200, 7.0),
+                    (45_202, 0.0),
+                ],
+            ),
+            (
+                4_030,
+                4_020,
+                199_980,
+                299_700,
+                500_210,
+                8.0,
+                7,
+                &[
+                    (137, 1.0),
+                    (150, 2.0),
+                    (160, 3.0),
+                    (162, 2.0),
+                    (163, 1.0),
+                    (171, 0.0),
+                    (172, 5.0),
+                    (197, 10.0),
+                    (203, 5.0),
+                    (248, 0.0),
+                    (25_185, 8.0),
+                    (25_200, 15.0),
+                    (45_202, 8.0),
+                    (50_185, 0.0),
+                ],
+            ),
+            (
+                1_400_200,
+                1_400_005,
+                0,
+                65_000,
+                40_000,
+                4.0,
+                8,
+                &[
+                    (0, 4.0),
+                    (251, 0.0),
+                    (25_185, 8.0),
+                    (25_200, 15.0),
+                    (45_202, 8.0),
+                    (50_185, 0.0),
+                    (73_250, 4.0),
+                ],
+            ),
+            (
+                1_840_000,
+                1_840_000,
+                0,
+                0,
+                200_000,
+                3.0,
+                9,
+                &[
+                    (0, 4.0),
+                    (251, 0.0),
+                    (17_000, 3.0),
+                    (27_000, 15.0),
+                    (45_202, 8.0),
+                    (50_185, 0.0),
+                    (73_250, 4.0),
+                ],
+            ),
+            (
+                2_100_010,
+                2_100_005,
+                0,
+                0,
+                320_000,
+                2.0,
+                10,
+                &[
+                    (0, 4.0),
+                    (251, 0.0),
+                    (17_000, 3.0),
+                    (27_000, 0.0),
+                    (30_000, 2.0),
+                    (46_001, 8.0),
+                    (50_185, 0.0),
+                    (73_250, 4.0),
+                ],
+            ),
+            (
+                4_500_015,
+                4_500_010,
+                0,
+                0,
+                1_990,
+                3.0,
+                11,
+                &[
+                    (0, 3.0),
+                    (100, 4.0),
+                    (251, 0.0),
+                    (17_000, 3.0),
+                    (27_000, 0.0),
+                    (30_000, 2.0),
+                    (46_001, 8.0),
+                    (50_185, 0.0),
+                    (73_250, 4.0),
+                ],
+            ),
+        ];
+
+        for &(now, tx_time, propagation, offset, duration, power, transmitter, expected) in cases {
+            let segments = [FfiFrequencySegment {
+                frequency_hz: SCENARIO_FREQUENCY,
+                rx_power_dbm: 0.0,
+                duration_microsec: duration,
+                offset_microsec: offset,
+            }];
+            let (_, _, _, report, in_band, _) = monitor.update(
+                START + now,
+                START + tx_time,
+                propagation,
+                0.0,
+                &segments,
+                SCENARIO_BANDWIDTH,
+                &[power],
+                true,
+                &[transmitter],
+                0,
+                0,
+                0,
+                std::ptr::null(),
+                0,
+            );
+
+            assert!(in_band);
+            assert_eq!(report.len(), 1);
+            assert_eq!(
+                wheel_transitions(&monitor.dump(SCENARIO_FREQUENCY)),
+                expected,
+                "legacy noise scenario mismatch after transmitter {transmitter}"
+            );
+
+            match transmitter {
+                5 => {
+                    assert_legacy_window(
+                        &monitor,
+                        START + 3_400,
+                        1_000,
+                        START + 2_300,
+                        3_002_300,
+                        &[(22, 1.0), (35, 2.0), (45, 3.0), (47, 2.0), (48, 1.0)],
+                    );
+                    assert_legacy_window(
+                        &monitor,
+                        START + 3_450,
+                        0,
+                        i64::MIN,
+                        2_503_460,
+                        &[
+                            (24_964, 1.0),
+                            (24_977, 2.0),
+                            (24_987, 3.0),
+                            (24_989, 2.0),
+                            (24_990, 1.0),
+                            (24_998, 0.0),
+                            (24_999, 5.0),
+                        ],
+                    );
+                }
+                7 => {
+                    assert_legacy_window(
+                        &monitor,
+                        START + 600_000,
+                        12_030,
+                        START + 500_010,
+                        3_500_000,
+                        &[(185, 8.0), (200, 15.0)],
+                    );
+                    assert_legacy_window(
+                        &monitor,
+                        START + 1_400_000,
+                        0,
+                        i64::MIN,
+                        3_900_000,
+                        &[(0, 15.0), (202, 8.0), (5_185, 0.0)],
+                    );
+                }
+                8 => {
+                    assert_legacy_window(
+                        &monitor,
+                        START + 1_510_015,
+                        300_000,
+                        START + 1_210_015,
+                        4_210_000,
+                        &[(12_750, 4.0), (14_751, 0.0)],
+                    );
+                    assert_legacy_window(
+                        &monitor,
+                        START + 1_510_015,
+                        0,
+                        i64::MIN,
+                        4_010_020,
+                        &[(22_749, 4.0), (24_750, 0.0)],
+                    );
+                }
+                9 => assert_legacy_window(
+                    &monitor,
+                    START + 2_100_000,
+                    400_000,
+                    START + 1_700_000,
+                    4_700_000,
+                    &[(7_000, 3.0), (17_000, 0.0)],
+                ),
+                11 => {
+                    assert_legacy_window(
+                        &monitor,
+                        START + 4_900_000,
+                        500_000,
+                        START + 4_400_000,
+                        7_400_000,
+                        &[(5_000, 3.0), (5_100, 0.0)],
+                    );
+                    assert_legacy_window(
+                        &monitor,
+                        START + 6_700_000,
+                        20_000,
+                        START + 6_300_000,
+                        9_300_000,
+                        &[],
+                    );
+                    assert_legacy_window(&monitor, START + 7_000_000, 0, i64::MIN, 9_500_000, &[]);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn matches_legacy_noise_scenario_002_duplicate_transmitter_suppression() {
+        const START: i64 = 3_000_000;
+        const SCENARIO_FREQUENCY: u64 = 3_000_000_000;
+        const SCENARIO_BANDWIDTH: u64 = 1_200_000;
+
+        let mut monitor = SpectrumMonitor::new();
+        monitor.initialize(
+            0,
+            &[SCENARIO_FREQUENCY],
+            SCENARIO_BANDWIDTH,
+            0.0,
+            NoiseMode::All,
+            20,
+            300_000,
+            200_000,
+            500_000,
+            1_000,
+            true,
+            true,
+        );
+
+        let cases = [
+            (210, 1, vec![(160, 1.0), (171, 0.0)]),
+            (210, 2, vec![(160, 2.0), (171, 0.0)]),
+            (210, 3, vec![(160, 3.0), (171, 0.0)]),
+            (105, 1, vec![(160, 3.0), (171, 0.0)]),
+            (400, 2, vec![(160, 3.0), (171, 1.0), (180, 0.0)]),
+        ];
+
+        for (duration, transmitter, expected) in cases {
+            let segments = [FfiFrequencySegment {
+                frequency_hz: SCENARIO_FREQUENCY,
+                rx_power_dbm: 0.0,
+                duration_microsec: duration,
+                offset_microsec: 0,
+            }];
+            monitor.update(
+                START + 3_005,
+                START + 3_200,
+                0,
+                0.0,
+                &segments,
+                SCENARIO_BANDWIDTH,
+                &[1.0],
+                true,
+                &[transmitter],
+                0,
+                0,
+                0,
+                std::ptr::null(),
+                0,
+            );
+            assert_eq!(
+                wheel_transitions(&monitor.dump(SCENARIO_FREQUENCY)),
+                expected,
+                "legacy duplicate suppression mismatch after transmitter {transmitter}"
+            );
+        }
+    }
+
+    fn assert_filter_bins(monitor: &SpectrumMonitor, index: u16, expected: &[f64]) {
+        let (window, start, bin_size, sensitivity, sub_band_count) =
+            monitor.request_filter_i(3_003_710, index, 210, 3_003_500);
+        assert_eq!(start, 3_003_500);
+        assert_eq!(bin_size, 20);
+        assert_eq!(sensitivity, 0.0);
+        assert_eq!(sub_band_count, expected.len());
+        assert!(!window.is_empty());
+        for time_bin in window.chunks_exact(sub_band_count) {
+            for (actual, expected) in time_bin.iter().zip(expected) {
+                assert!(
+                    (actual - expected).abs() < 1.0e-12,
+                    "filter {index}: expected {expected}, got {actual}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn matches_legacy_filter_scenario_001_subbands_and_spur() {
+        let manifest = std::env::temp_dir().join(format!(
+            "emane-legacy-filter-mask-{}.xml",
+            std::process::id()
+        ));
+        std::fs::write(
+            &manifest,
+            r#"<spectral-mask-manifest>
+  <mask id="1"><primary><width hz="1M" dBr="0"/></primary></mask>
+  <mask id="2"><primary>
+    <width hz="500K" dBr="-50"/><width hz="500K" dBr="-30"/>
+    <width hz="1M" dBr="0"/>
+    <width hz="500K" dBr="-30"/><width hz="500K" dBr="-50"/>
+  </primary></mask>
+  <mask id="3"><primary>
+    <width hz="500K" dBr="-50"/><width hz="500K" dBr="-30"/>
+    <width hz="1M" dBr="0"/>
+    <width hz="500K" dBr="-30"/><width hz="500K" dBr="-50"/>
+  </primary><spurs><spur offset_from_center_hz="1G">
+    <width hz="10K" dBr="10"/>
+  </spur></spurs></mask>
+</spectral-mask-manifest>"#,
+        )
+        .unwrap();
+        crate::spectral_mask::load_global(manifest.to_str().unwrap()).unwrap();
+        std::fs::remove_file(manifest).unwrap();
+
+        let mut monitor = SpectrumMonitor::new();
+        monitor.initialize(
+            0,
+            &[1_000_000_000],
+            1_000_000,
+            0.0,
+            NoiseMode::All,
+            20,
+            300_000,
+            200_000,
+            500_000,
+            1_000,
+            true,
+            false,
+        );
+        for (index, frequency, bandwidth, bin_size) in [
+            (1, 1_000_000_000, 1_000_000, 0),
+            (2, 1_001_000_000, 1_000_000, 0),
+            (3, 999_000_000, 1_000_000, 0),
+            (4, 1_000_000_000, 3_000_000, 0),
+            (5, 1_000_000_000, 3_000_000, 100_000),
+            (6, 1_000_000_000, 1_100_000, 100_000),
+            (7, 1_000_000_000, 3_500_000, 100_000),
+            (8, 2_000_000_000, 1_000_000, 100_000),
+        ] {
+            monitor.initialize_filter(index, frequency, bandwidth, bin_size, std::ptr::null());
+        }
+
+        for (time, masks) in [
+            (3_003_005, &[(1, 1)][..]),
+            (3_003_220, &[(1, 1), (2, 2)][..]),
+            (3_003_500, &[(1, 1), (2, 2), (3, 3)][..]),
+        ] {
+            for &(mask, transmitter) in masks {
+                let segments = [FfiFrequencySegment {
+                    frequency_hz: 1_000_000_000,
+                    rx_power_dbm: 0.0,
+                    duration_microsec: 210,
+                    offset_microsec: 0,
+                }];
+                monitor.update(
+                    time,
+                    time,
+                    0,
+                    0.0,
+                    &segments,
+                    1_000_000,
+                    &[1.0],
+                    true,
+                    &[transmitter],
+                    0,
+                    0,
+                    mask,
+                    std::ptr::null(),
+                    0,
+                );
+            }
+        }
+
+        let (primary, _, _, _, _) = monitor.request_i(3_003_710, 1_000_000_000, 210, 3_003_500);
+        assert!(primary.iter().all(|value| (*value - 3.0).abs() < 1.0e-12));
+        assert_filter_bins(&monitor, 1, &[3.0]);
+        assert_filter_bins(&monitor, 2, &[0.002_02]);
+        assert_filter_bins(&monitor, 3, &[0.002_02]);
+        assert_filter_bins(&monitor, 4, &[3.004_04]);
+
+        let mut filter_5 = Vec::new();
+        filter_5.extend([0.000_004; 5]);
+        filter_5.extend([0.000_4; 5]);
+        filter_5.extend([0.3; 10]);
+        filter_5.extend([0.000_4; 5]);
+        filter_5.extend([0.000_004; 5]);
+        filter_5.push(0.0);
+        assert_filter_bins(&monitor, 5, &filter_5);
+
+        let mut filter_6 = vec![0.150_11];
+        filter_6.extend([0.3; 9]);
+        filter_6.extend([0.150_11, 0.000_22]);
+        assert_filter_bins(&monitor, 6, &filter_6);
+
+        assert_filter_bins(
+            &monitor,
+            7,
+            &[
+                0.0, 0.0, 0.000_002, 0.000_004, 0.000_004, 0.000_004, 0.000_004, 0.000_202,
+                0.000_4, 0.000_4, 0.000_4, 0.000_4, 0.150_2, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3,
+                0.3, 0.3, 0.150_2, 0.000_4, 0.000_4, 0.000_4, 0.000_4, 0.000_202, 0.000_004,
+                0.000_004, 0.000_004, 0.000_004, 0.000_002, 0.0, 0.0, 0.0,
+            ],
+        );
+        assert_filter_bins(
+            &monitor,
+            8,
+            &[0.0, 0.0, 0.0, 0.0, 5.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        );
     }
 }
