@@ -156,7 +156,7 @@ pub extern "C" fn emane_rs_virtual_transport_process_upstream_packet(
             iov_len: len,
         };
         let ret = unsafe { writev(tun.fd, &iov, 1) };
-        if ret < 0 {
+        if ret < 0 || usize::try_from(ret).ok() != Some(len) {
             return -1;
         }
         return 0;

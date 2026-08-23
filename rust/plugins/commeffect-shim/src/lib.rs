@@ -11,7 +11,11 @@ use std::ffi::{c_void, CStr};
 use std::fs;
 use std::net::Ipv4Addr;
 use std::sync::OnceLock;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+fn elapsed_microseconds(begin: Instant) -> u64 {
+    begin.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
+}
 
 const EVENT_COMM_EFFECT: u16 = 103;
 const TIMER_UPSTREAM_PACKET: u32 = 1;
@@ -286,9 +290,12 @@ fn record_drop(
     values.push(statistic_u64(u64::from(info.source)));
     values.extend(entry.bytes.iter().copied().map(statistic_u64));
     set_packet_row(state, &name, info.source, &values);
-    state
-        .counters
-        .upstream_drop(state.framework, info.destination);
+    state.counters.upstream_drop_packet(
+        state.framework,
+        info.source,
+        info.destination,
+        reason as usize + 1,
+    );
 }
 
 fn unix_microseconds() -> u64 {
@@ -440,7 +447,21 @@ extern "C" fn init(id: u16, framework: *const FfiFrameworkService) -> *mut c_voi
     Box::into_raw(Box::new(CommEffectShim {
         id,
         framework,
-        counters: CommonLayerCounters::register(framework),
+        counters: CommonLayerCounters::register_with_drop_labels(
+            framework,
+            "0",
+            &[
+                "Effect",
+                "Grp Id",
+                "Reg Id",
+                "Dst MAC",
+                "Bad Msg",
+                "No Profile",
+                "Rx Buff",
+                "Timer",
+            ],
+            &[],
+        ),
         default_connectivity: true,
         promiscuous: false,
         group_id: 0,
@@ -548,6 +569,7 @@ extern "C" fn downstream(
     let Some(state) = (unsafe { (plugin as *mut CommEffectShim).as_mut() }) else {
         return;
     };
+    let begin = Instant::now();
     let Some(incoming) = controls(messages, count) else {
         return;
     };
@@ -566,8 +588,9 @@ extern "C" fn downstream(
         tx_time_microseconds: unix_microseconds() as i64,
     };
     let packet_ref = unsafe { &*packet };
-    state.counters.downstream_rx(
+    state.counters.downstream_rx_packet(
         state.framework,
+        packet_ref.info.source,
         packet_ref.info.destination,
         packet_ref.payload.len,
     );
@@ -585,17 +608,20 @@ extern "C" fn downstream(
             len: encoded.len(),
         },
     });
+    state.counters.downstream_tx_packet(
+        state.framework,
+        packet_ref.info.source,
+        packet_ref.info.destination,
+        packet_ref.payload.len,
+        elapsed_microseconds(begin),
+        false,
+    );
     (state.framework.send_downstream_packet)(
         state.framework.framework_ctx,
         state.id,
         packet,
         outgoing.as_ptr(),
         outgoing.len(),
-    );
-    state.counters.downstream_tx(
-        state.framework,
-        packet_ref.info.destination,
-        packet_ref.payload.len,
     );
     record_accept(state, packet_ref.info, packet_ref.payload.len, false);
 }
@@ -609,6 +635,7 @@ extern "C" fn upstream(
     let Some(state) = (unsafe { (plugin as *mut CommEffectShim).as_mut() }) else {
         return;
     };
+    let begin = Instant::now();
     let Some(incoming) = controls(messages, count) else {
         return;
     };
@@ -622,9 +649,12 @@ extern "C" fn upstream(
         return;
     }
     let packet = unsafe { &*packet };
-    state
-        .counters
-        .upstream_rx(state.framework, packet.info.destination, packet.payload.len);
+    state.counters.upstream_rx_packet(
+        state.framework,
+        packet.info.source,
+        packet.info.destination,
+        packet.payload.len,
+    );
     if packet.payload.len != 0 && packet.payload.data.is_null() {
         record_drop(
             state,
@@ -705,7 +735,7 @@ extern "C" fn upstream(
         .or_else(|| state.profiles.get(&packet.info.source).copied());
     let Some(effect) = effect else {
         if state.default_connectivity {
-            send_upstream_now(state, packet, incoming);
+            send_upstream_now(state, packet, incoming, elapsed_microseconds(begin));
         } else {
             record_drop(
                 state,
@@ -772,7 +802,8 @@ extern "C" fn upstream(
         } else {
             base.saturating_add(jitter as u64)
         };
-        let data = encode_pending(packet, incoming);
+        let mut data = encode_pending(packet, incoming, 0);
+        data[17..25].copy_from_slice(&elapsed_microseconds(begin).to_be_bytes());
         if (state.framework.schedule_timed_event)(
             state.framework.framework_ctx,
             state.id,
@@ -800,12 +831,20 @@ fn send_upstream_now(
     state: &mut CommEffectShim,
     packet: &FfiPacket,
     incoming: &[FfiControlMessage],
+    processing_delay_microseconds: u64,
 ) {
     let outgoing: Vec<_> = incoming
         .iter()
         .copied()
         .filter(|message| message.msg_type != CONTROL_COMM_EFFECT_HEADER)
         .collect();
+    state.counters.upstream_tx_packet(
+        state.framework,
+        packet.info.source,
+        packet.info.destination,
+        packet.payload.len,
+        processing_delay_microseconds,
+    );
     (state.framework.send_upstream_packet)(
         state.framework.framework_ctx,
         state.id,
@@ -813,9 +852,6 @@ fn send_upstream_now(
         outgoing.as_ptr(),
         outgoing.len(),
     );
-    state
-        .counters
-        .upstream_tx(state.framework, packet.info.destination, packet.payload.len);
     record_accept(state, packet.info, packet.payload.len, true);
 }
 
@@ -830,7 +866,11 @@ fn task_count(rng: &mut StdRng, loss: f32, duplicate: f32) -> usize {
     ))
 }
 
-fn encode_pending(packet: &FfiPacket, messages: &[FfiControlMessage]) -> Vec<u8> {
+fn encode_pending(
+    packet: &FfiPacket,
+    messages: &[FfiControlMessage],
+    processing_delay_microseconds: u64,
+) -> Vec<u8> {
     let payload = if packet.payload.len == 0 {
         &[]
     } else {
@@ -846,6 +886,7 @@ fn encode_pending(packet: &FfiPacket, messages: &[FfiControlMessage]) -> Vec<u8>
     data.push(packet.info.priority);
     data.extend_from_slice(&packet.info.creation_time_sec.to_be_bytes());
     data.extend_from_slice(&packet.info.creation_time_usec.to_be_bytes());
+    data.extend_from_slice(&processing_delay_microseconds.to_be_bytes());
     data.extend_from_slice(&(payload.len() as u32).to_be_bytes());
     data.extend_from_slice(payload);
     data.extend_from_slice(&(outgoing.len() as u16).to_be_bytes());
@@ -873,17 +914,19 @@ extern "C" fn timed(plugin: *mut c_void, _: u64, event_id: u32, data: *const u8,
     let Some(pending) = decode_pending(data) else {
         return;
     };
+    state.counters.upstream_tx_packet(
+        state.framework,
+        pending.packet.info.source,
+        pending.packet.info.destination,
+        pending.packet.payload.len,
+        pending.processing_delay_microseconds,
+    );
     (state.framework.send_upstream_packet)(
         state.framework.framework_ctx,
         state.id,
         &pending.packet,
         pending.messages.as_ptr(),
         pending.messages.len(),
-    );
-    state.counters.upstream_tx(
-        state.framework,
-        pending.packet.info.destination,
-        pending.packet.payload.len,
     );
     record_accept(state, pending.packet.info, pending.packet.payload.len, true);
 }
@@ -893,10 +936,11 @@ struct Pending {
     _control_payloads: Vec<Vec<u8>>,
     packet: FfiPacket,
     messages: Vec<FfiControlMessage>,
+    processing_delay_microseconds: u64,
 }
 
 fn decode_pending(data: &[u8]) -> Option<Pending> {
-    if data.len() < 23 {
+    if data.len() < 31 {
         return None;
     }
     let source = u16::from_be_bytes(data[0..2].try_into().ok()?);
@@ -904,8 +948,9 @@ fn decode_pending(data: &[u8]) -> Option<Pending> {
     let priority = data[4];
     let creation_time_sec = u64::from_be_bytes(data[5..13].try_into().ok()?);
     let creation_time_usec = u32::from_be_bytes(data[13..17].try_into().ok()?);
-    let payload_len = u32::from_be_bytes(data[17..21].try_into().ok()?) as usize;
-    let mut offset = 21usize;
+    let processing_delay_microseconds = u64::from_be_bytes(data[17..25].try_into().ok()?);
+    let payload_len = u32::from_be_bytes(data[25..29].try_into().ok()?) as usize;
+    let mut offset = 29usize;
     let payload_end = offset.checked_add(payload_len)?;
     if payload_end.checked_add(2)? > data.len() {
         return None;
@@ -962,6 +1007,7 @@ fn decode_pending(data: &[u8]) -> Option<Pending> {
         _control_payloads: control_payloads,
         packet,
         messages,
+        processing_delay_microseconds,
     })
 }
 

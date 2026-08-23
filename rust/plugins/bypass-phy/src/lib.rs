@@ -4,6 +4,11 @@ use emane_plugin_api::{
 };
 use std::ffi::c_void;
 use std::sync::OnceLock;
+use std::time::Instant;
+
+fn elapsed_microseconds(begin: Instant) -> u64 {
+    begin.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
+}
 
 struct BypassPhy {
     id: u16,
@@ -52,14 +57,23 @@ extern "C" fn upstream(
     let Some(phy) = (unsafe { (plugin as *mut BypassPhy).as_ref() }) else {
         return;
     };
+    let begin = Instant::now();
     if packet.is_null() {
         (phy.framework.send_upstream_control)(phy.framework.framework_ctx, phy.id, messages, count);
     } else {
         let packet_ref = unsafe { &*packet };
-        phy.counters.upstream_rx(
+        phy.counters.upstream_rx_packet(
             phy.framework,
+            packet_ref.info.source,
             packet_ref.info.destination,
             packet_ref.payload.len,
+        );
+        phy.counters.upstream_tx_packet(
+            phy.framework,
+            packet_ref.info.source,
+            packet_ref.info.destination,
+            packet_ref.payload.len,
+            elapsed_microseconds(begin),
         );
         (phy.framework.send_upstream_packet)(
             phy.framework.framework_ctx,
@@ -67,11 +81,6 @@ extern "C" fn upstream(
             packet,
             messages,
             count,
-        );
-        phy.counters.upstream_tx(
-            phy.framework,
-            packet_ref.info.destination,
-            packet_ref.payload.len,
         );
     }
 }
@@ -85,6 +94,7 @@ extern "C" fn downstream(
     let Some(phy) = (unsafe { (plugin as *mut BypassPhy).as_ref() }) else {
         return;
     };
+    let begin = Instant::now();
     if packet.is_null() {
         (phy.framework.send_downstream_control)(
             phy.framework.framework_ctx,
@@ -94,10 +104,19 @@ extern "C" fn downstream(
         );
     } else {
         let packet_ref = unsafe { &*packet };
-        phy.counters.downstream_rx(
+        phy.counters.downstream_rx_packet(
             phy.framework,
+            packet_ref.info.source,
             packet_ref.info.destination,
             packet_ref.payload.len,
+        );
+        phy.counters.downstream_tx_packet(
+            phy.framework,
+            packet_ref.info.source,
+            packet_ref.info.destination,
+            packet_ref.payload.len,
+            elapsed_microseconds(begin),
+            false,
         );
         (phy.framework.send_downstream_packet)(
             phy.framework.framework_ctx,
@@ -105,11 +124,6 @@ extern "C" fn downstream(
             packet,
             messages,
             count,
-        );
-        phy.counters.downstream_tx(
-            phy.framework,
-            packet_ref.info.destination,
-            packet_ref.payload.len,
         );
     }
 }

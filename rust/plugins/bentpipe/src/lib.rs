@@ -1,8 +1,8 @@
 mod pcr_manager;
 
 use emane_plugin_api::{
-    AntennaPattern, CommonLayerCounters, FfiConfigRequest, FfiControlMessage, FfiFrameworkService,
-    FfiPacket, FfiPacketInfo, FfiSlice, FfiStatisticValue, MimoRxProperties, MimoTxAntenna,
+    AntennaPattern, FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket,
+    FfiPacketInfo, FfiSlice, FfiStatisticValue, MimoRxProperties, MimoTxAntenna,
     MimoTxFrequencySegment, MimoTxProperties, ModelHeader, PluginApi, RxAntennaAdd,
     RxAntennaRemove, RxProperties, TxAntennaProfile, TxProperties, CONTROL_MIMO_RX_PROPERTIES,
     CONTROL_MIMO_TX_PROPERTIES, CONTROL_MODEL_HEADER, CONTROL_RX_ANTENNA_ADD,
@@ -243,7 +243,6 @@ struct State {
 struct BentpipeMac {
     id: u16,
     framework: FfiFrameworkService,
-    counters: CommonLayerCounters,
     tables: HashMap<String, u64>,
     state: Mutex<State>,
 }
@@ -436,7 +435,6 @@ impl BentpipeMac {
         Self {
             id,
             framework,
-            counters: CommonLayerCounters::register(framework),
             tables,
             state: Mutex::new(State {
                 transponders: BTreeMap::new(),
@@ -1167,8 +1165,6 @@ fn enqueue(
             packet.payload.len(),
             PacketDropReason::QueueOverflow,
         );
-        mac.counters
-            .downstream_drop(mac.framework, packet.info.destination);
         publish_queue_tables(mac, state, index);
         return true;
     }
@@ -1207,8 +1203,6 @@ fn enqueue(
             dropped.packet.payload.len(),
             PacketDropReason::QueueOverflow,
         );
-        mac.counters
-            .downstream_drop(mac.framework, dropped.packet.info.destination);
     }
     let statistics = state.queue_statistics.entry(index).or_default();
     statistics.enqueued += 1;
@@ -1293,8 +1287,6 @@ fn dequeue_components(
             dropped.packet.payload.len(),
             PacketDropReason::TooBig,
         );
-        mac.counters
-            .downstream_drop(mac.framework, dropped.packet.info.destination);
     }
     if !components.is_empty() {
         let statistics = state.queue_statistics.entry(index).or_default();
@@ -1531,13 +1523,6 @@ fn send_downstream(
         messages.as_ptr(),
         messages.len(),
     );
-    for component in components {
-        mac.counters.downstream_tx(
-            mac.framework,
-            component.packet.info.destination,
-            component.packet.payload.len(),
-        );
-    }
 }
 
 fn drive(mac: &BentpipeMac, index: u16, now: i64, expected: Option<i64>) {
@@ -1651,8 +1636,6 @@ fn send_upstream(mac: &BentpipeMac, packet: OwnedPacket) {
         messages.as_ptr(),
         messages.len(),
     );
-    mac.counters
-        .upstream_tx(mac.framework, packet.info.destination, packet.payload.len());
 }
 
 extern "C" fn init(id: u16, framework: *const FfiFrameworkService) -> *mut c_void {
@@ -2205,11 +2188,6 @@ extern "C" fn upstream(
         );
         return;
     };
-    mac.counters.upstream_rx(
-        mac.framework,
-        packet_ref.info.destination,
-        packet_ref.payload.len,
-    );
     let mimo_rx =
         find_control(message_views, CONTROL_MIMO_RX_PROPERTIES).and_then(MimoRxProperties::decode);
     let legacy_rx =
@@ -2529,8 +2507,6 @@ extern "C" fn downstream(
     let Some(packet) = own_packet(packet, messages, count) else {
         return;
     };
-    mac.counters
-        .downstream_rx(mac.framework, packet.info.destination, packet.payload.len());
     let index = {
         let state = mac.state.lock().unwrap();
         state

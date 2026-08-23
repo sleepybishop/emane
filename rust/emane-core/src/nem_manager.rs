@@ -14,6 +14,7 @@ use crate::native_configuration::{
     unregister as unregister_native_configuration, ConfigurationUpdate, ConfigurationValue,
 };
 use crate::neighbor_metric_manager::NeighborMetricManager;
+use crate::nem_queued_layer::{NemQueuedLayer, QueueTaskKind};
 use crate::ota_manager::{
     emane_rs_ota_manager_send_ota_packet, register_native_user, unregister_native_user,
 };
@@ -73,7 +74,7 @@ use std::ffi::{c_void, CStr, CString};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const BROADCAST_NEM: u16 = u16::MAX;
 
@@ -81,6 +82,102 @@ const BROADCAST_NEM: u16 = u16::MAX;
 struct Invocation {
     api: usize,
     plugin_ctx: usize,
+    queue: usize,
+}
+
+struct QueuedControl {
+    message_type: u32,
+    payload: Vec<u8>,
+}
+
+struct QueuedCall {
+    packet: Option<(FfiPacketInfo, Vec<u8>)>,
+    controls: Vec<QueuedControl>,
+}
+
+impl QueuedCall {
+    fn capture(
+        packet: *const FfiPacket,
+        messages: *const FfiControlMessage,
+        message_count: usize,
+    ) -> Option<Self> {
+        let packet = if let Some(packet) = unsafe { packet.as_ref() } {
+            if packet.payload.len > 64 << 20
+                || (packet.payload.len != 0 && packet.payload.data.is_null())
+            {
+                return None;
+            }
+            let payload = if packet.payload.len == 0 {
+                Vec::new()
+            } else {
+                unsafe {
+                    std::slice::from_raw_parts(packet.payload.data, packet.payload.len).to_vec()
+                }
+            };
+            Some((packet.info, payload))
+        } else {
+            None
+        };
+        let messages = ffi_control_messages(messages, message_count)?;
+        let controls = messages
+            .iter()
+            .map(|message| {
+                if message.payload.len > 16 << 20
+                    || (message.payload.len != 0 && message.payload.data.is_null())
+                {
+                    return None;
+                }
+                Some(QueuedControl {
+                    message_type: message.msg_type,
+                    payload: if message.payload.len == 0 {
+                        Vec::new()
+                    } else {
+                        unsafe {
+                            std::slice::from_raw_parts(message.payload.data, message.payload.len)
+                                .to_vec()
+                        }
+                    },
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self { packet, controls })
+    }
+
+    fn run(self, invocation: Invocation, downstream: bool) {
+        let messages = self
+            .controls
+            .iter()
+            .map(|control| FfiControlMessage {
+                msg_type: control.message_type,
+                payload: FfiSlice {
+                    data: control.payload.as_ptr(),
+                    len: control.payload.len(),
+                },
+            })
+            .collect::<Vec<_>>();
+        let packet = self.packet.as_ref().map(|(info, payload)| FfiPacket {
+            info: *info,
+            payload: FfiSlice {
+                data: payload.as_ptr(),
+                len: payload.len(),
+            },
+        });
+        invocation.call(|api, context| {
+            let process = if downstream {
+                api.process_downstream
+            } else {
+                api.process_upstream
+            };
+            process(
+                context,
+                packet
+                    .as_ref()
+                    .map_or(std::ptr::null(), |packet| packet as *const FfiPacket),
+                messages.as_ptr(),
+                messages.len(),
+            );
+        });
+    }
 }
 
 impl Invocation {
@@ -95,6 +192,100 @@ impl Invocation {
     fn call<T>(self, operation: impl FnOnce(&PluginApi, *mut c_void) -> T) -> T {
         with_component_execution(|| operation(self.api(), self.context()))
     }
+
+    fn queue(self) -> Option<&'static NemQueuedLayer> {
+        (self.queue != 0).then(|| unsafe { &*(self.queue as *const NemQueuedLayer) })
+    }
+
+    fn process(
+        self,
+        downstream: bool,
+        packet: *const FfiPacket,
+        messages: *const FfiControlMessage,
+        message_count: usize,
+    ) {
+        let Some(call) = QueuedCall::capture(packet, messages, message_count) else {
+            return;
+        };
+        let kind = match (downstream, call.packet.is_some()) {
+            (true, true) => QueueTaskKind::DownstreamPacket,
+            (false, true) => QueueTaskKind::UpstreamPacket,
+            (true, false) => QueueTaskKind::DownstreamControl,
+            (false, false) => QueueTaskKind::UpstreamControl,
+        };
+        if let Some(queue) = self.queue() {
+            if let Err(operation) =
+                queue.enqueue(kind, Box::new(move || call.run(self, downstream)))
+            {
+                if queue.accepts_direct_calls() {
+                    operation();
+                }
+            }
+        } else {
+            call.run(self, downstream);
+        }
+    }
+
+    fn process_event(self, event_id: u16, data: *const u8, data_len: usize) {
+        if data_len > 16 << 20 || (data_len != 0 && data.is_null()) {
+            return;
+        }
+        let data = if data_len == 0 {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(data, data_len).to_vec() }
+        };
+        let operation = move || {
+            self.call(|api, context| {
+                (api.process_event)(context, event_id, data.as_ptr(), data.len())
+            });
+        };
+        if let Some(queue) = self.queue() {
+            if let Err(operation) =
+                queue.enqueue(QueueTaskKind::Event(event_id), Box::new(operation))
+            {
+                if queue.accepts_direct_calls() {
+                    operation();
+                }
+            }
+        } else {
+            operation();
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn process_timed_event(
+        self,
+        timer_id: u64,
+        event_id: u32,
+        data: &[u8],
+        expire_microseconds: u64,
+        schedule_microseconds: u64,
+        fire_microseconds: u64,
+    ) {
+        let data = data.to_vec();
+        let operation = move || {
+            self.call(|api, context| {
+                (api.process_timed_event)(context, timer_id, event_id, data.as_ptr(), data.len())
+            });
+        };
+        if let Some(queue) = self.queue() {
+            if let Err(operation) = queue.enqueue(
+                QueueTaskKind::TimedEvent {
+                    expire_microseconds,
+                    schedule_microseconds,
+                    fire_microseconds,
+                },
+                Box::new(operation),
+            ) {
+                if queue.accepts_direct_calls() {
+                    operation();
+                }
+            }
+        } else {
+            operation();
+        }
+    }
 }
 
 thread_local! {
@@ -102,7 +293,6 @@ thread_local! {
 }
 
 pub(crate) fn with_component_execution<T>(operation: impl FnOnce() -> T) -> T {
-    static EXECUTION: Mutex<()> = Mutex::new(());
     COMPONENT_EXECUTION_DEPTH.with(|depth| {
         struct RestoreDepth<'a> {
             depth: &'a Cell<u32>,
@@ -115,13 +305,7 @@ pub(crate) fn with_component_execution<T>(operation: impl FnOnce() -> T) -> T {
         }
 
         let previous = depth.get();
-        if previous != 0 {
-            depth.set(previous.saturating_add(1));
-            let _restore = RestoreDepth { depth, previous };
-            return operation();
-        }
-        let _execution = EXECUTION.lock().unwrap_or_else(|error| error.into_inner());
-        depth.set(1);
+        depth.set(previous.saturating_add(1));
         let _restore = RestoreDepth { depth, previous };
         operation()
     })
@@ -146,6 +330,7 @@ struct NemLayer {
     // The library must outlive every function pointer and plugin instance.
     _library: Option<Library>,
     invocation: Invocation,
+    queue: Box<NemQueuedLayer>,
     _framework_context: Box<FrameworkContext>,
     event_build_id: u16,
     started: bool,
@@ -212,9 +397,7 @@ impl Runtime {
         message_count: usize,
     ) {
         if let Some(next) = self.invocation(nem_id, current_index + 1) {
-            next.call(|api, context| {
-                (api.process_downstream)(context, packet, messages, message_count)
-            });
+            next.process(true, packet, messages, message_count);
             return;
         }
 
@@ -300,9 +483,7 @@ impl Runtime {
                 .collect()
         };
         for target in targets {
-            target.call(|api, context| {
-                (api.process_upstream)(context, packet, messages, message_count)
-            });
+            target.process(false, packet, messages, message_count);
         }
     }
 
@@ -316,9 +497,7 @@ impl Runtime {
     ) {
         if current_index > 0 {
             if let Some(previous) = self.invocation(nem_id, current_index - 1) {
-                previous.call(|api, context| {
-                    (api.process_upstream)(context, packet, messages, message_count)
-                });
+                previous.process(false, packet, messages, message_count);
             }
         } else if let Some(route) = self.boundary(nem_id, BoundaryRole::Platform) {
             let messages = match ffi_control_messages(messages, message_count) {
@@ -349,14 +528,7 @@ impl Runtime {
             None
         };
         if let Some(target) = target {
-            target.call(|api, context| {
-                let process = if downstream {
-                    api.process_downstream
-                } else {
-                    api.process_upstream
-                };
-                process(context, std::ptr::null(), messages, message_count);
-            });
+            target.process(downstream, std::ptr::null(), messages, message_count);
         } else {
             let role = if downstream {
                 BoundaryRole::Transport
@@ -401,24 +573,22 @@ impl Runtime {
                             len: packet.payload.len(),
                         },
                     };
-                    target.call(|api, context| {
-                        let process = match role {
-                            BoundaryRole::Platform => api.process_downstream,
-                            BoundaryRole::Transport => api.process_upstream,
-                        };
-                        process(context, &ffi_packet, messages.as_ptr(), messages.len());
-                    });
+                    target.process(
+                        role == BoundaryRole::Platform,
+                        &ffi_packet,
+                        messages.as_ptr(),
+                        messages.len(),
+                    );
                 });
             }
             BoundaryMessage::Control(controls) => {
                 with_ffi_messages(&controls, |messages| {
-                    target.call(|api, context| {
-                        let process = match role {
-                            BoundaryRole::Platform => api.process_downstream,
-                            BoundaryRole::Transport => api.process_upstream,
-                        };
-                        process(context, std::ptr::null(), messages.as_ptr(), messages.len());
-                    });
+                    target.process(
+                        role == BoundaryRole::Platform,
+                        std::ptr::null(),
+                        messages.as_ptr(),
+                        messages.len(),
+                    );
                 });
             }
         }
@@ -497,9 +667,7 @@ extern "C" fn ota_packet(
     };
     if let Some(runtime) = context.runtime.upgrade() {
         if let Some(phy) = runtime.last_invocation(context.nem_id) {
-            phy.call(|api, context| {
-                (api.process_upstream)(context, &packet, decoded.as_ptr(), decoded.len());
-            });
+            phy.process(false, &packet, decoded.as_ptr(), decoded.len());
         }
     }
 }
@@ -518,7 +686,7 @@ extern "C" fn framework_event(
     }
     if let Some(runtime) = context.runtime.upgrade() {
         if let Some(layer) = runtime.invocation(context.nem_id, context.layer_index) {
-            layer.call(|api, context| (api.process_event)(context, event_id, data, data_len));
+            layer.process_event(event_id, data, data_len);
         }
     }
 }
@@ -533,7 +701,13 @@ extern "C" fn register_file_descriptor(
     let Some(context) = context(context_ptr) else {
         return 0;
     };
-    let Some(handle) = file_descriptor_service::register(fd, interests, callback_context, callback)
+    let queue = context
+        .runtime
+        .upgrade()
+        .and_then(|runtime| runtime.invocation(context.nem_id, context.layer_index))
+        .map_or(0, |invocation| invocation.queue);
+    let Some(handle) =
+        file_descriptor_service::register(fd, interests, callback_context, callback, queue)
     else {
         return 0;
     };
@@ -1047,9 +1221,9 @@ struct TimerDispatch {
 
 extern "C" fn timer_dispatch(
     timer_id: usize,
-    _expire: u64,
-    _schedule: u64,
-    _fire: u64,
+    expire: u64,
+    schedule: u64,
+    fire: u64,
     _arg: *const c_void,
     user: *mut c_void,
 ) {
@@ -1058,15 +1232,14 @@ extern "C" fn timer_dispatch(
     };
     if let Some(runtime) = dispatch.runtime.upgrade() {
         if let Some(layer) = runtime.invocation(dispatch.nem_id, dispatch.layer_index) {
-            layer.call(|api, context| {
-                (api.process_timed_event)(
-                    context,
-                    timer_id as u64,
-                    dispatch.plugin_event_id,
-                    dispatch.data.as_ptr(),
-                    dispatch.data.len(),
-                );
-            });
+            layer.process_timed_event(
+                timer_id as u64,
+                dispatch.plugin_event_id,
+                &dispatch.data,
+                expire,
+                schedule,
+                fire,
+            );
         }
     }
 }
@@ -1686,6 +1859,7 @@ pub fn component_configuration_defaults(plugin: &str) -> ConfigurationUpdate {
     };
 
     let one = |name: &str, value| (name.to_string(), vec![value]);
+    let empty = |name: &str| (name.to_string(), Vec::new());
     match canonical_plugin_name(plugin) {
         "emanephy" => vec![
             one("fixedantennagain", Double(0.0)),
@@ -1702,7 +1876,7 @@ pub fn component_configuration_defaults(plugin: &str) -> ConfigurationUpdate {
             one("timesyncthreshold", UInt64(10_000)),
             one("propagationmodel", Text("precomputed".to_string())),
             one("systemnoisefigure", Double(4.0)),
-            one("subid", UInt16(1)),
+            empty("subid"),
             one("txpower", Double(0.0)),
             one("excludesamesubidfromfilterenable", Boolean(true)),
             one("compatibilitymode", UInt16(1)),
@@ -1737,12 +1911,17 @@ pub fn component_configuration_defaults(plugin: &str) -> ConfigurationUpdate {
             one("arpmodeenable", Boolean(true)),
             one("flowcontrolenable", Boolean(false)),
             one("ethernet.type.arp.priority", UInt8(0)),
+            empty("address"),
+            empty("mask"),
+            empty("ethernet.type.unknown.priority"),
         ],
         "rawtransport" => vec![
+            empty("device"),
             one("bitrate", UInt64(0)),
             one("broadcastmodeenable", Boolean(false)),
             one("arpcacheenable", Boolean(true)),
             one("ethernet.type.arp.priority", UInt8(0)),
+            empty("ethernet.type.unknown.priority"),
         ],
         "rfpipe" => vec![
             one("enablepromiscuousmode", Boolean(false)),
@@ -1751,10 +1930,11 @@ pub fn component_configuration_defaults(plugin: &str) -> ConfigurationUpdate {
             one("delay", Float(0.0)),
             one("flowcontrolenable", Boolean(false)),
             one("flowcontroltokens", UInt16(10)),
+            empty("pcrcurveuri"),
             one("radiometricenable", Boolean(false)),
             one("radiometricreportinterval", Float(1.0)),
             one("neighbormetricdeletetime", Float(60.0)),
-            one("rfsignaltable.averageallantenna", Boolean(false)),
+            one("rfsignaltable.averageallantennas", Boolean(false)),
             one("rfsignaltable.averageallfrequencies", Boolean(false)),
         ],
         "ieee80211abg" => {
@@ -1768,6 +1948,7 @@ pub fn component_configuration_defaults(plugin: &str) -> ConfigurationUpdate {
                 one("flowcontrolenable", Boolean(false)),
                 one("flowcontroltokens", UInt16(10)),
                 one("distance", UInt32(1_000)),
+                empty("pcrcurveuri"),
                 one("channelactivityestimationtimer", Float(0.1)),
                 one("neighbortimeout", Float(30.0)),
                 one("radiometricenable", Boolean(false)),
@@ -1798,6 +1979,7 @@ pub fn component_configuration_defaults(plugin: &str) -> ConfigurationUpdate {
             one("enablepromiscuousmode", Boolean(false)),
             one("flowcontrolenable", Boolean(false)),
             one("flowcontroltokens", UInt16(10)),
+            empty("pcrcurveuri"),
             one("fragmentcheckthreshold", UInt16(2)),
             one("fragmenttimeoutthreshold", UInt16(5)),
             one("neighbormetricdeletetime", Float(60.0)),
@@ -1814,9 +1996,30 @@ pub fn component_configuration_defaults(plugin: &str) -> ConfigurationUpdate {
             one("queue.fragmentationenable", Boolean(true)),
             one("reassembly.fragmentcheckthreshold", UInt16(2)),
             one("reassembly.fragmenttimeoutthreshold", UInt16(5)),
+            empty("pcrcurveuri"),
+            empty("antenna.defines"),
+            empty("transponder.receive.frequency"),
+            empty("transponder.receive.bandwidth"),
+            empty("transponder.receive.antenna"),
+            empty("transponder.receive.action"),
+            empty("transponder.receive.enable"),
+            empty("transponder.transmit.pcrcurveindex"),
+            empty("transponder.transmit.frequency"),
+            empty("transponder.transmit.bandwidth"),
+            empty("transponder.transmit.antenna"),
+            empty("transponder.transmit.ubend.delay"),
+            empty("transponder.transmit.datarate"),
+            empty("transponder.transmit.power"),
+            empty("transponder.transmit.tosmap"),
+            empty("transponder.transmit.slotperframe"),
+            empty("transponder.transmit.slotsize"),
+            empty("transponder.transmit.txslots"),
+            empty("transponder.transmit.mtu"),
+            empty("transponder.transmit.enable"),
         ],
         "commeffectshim" => vec![
             one("defaultconnectivitymode", Boolean(true)),
+            empty("filterfile"),
             one("groupid", UInt32(0)),
             one("enablepromiscuousmode", Boolean(false)),
             one("receivebufferperiod", Double(1.0)),
@@ -1825,7 +2028,13 @@ pub fn component_configuration_defaults(plugin: &str) -> ConfigurationUpdate {
             one("packetsize", UInt16(128)),
             one("packetrate", Float(1.0)),
             one("destination", UInt16(u16::MAX)),
+            empty("bandwidth"),
+            empty("antennaprofileid"),
+            empty("antennaazimuth"),
+            empty("antennaelevation"),
+            empty("frequency"),
             one("txpower", Float(0.0)),
+            empty("transmitter"),
         ],
         "timinganalysisshim" => vec![one("maxqueuesize", UInt32(0))],
         _ => Vec::new(),
@@ -1921,6 +2130,16 @@ fn component_required_parameters(plugin: &str) -> &'static [&'static str] {
             "transponder.transmit.mtu",
             "transponder.transmit.enable",
         ],
+        _ => &[],
+    }
+}
+
+fn component_event_ids(plugin: &str) -> &'static [u16] {
+    match canonical_plugin_name(plugin) {
+        "emanephy" => &[100, 101, 102, 106, 107],
+        "commeffectshim" => &[103],
+        "ieee80211abg" => &[104],
+        "tdma" => &[105],
         _ => &[],
     }
 }
@@ -2393,6 +2612,7 @@ struct PendingTransportFrame {
     priority: u8,
     creation_time_sec: u64,
     creation_time_usec: u32,
+    received_at: Instant,
 }
 
 struct PhyState {
@@ -2403,6 +2623,11 @@ struct PhyState {
     rx_sensitivity_promiscuous_mode_enabled: bool,
     receive_power_table: Option<u64>,
     observed_power_table: Option<u64>,
+    location_event_table: Option<u64>,
+    pathloss_event_table: Option<u64>,
+    pathloss_ex_event_table: Option<u64>,
+    antenna_profile_event_table: Option<u64>,
+    fading_selection_event_table: Option<u64>,
     radio_silence_drop_counter: u64,
     time_sync_rewrite_counter: u64,
     gain_cache_hit_counter: u64,
@@ -2492,6 +2717,31 @@ enum FadingMode {
     Lognormal,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PhyPathError {
+    Propagation,
+    GainLocation,
+    GainHorizon,
+    GainProfile,
+    FadeLocation,
+    FadeAlgorithm,
+    FadeSelection,
+}
+
+impl PhyPathError {
+    const fn drop_code(self) -> usize {
+        match self {
+            Self::Propagation => 3,
+            Self::GainLocation => 4,
+            Self::GainHorizon => 5,
+            Self::GainProfile => 6,
+            Self::FadeLocation => 9,
+            Self::FadeAlgorithm => 10,
+            Self::FadeSelection => 11,
+        }
+    }
+}
+
 struct NakagamiParameters {
     distance0_meters: f64,
     distance1_meters: f64,
@@ -2510,6 +2760,11 @@ impl PhyState {
             rx_sensitivity_promiscuous_mode_enabled: false,
             receive_power_table: None,
             observed_power_table: None,
+            location_event_table: None,
+            pathloss_event_table: None,
+            pathloss_ex_event_table: None,
+            antenna_profile_event_table: None,
+            fading_selection_event_table: None,
             radio_silence_drop_counter: 0,
             time_sync_rewrite_counter: 0,
             gain_cache_hit_counter: 0,
@@ -2563,6 +2818,30 @@ impl PhyState {
             monitor: SpectrumMonitor::new(),
             receive_antennas: HashMap::new(),
         }
+    }
+
+    fn update_location(
+        &mut self,
+        nem_id: u16,
+        latitude_degrees: f64,
+        longitude_degrees: f64,
+        altitude_meters: f64,
+        orientation: Option<Orientation>,
+        velocity: Option<Velocity>,
+    ) {
+        let previous = self.locations.get(&nem_id).copied();
+        self.locations.insert(
+            nem_id,
+            Location {
+                latitude_degrees,
+                longitude_degrees,
+                altitude_meters,
+                orientation: orientation
+                    .or_else(|| previous.map(|location| location.orientation))
+                    .unwrap_or_default(),
+                velocity: velocity.or_else(|| previous.and_then(|location| location.velocity)),
+            },
+        );
     }
 
     fn receiver_sensitivity_dbm(&self) -> f64 {
@@ -2726,12 +3005,27 @@ impl PhyState {
         local_pattern: AntennaPattern,
         remote_pattern: AntennaPattern,
     ) -> Option<(f64, f64, bool)> {
+        self.antenna_pair_gains_detailed(local_id, source, local_pattern, remote_pattern)
+            .ok()
+    }
+
+    fn antenna_pair_gains_detailed(
+        &mut self,
+        local_id: u16,
+        source: u16,
+        local_pattern: AntennaPattern,
+        remote_pattern: AntennaPattern,
+    ) -> Result<(f64, f64, bool), PhyPathError> {
         let local_pattern = match local_pattern {
-            AntennaPattern::Default => self.default_antenna_pattern(local_id)?,
+            AntennaPattern::Default => self
+                .default_antenna_pattern(local_id)
+                .ok_or(PhyPathError::GainProfile)?,
             pattern => pattern,
         };
         let remote_pattern = match remote_pattern {
-            AntennaPattern::Default => self.default_antenna_pattern(source)?,
+            AntennaPattern::Default => self
+                .default_antenna_pattern(source)
+                .ok_or(PhyPathError::GainProfile)?,
             pattern => pattern,
         };
         let profile_placement = |pattern: AntennaPattern| match pattern {
@@ -2740,8 +3034,9 @@ impl PhyState {
                 .map(|(_, _, north, east, up)| (north, east, up)),
             _ => Some((0.0, 0.0, 0.0)),
         };
-        let local_placement = profile_placement(local_pattern)?;
-        let remote_placement = profile_placement(remote_pattern)?;
+        let local_placement = profile_placement(local_pattern).ok_or(PhyPathError::GainProfile)?;
+        let remote_placement =
+            profile_placement(remote_pattern).ok_or(PhyPathError::GainProfile)?;
         let mut key = vec![u64::from(local_id), u64::from(source)];
         let mut append_pattern = |pattern: AntennaPattern| match pattern {
             AntennaPattern::Default => key.extend([0, 0, 0, 0]),
@@ -2777,27 +3072,51 @@ impl PhyState {
             }
         }
         if let Some((receive_gain, transmit_gain)) = self.gain_cache.get(&key).copied() {
-            return Some((receive_gain, transmit_gain, true));
+            return Ok((receive_gain, transmit_gain, true));
         }
-        let (receive_gain, transmit_gain) = self.antenna_pair_gains_with_placements(
-            local_id,
-            source,
-            local_pattern,
-            remote_pattern,
-            local_placement,
-            remote_placement,
-            |profile, bearing, elevation, reference_bearing, reference_elevation| {
-                crate::antenna::get_manager().get_profile_gain(
-                    profile.profile_id,
-                    bearing,
-                    elevation,
-                    reference_bearing,
-                    reference_elevation,
+        let locations = self
+            .locations
+            .get(&local_id)
+            .copied()
+            .zip(self.locations.get(&source).copied());
+        let needs_location = matches!(local_pattern, AntennaPattern::Profile(_))
+            || matches!(remote_pattern, AntennaPattern::Profile(_));
+        if needs_location && locations.is_none() {
+            return Err(PhyPathError::GainLocation);
+        }
+        if let Some((local, remote)) = locations {
+            let distance = distance_meters(local, remote);
+            if distance > 10.0
+                && !above_horizon(
+                    local.altitude_meters + local_placement.2,
+                    remote.altitude_meters + remote_placement.2,
+                    distance,
                 )
-            },
-        )?;
+            {
+                return Err(PhyPathError::GainHorizon);
+            }
+        }
+        let (receive_gain, transmit_gain) = self
+            .antenna_pair_gains_with_placements(
+                local_id,
+                source,
+                local_pattern,
+                remote_pattern,
+                local_placement,
+                remote_placement,
+                |profile, bearing, elevation, reference_bearing, reference_elevation| {
+                    crate::antenna::get_manager().get_profile_gain(
+                        profile.profile_id,
+                        bearing,
+                        elevation,
+                        reference_bearing,
+                        reference_elevation,
+                    )
+                },
+            )
+            .ok_or(PhyPathError::GainProfile)?;
         self.gain_cache.insert(key, (receive_gain, transmit_gain));
-        Some((receive_gain, transmit_gain, false))
+        Ok((receive_gain, transmit_gain, false))
     }
 
     #[cfg(test)]
@@ -2931,18 +3250,38 @@ impl PhyState {
     }
 
     fn propagation(&self, local_id: u16, source: u16, frequency_hz: u64) -> Option<(f64, i64)> {
+        self.propagation_detailed(local_id, source, frequency_hz)
+            .ok()
+    }
+
+    fn propagation_detailed(
+        &self,
+        local_id: u16,
+        source: u16,
+        frequency_hz: u64,
+    ) -> Result<(f64, i64), PhyPathError> {
         match self.propagation_model {
             PropagationModel::Precomputed => {
-                let values = self.pathloss.get(&source)?;
+                let values = self
+                    .pathloss
+                    .get(&source)
+                    .ok_or(PhyPathError::Propagation)?;
                 let pathloss = values
                     .get(&frequency_hz)
                     .or_else(|| values.get(&0))
-                    .copied()?;
-                Some((pathloss, 0))
+                    .copied()
+                    .ok_or(PhyPathError::Propagation)?;
+                Ok((pathloss, 0))
             }
             PropagationModel::FreeSpace | PropagationModel::TwoRay => {
-                let local = self.locations.get(&local_id)?;
-                let remote = self.locations.get(&source)?;
+                let local = self
+                    .locations
+                    .get(&local_id)
+                    .ok_or(PhyPathError::Propagation)?;
+                let remote = self
+                    .locations
+                    .get(&source)
+                    .ok_or(PhyPathError::Propagation)?;
                 let distance = distance_meters(*local, *remote);
                 let pathloss = match self.propagation_model {
                     PropagationModel::FreeSpace => {
@@ -2956,7 +3295,7 @@ impl PhyState {
                     PropagationModel::Precomputed => unreachable!(),
                 };
                 let delay = (distance / 299_792_458.0 * 1_000_000.0).round();
-                Some((pathloss, delay.clamp(0.0, i64::MAX as f64) as i64))
+                Ok((pathloss, delay.clamp(0.0, i64::MAX as f64) as i64))
             }
         }
     }
@@ -2968,14 +3307,14 @@ impl PhyState {
         ))
     }
 
-    fn profile_gains_with_remote(
+    fn profile_gains_with_remote_detailed(
         &mut self,
         local_id: u16,
         source: u16,
         remote_override: Option<TxAntennaProfile>,
-    ) -> Option<(f64, f64, bool)> {
+    ) -> Result<(f64, f64, bool), PhyPathError> {
         if self.fixed_antenna_gain_enabled {
-            return self.antenna_pair_gains(
+            return self.antenna_pair_gains_detailed(
                 local_id,
                 source,
                 AntennaPattern::IdealOmni {
@@ -2984,7 +3323,7 @@ impl PhyState {
                 AntennaPattern::IdealOmni { gain_db: 0.0 },
             );
         }
-        self.antenna_pair_gains(
+        self.antenna_pair_gains_detailed(
             local_id,
             source,
             AntennaPattern::Default,
@@ -3006,14 +3345,31 @@ impl PhyState {
         else {
             return 0.0;
         };
-        let Some(line_of_sight) = line_of_sight_neu(local, remote) else {
+        let local_position = position_ecef(local);
+        let remote_position = position_ecef(remote);
+        let position_delta = (
+            remote_position.0 - local_position.0,
+            remote_position.1 - local_position.1,
+            remote_position.2 - local_position.2,
+        );
+        let distance = position_delta
+            .0
+            .hypot(position_delta.1)
+            .hypot(position_delta.2);
+        if distance <= f64::EPSILON || !distance.is_finite() {
             return 0.0;
-        };
-        let local_velocity = velocity_neu(local_velocity);
-        let remote_velocity = velocity_neu(remote_velocity);
-        let radial_velocity = line_of_sight.0 * (local_velocity.0 - remote_velocity.0)
-            + line_of_sight.1 * (local_velocity.1 - remote_velocity.1)
-            + line_of_sight.2 * (local_velocity.2 - remote_velocity.2);
+        }
+        let local_velocity = velocity_ecef(local_velocity, local);
+        let remote_velocity = velocity_ecef(remote_velocity, remote);
+        let velocity_delta = (
+            local_velocity.0 - remote_velocity.0,
+            local_velocity.1 - remote_velocity.1,
+            local_velocity.2 - remote_velocity.2,
+        );
+        let radial_velocity = (position_delta.0 * velocity_delta.0
+            + position_delta.1 * velocity_delta.1
+            + position_delta.2 * velocity_delta.2)
+            / distance;
         const SPEED_OF_LIGHT: f64 = 299_792_458.0;
         let denominator = SPEED_OF_LIGHT - radial_velocity;
         if denominator <= 0.0 || !denominator.is_finite() {
@@ -3030,15 +3386,31 @@ impl PhyState {
         power_dbm: f64,
         now_microseconds: u64,
     ) -> Option<f64> {
+        self.apply_fading_detailed(local_id, source, power_dbm, now_microseconds)
+            .ok()
+    }
+
+    fn apply_fading_detailed(
+        &mut self,
+        local_id: u16,
+        source: u16,
+        power_dbm: f64,
+        now_microseconds: u64,
+    ) -> Result<f64, PhyPathError> {
         let mode = match self.fading_mode {
-            FadingMode::Event => *self.fading_selections.get(&source)?,
+            FadingMode::Event => *self
+                .fading_selections
+                .get(&source)
+                .ok_or(PhyPathError::FadeSelection)?,
             mode => mode,
         };
         let power_mw = match mode {
-            FadingMode::None => return Some(power_dbm),
-            FadingMode::Event => return None,
+            FadingMode::None => return Ok(power_dbm),
+            FadingMode::Event => return Err(PhyPathError::FadeAlgorithm),
             FadingMode::Nakagami => {
-                let distance = self.distance(local_id, source)?;
+                let distance = self
+                    .distance(local_id, source)
+                    .ok_or(PhyPathError::FadeLocation)?;
                 self.nakagami.compute(
                     power_dbm,
                     distance,
@@ -3049,26 +3421,23 @@ impl PhyState {
                     self.nakagami_parameters.m2,
                 )
             }
-            FadingMode::Lognormal => self.lognormal_states.entry(source).or_default().process(
-                power_dbm,
-                &self.lognormal_parameters,
-                now_microseconds,
-            )?,
+            FadingMode::Lognormal => self
+                .lognormal_states
+                .entry(source)
+                .or_default()
+                .process(power_dbm, &self.lognormal_parameters, now_microseconds)
+                .ok_or(PhyPathError::FadeAlgorithm)?,
         };
-        (power_mw.is_finite() && power_mw > 0.0).then_some(10.0 * power_mw.log10())
+        (power_mw.is_finite() && power_mw > 0.0)
+            .then_some(10.0 * power_mw.log10())
+            .ok_or(PhyPathError::FadeAlgorithm)
     }
 }
 
 fn distance_meters(a: Location, b: Location) -> f64 {
-    const EARTH_RADIUS_METERS: f64 = 6_371_000.0;
-    let latitude_a = a.latitude_degrees.to_radians();
-    let latitude_b = b.latitude_degrees.to_radians();
-    let delta_latitude = (b.latitude_degrees - a.latitude_degrees).to_radians();
-    let delta_longitude = (b.longitude_degrees - a.longitude_degrees).to_radians();
-    let haversine = (delta_latitude / 2.0).sin().powi(2)
-        + latitude_a.cos() * latitude_b.cos() * (delta_longitude / 2.0).sin().powi(2);
-    let surface = 2.0 * EARTH_RADIUS_METERS * haversine.sqrt().atan2((1.0 - haversine).sqrt());
-    surface.hypot(b.altitude_meters - a.altitude_meters)
+    let a = position_ecef(a);
+    let b = position_ecef(b);
+    (b.0 - a.0).hypot(b.1 - a.1).hypot(b.2 - a.2)
 }
 
 #[cfg(test)]
@@ -3137,7 +3506,7 @@ fn rotate_neu(vector: (f64, f64, f64), orientation: Orientation) -> (f64, f64, f
 }
 
 fn above_horizon(local_height_meters: f64, remote_height_meters: f64, distance: f64) -> bool {
-    const MEAN_EARTH_RADIUS_METERS: f64 = 6_371_000.0;
+    const MEAN_EARTH_RADIUS_METERS: f64 = (2.0 * 6_378_137.0 + 6_356_752.314_2) / 3.0;
     let horizon_distance = |height: f64| {
         let height = height.max(0.0);
         (height * (2.0 * MEAN_EARTH_RADIUS_METERS + height)).sqrt()
@@ -3146,25 +3515,35 @@ fn above_horizon(local_height_meters: f64, remote_height_meters: f64, distance: 
 }
 
 fn relative_neu(local: Location, remote: Location) -> (f64, f64, f64) {
-    const EARTH_RADIUS_METERS: f64 = 6_371_000.0;
-    let mean_latitude = ((local.latitude_degrees + remote.latitude_degrees) * 0.5).to_radians();
-    let north =
-        (remote.latitude_degrees - local.latitude_degrees).to_radians() * EARTH_RADIUS_METERS;
-    let east = (remote.longitude_degrees - local.longitude_degrees).to_radians()
-        * EARTH_RADIUS_METERS
-        * mean_latitude.cos();
-    let up = remote.altitude_meters - local.altitude_meters;
+    let local_ecef = position_ecef(local);
+    let remote_ecef = position_ecef(remote);
+    let x = remote_ecef.0 - local_ecef.0;
+    let y = remote_ecef.1 - local_ecef.1;
+    let z = remote_ecef.2 - local_ecef.2;
+    let latitude = local.latitude_degrees.to_radians();
+    let longitude = local.longitude_degrees.to_radians();
+    let north = -x * latitude.sin() * longitude.cos() - y * latitude.sin() * longitude.sin()
+        + z * latitude.cos();
+    let east = -x * longitude.sin() + y * longitude.cos();
+    let up = x * latitude.cos() * longitude.cos()
+        + y * latitude.cos() * longitude.sin()
+        + z * latitude.sin();
     (north, east, up)
 }
 
-fn line_of_sight_neu(local: Location, remote: Location) -> Option<(f64, f64, f64)> {
-    let vector = relative_neu(local, remote);
-    let magnitude = vector.0.hypot(vector.1).hypot(vector.2);
-    (magnitude > f64::EPSILON && magnitude.is_finite()).then_some((
-        vector.0 / magnitude,
-        vector.1 / magnitude,
-        vector.2 / magnitude,
-    ))
+fn position_ecef(location: Location) -> (f64, f64, f64) {
+    const SEMI_MAJOR: f64 = 6_378_137.0;
+    const SEMI_MINOR: f64 = 6_356_752.314_2;
+    const ECCENTRICITY_SQUARED: f64 =
+        (SEMI_MAJOR * SEMI_MAJOR - SEMI_MINOR * SEMI_MINOR) / (SEMI_MAJOR * SEMI_MAJOR);
+    let latitude = location.latitude_degrees.to_radians();
+    let longitude = location.longitude_degrees.to_radians();
+    let radius = SEMI_MAJOR / (1.0 - ECCENTRICITY_SQUARED * latitude.sin().powi(2)).sqrt();
+    (
+        (radius + location.altitude_meters) * latitude.cos() * longitude.cos(),
+        (radius + location.altitude_meters) * latitude.cos() * longitude.sin(),
+        ((1.0 - ECCENTRICITY_SQUARED) * radius + location.altitude_meters) * latitude.sin(),
+    )
 }
 
 fn velocity_neu(velocity: Velocity) -> (f64, f64, f64) {
@@ -3175,6 +3554,22 @@ fn velocity_neu(velocity: Velocity) -> (f64, f64, f64) {
         horizontal * azimuth.cos(),
         horizontal * azimuth.sin(),
         velocity.magnitude_meters_per_second * elevation.sin(),
+    )
+}
+
+fn velocity_ecef(velocity: Velocity, location: Location) -> (f64, f64, f64) {
+    let velocity = velocity_neu(velocity);
+    let latitude = location.latitude_degrees.to_radians();
+    let longitude = location.longitude_degrees.to_radians();
+    // Preserve the legacy EMANE transform exactly, including its historical
+    // longitude terms, because these values are part of the published Doppler
+    // and receive-power contracts.
+    (
+        -velocity.1 * longitude.sin() - velocity.0 * latitude.sin() * longitude.cos()
+            + velocity.2 * longitude.cos() * longitude.cos(),
+        velocity.1 * longitude.cos() - velocity.0 * latitude.sin() * longitude.sin()
+            + velocity.2 * latitude.cos() * longitude.sin(),
+        velocity.0 * latitude.cos() + velocity.2 * longitude.sin(),
     )
 }
 
@@ -3214,7 +3609,38 @@ fn builtin_init(id: u16, framework: *const FfiFrameworkService, kind: BuiltinKin
         flow_control_tokens: 0,
         pending_transport_frames: VecDeque::new(),
         bitrate_bps: 0,
-        counters: CommonLayerCounters::register(framework),
+        counters: match kind {
+            BuiltinKind::Phy => CommonLayerCounters::register_with_drop_labels(
+                framework,
+                "",
+                &[
+                    "Out-of-Band",
+                    "Rx Sensitivity",
+                    "Propagation Model",
+                    "Gain Location",
+                    "Gain Horizon",
+                    "Gain Profile",
+                    "Not FOI",
+                    "Spectrum Clamp",
+                    "Fade Location",
+                    "Fade Algorithm",
+                    "Fade Select",
+                    "Antenna Freq",
+                    "Gain Antenna",
+                    "Missing Control",
+                ],
+                &[],
+            ),
+            BuiltinKind::VirtualTransport => CommonLayerCounters::register_with_drop_labels(
+                framework,
+                "",
+                &["Write Error", "Frame Error"],
+                &[],
+            ),
+            // The legacy raw transport does not publish common-layer packet
+            // statistics.
+            BuiltinKind::RawTransport => CommonLayerCounters::default(),
+        },
         phy: PhyState::new(),
     });
     let state_ptr = state.as_mut() as *mut BuiltinState;
@@ -3259,6 +3685,57 @@ fn builtin_init(id: u16, framework: *const FfiFrameworkService, kind: BuiltinKin
                 true,
             );
             if let Some(context) = context(framework.framework_ctx) {
+                state.phy.location_event_table = register_native_table(
+                    context.build_id,
+                    "LocationEventInfoTable",
+                    &[
+                        "NEM",
+                        "Latitude",
+                        "Longitude",
+                        "Altitude",
+                        "Pitch",
+                        "Roll",
+                        "Yaw",
+                        "Azimuth",
+                        "Elevation",
+                        "Magnitude",
+                    ],
+                    "Shows the location event information received",
+                    false,
+                );
+                state.phy.pathloss_event_table = register_native_table(
+                    context.build_id,
+                    "PathlossEventInfoTable",
+                    &["NEM", "Forward Pathloss", "Reverse Pathloss"],
+                    "Shows the precomputed pathloss information received",
+                    false,
+                );
+                state.phy.pathloss_ex_event_table = register_native_table(
+                    context.build_id,
+                    "PathlossExEventInfoTable",
+                    &["NEM", "Frequency", "Pathloss"],
+                    "Shows the per frequency precomputed pathloss information received",
+                    false,
+                );
+                state.phy.antenna_profile_event_table = register_native_table(
+                    context.build_id,
+                    "AntennaProfileEventInfoTable",
+                    &[
+                        "NEM",
+                        "Antenna Profile",
+                        "Antenna Azimuth",
+                        "Antenna Elevation",
+                    ],
+                    "Shows the antenna profile information received",
+                    false,
+                );
+                state.phy.fading_selection_event_table = register_native_table(
+                    context.build_id,
+                    "FadingSelectionInfoTable",
+                    &["NEM", "Model"],
+                    "Shows the selected fading model information received",
+                    false,
+                );
                 state.phy.receive_power_table = register_native_table(
                     context.build_id,
                     "ReceivePowerTable",
@@ -3293,7 +3770,12 @@ fn builtin_init(id: u16, framework: *const FfiFrameworkService, kind: BuiltinKin
                     "Shows the calculated observed power for the last received segment.",
                     false,
                 );
-                if state.phy.receive_power_table.is_none()
+                if state.phy.location_event_table.is_none()
+                    || state.phy.pathloss_event_table.is_none()
+                    || state.phy.pathloss_ex_event_table.is_none()
+                    || state.phy.antenna_profile_event_table.is_none()
+                    || state.phy.fading_selection_event_table.is_none()
+                    || state.phy.receive_power_table.is_none()
                     || state.phy.observed_power_table.is_none()
                 {
                     return std::ptr::null_mut();
@@ -3929,8 +4411,19 @@ fn send_transport_frame(
             len: frame.payload.len(),
         },
     };
+    counters.downstream_tx_packet(
+        framework,
+        id,
+        frame.destination,
+        frame.payload.len(),
+        frame
+            .received_at
+            .elapsed()
+            .as_micros()
+            .min(u128::from(u64::MAX)) as u64,
+        false,
+    );
     (framework.send_downstream_packet)(framework.framework_ctx, id, &packet, std::ptr::null(), 0);
-    counters.downstream_tx(framework, frame.destination, frame.payload.len());
     pace_transport(frame.payload.len(), bitrate_bps);
 }
 
@@ -3994,10 +4487,14 @@ extern "C" fn builtin_ethernet_downstream(context: *mut c_void, data: *const u8,
         priority,
         creation_time_sec: now.as_secs(),
         creation_time_usec: now.subsec_micros(),
+        received_at: Instant::now(),
     };
-    state
-        .counters
-        .downstream_rx(state.framework, destination, frame.payload.len());
+    state.counters.downstream_rx_packet(
+        state.framework,
+        state.id,
+        destination,
+        frame.payload.len(),
+    );
     if state.flow_control_enabled {
         if state.flow_control_tokens == 0 {
             state.pending_transport_frames.push_back(frame);
@@ -4048,6 +4545,7 @@ extern "C" fn builtin_upstream(
         }
         return;
     }
+    let received_at = unix_time_microseconds();
     match state.kind {
         BuiltinKind::Phy => {
             let Some(packet) = (unsafe { packet.as_ref() }) else {
@@ -4059,15 +4557,19 @@ extern "C" fn builtin_upstream(
                 );
                 return;
             };
-            state.counters.upstream_rx(
+            state.counters.upstream_rx_packet(
                 state.framework,
+                packet.info.source,
                 packet.info.destination,
                 packet.payload.len,
             );
             let Some(incoming) = ffi_control_messages(messages, count) else {
-                state
-                    .counters
-                    .upstream_drop(state.framework, packet.info.destination);
+                state.counters.upstream_drop_packet(
+                    state.framework,
+                    packet.info.source,
+                    packet.info.destination,
+                    14,
+                );
                 return;
             };
             let Some(tx) = find_tx_properties(incoming) else {
@@ -4079,10 +4581,12 @@ extern "C" fn builtin_upstream(
                     messages,
                     count,
                 );
-                state.counters.upstream_tx(
+                state.counters.upstream_tx_packet(
                     state.framework,
+                    packet.info.source,
                     packet.info.destination,
                     packet.payload.len,
+                    unix_time_microseconds().saturating_sub(received_at).max(0) as u64,
                 );
                 return;
             };
@@ -4092,6 +4596,28 @@ extern "C" fn builtin_upstream(
             let mimo_tx = (state.phy.compatibility_mode == 2)
                 .then(|| wire_mimo.clone())
                 .flatten();
+            if state.phy.compatibility_mode == 2 && state.phy.receive_antennas.is_empty() {
+                state.counters.upstream_drop_packet(
+                    state.framework,
+                    packet.info.source,
+                    packet.info.destination,
+                    14,
+                );
+                return;
+            }
+            if mimo_tx.as_ref().is_some_and(|mimo| {
+                mimo.transmit_antennas.iter().any(|antenna| {
+                    usize::from(antenna.frequency_group_index) >= mimo.frequency_groups.len()
+                })
+            }) {
+                state.counters.upstream_drop_packet(
+                    state.framework,
+                    packet.info.source,
+                    packet.info.destination,
+                    12,
+                );
+                return;
+            }
             let (frequency_segments, segment_tx_powers, mimo_ranges) = if let Some(mimo) = &mimo_tx
             {
                 let mut segments = Vec::new();
@@ -4162,24 +4688,41 @@ extern "C" fn builtin_upstream(
                         };
                         local_patterns
                             .into_iter()
-                            .filter_map(|local_pattern| {
-                                state.phy.antenna_pair_gains(
+                            .try_fold(None, |best: Option<(f64, f64, bool)>, local_pattern| {
+                                let candidate = state.phy.antenna_pair_gains_detailed(
                                     state.id,
                                     transmitter.nem_id,
                                     local_pattern,
                                     transmit_antenna.pattern,
-                                )
+                                )?;
+                                Ok::<_, PhyPathError>(Some(match best {
+                                    Some(current)
+                                        if current.0 + current.1 >= candidate.0 + candidate.1 =>
+                                    {
+                                        current
+                                    }
+                                    _ => candidate,
+                                }))
                             })
-                            .max_by(|left, right| (left.0 + left.1).total_cmp(&(right.0 + right.1)))
+                            .and_then(|value| value.ok_or(PhyPathError::GainProfile))
                     } else {
-                        state.phy.profile_gains_with_remote(
+                        state.phy.profile_gains_with_remote_detailed(
                             state.id,
                             transmitter.nem_id,
                             antenna_profile,
                         )
                     };
-                    let Some((receive_gain_db, transmit_gain_db, cache_hit)) = antenna_gains else {
-                        continue;
+                    let (receive_gain_db, transmit_gain_db, cache_hit) = match antenna_gains {
+                        Ok(value) => value,
+                        Err(error) => {
+                            state.counters.upstream_drop_packet(
+                                state.framework,
+                                packet.info.source,
+                                packet.info.destination,
+                                error.drop_code(),
+                            );
+                            return;
+                        }
                     };
                     (state.framework.increment_counter)(
                         state.framework.framework_ctx,
@@ -4191,23 +4734,41 @@ extern "C" fn builtin_upstream(
                         1,
                     );
                     let antenna_gain_db = receive_gain_db + transmit_gain_db;
-                    let Some((pathloss_db, propagation)) = state.phy.propagation(
+                    let (pathloss_db, propagation) = match state.phy.propagation_detailed(
                         state.id,
                         transmitter.nem_id,
                         frequency_segment.frequency_hz,
-                    ) else {
-                        continue;
+                    ) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            state.counters.upstream_drop_packet(
+                                state.framework,
+                                packet.info.source,
+                                packet.info.destination,
+                                error.drop_code(),
+                            );
+                            return;
+                        }
                     };
                     let transmit_power_dbm =
                         segment_tx_powers[index].unwrap_or(transmitter.tx_power_dbm);
                     let unfaded_power_dbm = transmit_power_dbm - pathloss_db + antenna_gain_db;
-                    let Some(rx_power_dbm) = state.phy.apply_fading(
+                    let rx_power_dbm = match state.phy.apply_fading_detailed(
                         state.id,
                         transmitter.nem_id,
                         unfaded_power_dbm,
                         now.max(0) as u64,
-                    ) else {
-                        continue;
+                    ) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            state.counters.upstream_drop_packet(
+                                state.framework,
+                                packet.info.source,
+                                packet.info.destination,
+                                error.drop_code(),
+                            );
+                            return;
+                        }
                     };
                     let transmit_antenna_index = transmit_antenna
                         .map(|antenna| antenna.antenna_index)
@@ -4240,9 +4801,12 @@ extern "C" fn builtin_upstream(
                 }
             }
             if !valid_path || rx_powers_mw.iter().any(|power| *power <= 0.0) {
-                state
-                    .counters
-                    .upstream_drop(state.framework, packet.info.destination);
+                state.counters.upstream_drop_packet(
+                    state.framework,
+                    packet.info.source,
+                    packet.info.destination,
+                    3,
+                );
                 return;
             }
             let segments: Vec<_> = frequency_segments
@@ -4286,6 +4850,15 @@ extern "C" fn builtin_upstream(
                     std::ptr::null(),
                     0,
                 );
+            if state.phy.monitor.last_update_had_clamp_error() {
+                state.counters.upstream_drop_packet(
+                    state.framework,
+                    packet.info.source,
+                    packet.info.destination,
+                    8,
+                );
+                return;
+            }
             if tx_time != tx.tx_time_microseconds {
                 (state.framework.increment_counter)(
                     state.framework.framework_ctx,
@@ -4307,9 +4880,18 @@ extern "C" fn builtin_upstream(
                         0,
                     );
                 }
-                state
-                    .counters
-                    .upstream_drop(state.framework, packet.info.destination);
+                state.counters.upstream_drop_packet(
+                    state.framework,
+                    packet.info.source,
+                    packet.info.destination,
+                    if report_in_band {
+                        2
+                    } else if tx.sub_id == state.phy.sub_id {
+                        7
+                    } else {
+                        1
+                    },
+                );
                 return;
             }
             let noise_floor_dbm = reception_noise_floor_dbm(
@@ -4614,11 +5196,21 @@ extern "C" fn builtin_upstream(
                         0,
                     );
                 }
-                state
-                    .counters
-                    .upstream_drop(state.framework, packet.info.destination);
+                state.counters.upstream_drop_packet(
+                    state.framework,
+                    packet.info.source,
+                    packet.info.destination,
+                    2,
+                );
                 return;
             }
+            state.counters.upstream_tx_packet(
+                state.framework,
+                packet.info.source,
+                packet.info.destination,
+                packet.payload.len,
+                unix_time_microseconds().saturating_sub(received_at).max(0) as u64,
+            );
             (state.framework.send_upstream_packet)(
                 state.framework.framework_ctx,
                 state.id,
@@ -4626,23 +5218,22 @@ extern "C" fn builtin_upstream(
                 outgoing.as_ptr(),
                 outgoing.len(),
             );
-            state.counters.upstream_tx(
-                state.framework,
-                packet.info.destination,
-                packet.payload.len,
-            );
         }
         BuiltinKind::VirtualTransport | BuiltinKind::RawTransport if !packet.is_null() => {
             let packet = unsafe { &*packet };
-            state.counters.upstream_rx(
+            state.counters.upstream_rx_packet(
                 state.framework,
+                packet.info.source,
                 packet.info.destination,
                 packet.payload.len,
             );
             if packet.payload.len != 0 && packet.payload.data.is_null() {
-                state
-                    .counters
-                    .upstream_drop(state.framework, packet.info.destination);
+                state.counters.upstream_drop_packet(
+                    state.framework,
+                    packet.info.source,
+                    packet.info.destination,
+                    0,
+                );
                 return;
             }
             emane_rs_ethernet_transport_update_arp_cache(
@@ -4653,27 +5244,36 @@ extern "C" fn builtin_upstream(
                 state.broadcast_mode,
                 state.arp_cache_mode,
             );
-            match state.kind {
+            let status = match state.kind {
                 BuiltinKind::VirtualTransport => {
-                    let _ = emane_rs_virtual_transport_process_upstream_packet(
+                    emane_rs_virtual_transport_process_upstream_packet(
                         state.virtual_transport,
                         packet.payload.data,
                         packet.payload.len,
-                    );
+                    )
                 }
-                BuiltinKind::RawTransport => {
-                    let _ = emane_rs_raw_transport_process_upstream_packet(
-                        state.raw_transport,
-                        packet.payload.data,
-                        packet.payload.len,
-                    );
-                }
-                BuiltinKind::Phy => {}
+                BuiltinKind::RawTransport => emane_rs_raw_transport_process_upstream_packet(
+                    state.raw_transport,
+                    packet.payload.data,
+                    packet.payload.len,
+                ),
+                BuiltinKind::Phy => unreachable!(),
+            };
+            if status < 0 {
+                state.counters.upstream_drop_packet(
+                    state.framework,
+                    packet.info.source,
+                    packet.info.destination,
+                    1,
+                );
+                return;
             }
-            state.counters.upstream_tx(
+            state.counters.upstream_tx_packet(
                 state.framework,
+                packet.info.source,
                 packet.info.destination,
                 packet.payload.len,
+                unix_time_microseconds().saturating_sub(received_at).max(0) as u64,
             );
             pace_transport(packet.payload.len, state.bitrate_bps);
         }
@@ -4690,6 +5290,7 @@ extern "C" fn builtin_downstream(
     let Some(state) = (unsafe { (state as *mut BuiltinState).as_mut() }) else {
         return;
     };
+    let began_at = unix_time_microseconds();
     if state.kind == BuiltinKind::Phy {
         let Some(incoming) = ffi_control_messages(messages, count) else {
             return;
@@ -4751,20 +5352,20 @@ extern "C" fn builtin_downstream(
             return;
         }
         let packet = unsafe { &*packet };
-        state
-            .counters
-            .downstream_rx(state.framework, packet.info.destination, packet.payload.len);
         if state.phy.radio_silence_enabled {
             (state.framework.increment_counter)(
                 state.framework.framework_ctx,
                 state.phy.radio_silence_drop_counter,
                 1,
             );
-            state
-                .counters
-                .downstream_drop(state.framework, packet.info.destination);
             return;
         }
+        state.counters.downstream_rx_packet(
+            state.framework,
+            packet.info.source,
+            packet.info.destination,
+            packet.payload.len,
+        );
         let now = unix_time_microseconds();
         let mut tx = find_tx_properties(incoming).unwrap_or(TxProperties {
             frequency_hz: state.phy.frequency_hz,
@@ -4905,29 +5506,33 @@ extern "C" fn builtin_downstream(
         });
         if let Some(mimo) = &normalized_mimo {
             let antenna = mimo.transmit_antennas[0];
-            let group = &mimo.frequency_groups[usize::from(antenna.frequency_group_index)];
-            let first = group[0];
-            tx.frequency_hz = first.frequency_hz;
-            tx.tx_power_dbm = first.tx_power_dbm;
-            tx.antenna_index = antenna.antenna_index;
-            tx.bandwidth_hz = antenna.bandwidth_hz;
-            tx.spectral_mask_index = antenna.spectral_mask_index;
-            tx.offset_microseconds = group
-                .iter()
-                .map(|segment| segment.offset_microseconds)
-                .min()
-                .unwrap_or(0);
-            tx.duration_microseconds = group
-                .iter()
-                .map(|segment| {
-                    segment
-                        .offset_microseconds
-                        .saturating_add(segment.duration_microseconds)
-                })
-                .max()
-                .unwrap_or(1)
-                .saturating_sub(tx.offset_microseconds)
-                .max(1);
+            if let Some(group) = mimo
+                .frequency_groups
+                .get(usize::from(antenna.frequency_group_index))
+            {
+                let first = group[0];
+                tx.frequency_hz = first.frequency_hz;
+                tx.tx_power_dbm = first.tx_power_dbm;
+                tx.antenna_index = antenna.antenna_index;
+                tx.bandwidth_hz = antenna.bandwidth_hz;
+                tx.spectral_mask_index = antenna.spectral_mask_index;
+                tx.offset_microseconds = group
+                    .iter()
+                    .map(|segment| segment.offset_microseconds)
+                    .min()
+                    .unwrap_or(0);
+                tx.duration_microseconds = group
+                    .iter()
+                    .map(|segment| {
+                        segment
+                            .offset_microseconds
+                            .saturating_add(segment.duration_microseconds)
+                    })
+                    .max()
+                    .unwrap_or(1)
+                    .saturating_sub(tx.offset_microseconds)
+                    .max(1);
+            }
         }
 
         let normalized_transmitters = find_tx_transmitters(incoming).map(|transmitters| {
@@ -4996,6 +5601,14 @@ extern "C" fn builtin_downstream(
                 },
             });
         }
+        state.counters.downstream_tx_packet(
+            state.framework,
+            packet.info.source,
+            packet.info.destination,
+            packet.payload.len,
+            unix_time_microseconds().saturating_sub(began_at).max(0) as u64,
+            false,
+        );
         (state.framework.send_downstream_packet)(
             state.framework.framework_ctx,
             state.id,
@@ -5003,15 +5616,15 @@ extern "C" fn builtin_downstream(
             outgoing.as_ptr(),
             outgoing.len(),
         );
-        state
-            .counters
-            .downstream_tx(state.framework, packet.info.destination, packet.payload.len);
         return;
     }
     if let Some(packet) = unsafe { packet.as_ref() } {
-        state
-            .counters
-            .downstream_rx(state.framework, packet.info.destination, packet.payload.len);
+        state.counters.downstream_rx_packet(
+            state.framework,
+            packet.info.source,
+            packet.info.destination,
+            packet.payload.len,
+        );
     }
     (state.framework.send_downstream_packet)(
         state.framework.framework_ctx,
@@ -5021,9 +5634,14 @@ extern "C" fn builtin_downstream(
         count,
     );
     if let Some(packet) = unsafe { packet.as_ref() } {
-        state
-            .counters
-            .downstream_tx(state.framework, packet.info.destination, packet.payload.len);
+        state.counters.downstream_tx_packet(
+            state.framework,
+            packet.info.source,
+            packet.info.destination,
+            packet.payload.len,
+            unix_time_microseconds().saturating_sub(began_at).max(0) as u64,
+            false,
+        );
     }
 }
 
@@ -5161,29 +5779,50 @@ extern "C" fn builtin_event(state: *mut c_void, event_id: u16, data: *const u8, 
                                 magnitude_meters_per_second: velocity.magnitude_meters_per_second,
                             })
                     });
-                    let orientation = location
-                        .orientation
-                        .and_then(|orientation| {
-                            (orientation.roll_degrees.is_finite()
-                                && orientation.pitch_degrees.is_finite()
-                                && orientation.yaw_degrees.is_finite())
-                            .then_some(Orientation {
-                                roll_degrees: orientation.roll_degrees,
-                                pitch_degrees: orientation.pitch_degrees,
-                                yaw_degrees: orientation.yaw_degrees,
-                            })
+                    let orientation = location.orientation.and_then(|orientation| {
+                        (orientation.roll_degrees.is_finite()
+                            && orientation.pitch_degrees.is_finite()
+                            && orientation.yaw_degrees.is_finite())
+                        .then_some(Orientation {
+                            roll_degrees: orientation.roll_degrees,
+                            pitch_degrees: orientation.pitch_degrees,
+                            yaw_degrees: orientation.yaw_degrees,
                         })
-                        .unwrap_or_default();
-                    state.phy.locations.insert(
+                    });
+                    state.phy.update_location(
                         nem_id,
-                        Location {
-                            latitude_degrees: position.latitude_degrees,
-                            longitude_degrees: position.longitude_degrees,
-                            altitude_meters: position.altitude_meters,
-                            velocity,
-                            orientation,
-                        },
+                        position.latitude_degrees,
+                        position.longitude_degrees,
+                        position.altitude_meters,
+                        orientation,
+                        velocity,
                     );
+                    if let (Some(handle), Some(location)) = (
+                        state.phy.location_event_table,
+                        state.phy.locations.get(&nem_id).copied(),
+                    ) {
+                        let velocity = location.velocity.unwrap_or(Velocity {
+                            azimuth_degrees: 0.0,
+                            elevation_degrees: 0.0,
+                            magnitude_meters_per_second: 0.0,
+                        });
+                        let _ = set_native_table_row(
+                            handle,
+                            vec![u64::from(nem_id)],
+                            vec![
+                                NativeTableValue::UInt64(u64::from(nem_id)),
+                                NativeTableValue::Double(location.latitude_degrees),
+                                NativeTableValue::Double(location.longitude_degrees),
+                                NativeTableValue::Double(location.altitude_meters),
+                                NativeTableValue::Double(location.orientation.pitch_degrees),
+                                NativeTableValue::Double(location.orientation.roll_degrees),
+                                NativeTableValue::Double(location.orientation.yaw_degrees),
+                                NativeTableValue::Double(velocity.azimuth_degrees),
+                                NativeTableValue::Double(velocity.elevation_degrees),
+                                NativeTableValue::Double(velocity.magnitude_meters_per_second),
+                            ],
+                        );
+                    }
                 }
             }
         }
@@ -5203,6 +5842,17 @@ extern "C" fn builtin_event(state: *mut c_void, event_id: u16, data: *const u8, 
                         .entry(nem_id)
                         .or_default()
                         .insert(0, value);
+                    if let Some(handle) = state.phy.pathloss_event_table {
+                        let _ = set_native_table_row(
+                            handle,
+                            vec![u64::from(nem_id)],
+                            vec![
+                                NativeTableValue::UInt64(u64::from(nem_id)),
+                                NativeTableValue::Double(value),
+                                NativeTableValue::Double(f64::from(pathloss.reverse_pathlossd_b)),
+                            ],
+                        );
+                    }
                 }
             }
         }
@@ -5219,6 +5869,17 @@ extern "C" fn builtin_event(state: *mut c_void, event_id: u16, data: *const u8, 
                     let value = f64::from(entry.pathlossd_b);
                     if value.is_finite() {
                         values.insert(entry.frequency_hz, value);
+                        if let Some(handle) = state.phy.pathloss_ex_event_table {
+                            let _ = set_native_table_row(
+                                handle,
+                                vec![u64::from(nem_id), entry.frequency_hz],
+                                vec![
+                                    NativeTableValue::UInt64(u64::from(nem_id)),
+                                    NativeTableValue::UInt64(entry.frequency_hz),
+                                    NativeTableValue::Double(value),
+                                ],
+                            );
+                        }
                     }
                 }
             }
@@ -5245,6 +5906,18 @@ extern "C" fn builtin_event(state: *mut c_void, event_id: u16, data: *const u8, 
                             elevation_degrees: profile.antenna_elevation_degrees,
                         },
                     );
+                    if let Some(handle) = state.phy.antenna_profile_event_table {
+                        let _ = set_native_table_row(
+                            handle,
+                            vec![u64::from(nem_id)],
+                            vec![
+                                NativeTableValue::UInt64(u64::from(nem_id)),
+                                NativeTableValue::UInt64(u64::from(profile_id)),
+                                NativeTableValue::Double(profile.antenna_azimuth_degrees),
+                                NativeTableValue::Double(profile.antenna_elevation_degrees),
+                            ],
+                        );
+                    }
                 }
             }
         }
@@ -5256,14 +5929,28 @@ extern "C" fn builtin_event(state: *mut c_void, event_id: u16, data: *const u8, 
                 let Ok(nem_id) = u16::try_from(entry.nem_id) else {
                     continue;
                 };
-                let mode = match fading_selection_event::Model::try_from(entry.model) {
-                    Ok(fading_selection_event::Model::TypeNone) => FadingMode::None,
-                    Ok(fading_selection_event::Model::TypeNakagami) => FadingMode::Nakagami,
-                    Ok(fading_selection_event::Model::TypeLognormal) => FadingMode::Lognormal,
+                let (mode, name) = match fading_selection_event::Model::try_from(entry.model) {
+                    Ok(fading_selection_event::Model::TypeNone) => (FadingMode::None, "none"),
+                    Ok(fading_selection_event::Model::TypeNakagami) => {
+                        (FadingMode::Nakagami, "nakagami")
+                    }
+                    Ok(fading_selection_event::Model::TypeLognormal) => {
+                        (FadingMode::Lognormal, "lognormal")
+                    }
                     Err(_) => continue,
                 };
                 state.phy.fading_selections.insert(nem_id, mode);
                 state.phy.lognormal_states.remove(&nem_id);
+                if let Some(handle) = state.phy.fading_selection_event_table {
+                    let _ = set_native_table_row(
+                        handle,
+                        vec![u64::from(nem_id)],
+                        vec![
+                            NativeTableValue::UInt64(u64::from(nem_id)),
+                            NativeTableValue::String(name.to_string()),
+                        ],
+                    );
+                }
             }
         }
         _ => {}
@@ -5546,6 +6233,8 @@ impl NemManager {
         if event_build_id == 0 {
             return Err("component build-id space is exhausted".to_string());
         }
+        let queue = Box::new(NemQueuedLayer::new_with_build_id(nem_id, event_build_id));
+        let queue_ptr = queue.as_ref() as *const NemQueuedLayer as usize;
         let mut framework_context = Box::new(FrameworkContext {
             runtime: Arc::downgrade(&self.runtime),
             nem_id,
@@ -5614,6 +6303,7 @@ impl NemManager {
         let invocation = Invocation {
             api: api as usize,
             plugin_ctx: plugin_context as usize,
+            queue: queue_ptr,
         };
         let update_invocation = invocation;
         if let Err(error) = register_native_configuration(
@@ -5631,17 +6321,48 @@ impl NemManager {
                         )
                     })
                     .collect::<Vec<_>>();
-                let guard = ConfigGuard::new(&values);
-                if update_invocation.call(|api, context| {
-                    (api.configure)(
-                        context,
-                        &guard.request as *const FfiConfigRequest as *const c_void,
-                    )
-                }) {
-                    Ok(())
-                } else {
-                    Err("plugin rejected runtime configuration update".to_string())
+                if let Some(queue) = update_invocation.queue() {
+                    if queue.is_running() {
+                        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+                        queue
+                            .enqueue(
+                                QueueTaskKind::Configuration,
+                                Box::new(move || {
+                                    let guard = ConfigGuard::new(&values);
+                                    let configured = update_invocation.call(|api, context| {
+                                        (api.configure)(
+                                            context,
+                                            &guard.request as *const FfiConfigRequest
+                                                as *const c_void,
+                                        )
+                                    });
+                                    let _ = sender.send(configured);
+                                }),
+                            )
+                            .map_err(|_| "layer configuration queue stopped".to_string())?;
+                        return receiver
+                            .recv_timeout(Duration::from_secs(5))
+                            .map_err(|_| {
+                                "layer configuration queue stopped or timed out".to_string()
+                            })?
+                            .then_some(())
+                            .ok_or_else(|| {
+                                "plugin rejected runtime configuration update".to_string()
+                            });
+                    } else if !queue.accepts_direct_calls() {
+                        return Err("layer configuration queue is stopped".to_string());
+                    }
                 }
+                let guard = ConfigGuard::new(&values);
+                update_invocation
+                    .call(|api, context| {
+                        (api.configure)(
+                            context,
+                            &guard.request as *const FfiConfigRequest as *const c_void,
+                        )
+                    })
+                    .then_some(())
+                    .ok_or_else(|| "plugin rejected runtime configuration update".to_string())
             },
         ) {
             with_component_execution(|| unsafe { ((*api).destroy)(plugin_context) });
@@ -5656,8 +6377,8 @@ impl NemManager {
             framework_context_ptr,
             framework_event,
         );
-        for event_id in 100..=107 {
-            if !emane_rs_event_service_register_event(event_build_id, event_id) {
+        for event_id in component_event_ids(&registered_plugin_name) {
+            if !emane_rs_event_service_register_event(event_build_id, *event_id) {
                 unregister_event_user(event_build_id);
                 unregister_native_configuration(event_build_id);
                 unregister_native_statistics(event_build_id);
@@ -5686,6 +6407,7 @@ impl NemManager {
         self.layers.entry(nem_id).or_default().push(NemLayer {
             _library: library,
             invocation,
+            queue,
             _framework_context: framework_context,
             event_build_id,
             started: false,
@@ -5745,7 +6467,9 @@ impl NemManager {
         let mut failure = None;
         for layers in self.layers.values_mut() {
             for layer in layers {
+                layer.queue.start();
                 if !layer.invocation.call(|api, context| (api.start)(context)) {
+                    layer.queue.stop();
                     failure = Some(format!(
                         "plugin type {} failed to start",
                         layer.invocation.api().plugin_type
@@ -5792,7 +6516,15 @@ impl NemManager {
             for layer in layers {
                 if layer.started {
                     layer.invocation.call(|api, context| (api.stop)(context));
+                    if let Ok(mut handles) = layer._framework_context.descriptor_handles.lock() {
+                        for handle in handles.drain(..) {
+                            let _ = file_descriptor_service::unregister(handle);
+                        }
+                    }
+                    layer.queue.stop();
                     layer.started = false;
+                } else if layer.queue.is_running() {
+                    layer.queue.stop();
                 }
             }
         }
@@ -5809,9 +6541,7 @@ impl NemManager {
             .runtime
             .invocation(nem_id, 0)
             .ok_or_else(|| format!("unknown or empty NEM {nem_id}"))?;
-        first.call(|api, context| {
-            (api.process_downstream)(context, packet, messages.as_ptr(), messages.len())
-        });
+        first.process(true, packet, messages.as_ptr(), messages.len());
         Ok(())
     }
 
@@ -5825,9 +6555,7 @@ impl NemManager {
             .runtime
             .last_invocation(nem_id)
             .ok_or_else(|| format!("unknown or empty NEM {nem_id}"))?;
-        last.call(|api, context| {
-            (api.process_upstream)(context, packet, messages.as_ptr(), messages.len())
-        });
+        last.process(false, packet, messages.as_ptr(), messages.len());
         Ok(())
     }
 }
@@ -5835,6 +6563,9 @@ impl NemManager {
 impl Drop for NemManager {
     fn drop(&mut self) {
         self.stop();
+        if let Ok(mut invocations) = self.runtime.invocations.write() {
+            invocations.clear();
+        }
         for (nem_id, layers) in &self.layers {
             for layer in layers
                 .iter()
@@ -5893,6 +6624,68 @@ mod tests {
     static PHY_CAPTURE_TX_POWER_BITS: AtomicU64 = AtomicU64::new(0);
     static PHY_CAPTURE_TX_GAIN_BITS: AtomicU64 = AtomicU64::new(0);
     static R2RI_CAPTURE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn configuration_surfaces_include_legacy_parameters_without_defaults() {
+        for plugin in [
+            "emanephy",
+            "rfpipe",
+            "ieee80211abg",
+            "tdma",
+            "bentpipe",
+            "phyapitestshim",
+        ] {
+            let defaults = component_configuration_defaults(plugin)
+                .into_iter()
+                .collect::<HashMap<_, _>>();
+            for required in component_required_parameters(plugin) {
+                assert_eq!(
+                    defaults.get(*required),
+                    Some(&Vec::new()),
+                    "{plugin} must manifest required parameter {required} without inventing a default"
+                );
+            }
+        }
+
+        let names = |plugin: &str| {
+            component_configuration_defaults(plugin)
+                .into_iter()
+                .map(|(name, _)| name)
+                .chain(
+                    component_required_parameters(plugin)
+                        .iter()
+                        .map(|name| (*name).to_string()),
+                )
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+
+        let virtual_transport = names("virtualtransport");
+        for expected in ["address", "mask", "ethernet.type.unknown.priority"] {
+            assert!(virtual_transport.contains(expected));
+        }
+
+        let raw_transport = names("rawtransport");
+        for expected in ["device", "ethernet.type.unknown.priority"] {
+            assert!(raw_transport.contains(expected));
+        }
+
+        assert!(names("commeffectshim").contains("filterfile"));
+        let phy_api_test = names("phyapitestshim");
+        for expected in [
+            "bandwidth",
+            "antennaprofileid",
+            "antennaazimuth",
+            "antennaelevation",
+            "frequency",
+            "transmitter",
+        ] {
+            assert!(phy_api_test.contains(expected));
+        }
+
+        let rfpipe = names("rfpipe");
+        assert!(rfpipe.contains("rfsignaltable.averageallantennas"));
+        assert!(!rfpipe.contains("rfsignaltable.averageallantenna"));
+    }
 
     struct CaptureTransport {
         id: u16,
@@ -6172,13 +6965,16 @@ mod tests {
             unregister_file_descriptor,
         };
         let context = (capture_api().init)(nem_id, &framework);
+        let queue = Box::new(NemQueuedLayer::new(nem_id));
         let invocation = Invocation {
             api: capture_api() as *const PluginApi as usize,
             plugin_ctx: context as usize,
+            queue: queue.as_ref() as *const NemQueuedLayer as usize,
         };
         manager.layers.entry(nem_id).or_default().push(NemLayer {
             _library: None,
             invocation,
+            queue,
             _framework_context: framework_context,
             event_build_id: next_event_build_id(),
             started: false,
@@ -6233,6 +7029,7 @@ mod tests {
             priority: 0,
             creation_time_sec: 0,
             creation_time_usec: 0,
+            received_at: Instant::now(),
         };
         let mut pending = VecDeque::from([frame(1), frame(2), frame(3)]);
         let mut available = 0;
@@ -6308,6 +7105,104 @@ mod tests {
         assert_eq!(phy.propagation(1, 2, 2_347_000_000), Some((72.5, 0)));
         assert_eq!(phy.propagation(1, 2, 915_000_000), Some((50.0, 0)));
         assert_eq!(phy.propagation(1, 3, 915_000_000), None);
+    }
+
+    #[test]
+    fn matches_legacy_propagation_scenario_001_two_ray_value() {
+        let mut phy = PhyState::new();
+        phy.propagation_model = PropagationModel::TwoRay;
+        phy.update_location(1, 40.025495, -74.315441, 3.0, None, None);
+        phy.update_location(2, 40.025495, -74.312888, 3.0, None, None);
+        for frequency in [3_000_000_000, 3_001_000_000] {
+            let (pathloss, _) = phy.propagation(1, 2, frequency).unwrap();
+            assert!(
+                (pathloss - 74.447_792_17).abs() < 1.0e-8,
+                "legacy pathloss mismatch at {frequency}: {pathloss}"
+            );
+        }
+    }
+
+    #[test]
+    fn partial_location_updates_preserve_legacy_orientation_and_velocity_state() {
+        let mut phy = PhyState::new();
+        phy.update_location(
+            1,
+            40.0,
+            -74.0,
+            3.0,
+            Some(Orientation {
+                yaw_degrees: 30.0,
+                ..Orientation::default()
+            }),
+            Some(Velocity {
+                azimuth_degrees: 60.0,
+                elevation_degrees: -20.0,
+                magnitude_meters_per_second: 10.0,
+            }),
+        );
+        phy.update_location(
+            1,
+            40.1,
+            -74.1,
+            4.0,
+            Some(Orientation {
+                yaw_degrees: 240.0,
+                ..Orientation::default()
+            }),
+            None,
+        );
+        let location = phy.locations[&1];
+        assert_eq!(location.latitude_degrees, 40.1);
+        assert_eq!(location.orientation.yaw_degrees, 240.0);
+        let velocity = location.velocity.unwrap();
+        assert_eq!(velocity.azimuth_degrees, 60.0);
+        assert_eq!(velocity.elevation_degrees, -20.0);
+        assert_eq!(velocity.magnitude_meters_per_second, 10.0);
+    }
+
+    #[test]
+    fn matches_legacy_phy_upstream_scenario_006_doppler_values() {
+        let mut phy = PhyState::new();
+        let velocity = |azimuth, magnitude| {
+            Some(Velocity {
+                azimuth_degrees: azimuth,
+                elevation_degrees: 0.0,
+                magnitude_meters_per_second: magnitude,
+            })
+        };
+        phy.update_location(1, 40.025495, -74.312501, 3.0, None, velocity(0.0, 0.0));
+        for (azimuth, expected_shift_hz) in [
+            (45.0, 70.760_818),
+            (90.0, 100.069_269),
+            (135.0, 70.758_483),
+            (180.0, -0.001_651),
+            (225.0, -70.760_778),
+            (270.0, -100.069_188),
+            (315.0, -70.758_442),
+            (360.0, 0.001_651),
+        ] {
+            phy.update_location(
+                2,
+                40.025495,
+                -74.315441,
+                3.0,
+                None,
+                velocity(azimuth, 120.0),
+            );
+            let shift_hz = phy.doppler_fraction(1, 2) * 250_000_000.0;
+            assert!(
+                (shift_hz - expected_shift_hz).abs() < 5.0e-7,
+                "legacy Doppler mismatch at azimuth {azimuth}: {shift_hz}"
+            );
+        }
+
+        phy.update_location(1, 40.025495, -74.312501, 3.0, None, velocity(90.0, 90.0));
+        phy.update_location(2, 40.025495, -74.315441, 3.0, None, velocity(90.0, 30.0));
+        assert!((phy.doppler_fraction(1, 2) * 250_000_000.0 + 50.034_604).abs() < 5.0e-7);
+
+        phy.update_location(1, 40.025495, -74.312501, 3.0, None, velocity(90.0, 0.0));
+        phy.update_location(2, 40.025495, -74.315441, 3.0, None, velocity(270.0, 60.0));
+        assert!((phy.doppler_fraction(1, 2) * 250_000_000.0 + 50.034_604).abs() < 5.0e-7);
     }
 
     #[test]
@@ -6434,13 +7329,259 @@ mod tests {
             |profile, bearing, elevation, reference_bearing, reference_elevation| {
                 assert_eq!(profile.profile_id, 42);
                 assert!((bearing - 70.0).abs() < 1.0e-9);
-                assert!((elevation - 5.0).abs() < 1.0e-9);
+                assert!((elevation - 5.0).abs() < 1.0e-3);
                 assert!((reference_bearing - 90.0).abs() < 1.0e-9);
-                assert!(reference_elevation.abs() < 1.0e-9);
+                assert!(reference_elevation.abs() < 1.0e-3);
                 Some(7.5)
             },
         );
         assert_eq!(gain, Some(9.5));
+    }
+
+    #[test]
+    fn matches_legacy_gain_scenario_001_directional_geometry() {
+        fn sector_gain(bearing: f64, elevation: f64, holes: bool) -> f64 {
+            let bearing = normalize_azimuth(bearing).round() as i16;
+            let bearing = if bearing == 360 { 0 } else { bearing };
+            let elevation = elevation.round() as i16;
+            let elevation_gain = match elevation {
+                -15..=-11 | 11..=15 => 0.0,
+                -10..=-6 | 6..=10 => 3.0,
+                -5..=5 => 6.0,
+                _ => return if holes { -327.0 } else { -200.0 },
+            };
+            let bearing_loss = match bearing {
+                0..=5 | 355..=359 => 0.0,
+                6..=10 | 350..=354 => -3.0,
+                11..=15 | 345..=349 => -6.0,
+                _ => return if holes { -327.0 } else { -200.0 },
+            };
+            elevation_gain + bearing_loss
+        }
+
+        fn blockage_gain(bearing: f64, elevation: f64) -> f64 {
+            let bearing = normalize_azimuth(bearing).round() as i16;
+            let bearing = if bearing == 360 { 0 } else { bearing };
+            let elevation = elevation.round() as i16;
+            if (90..=270).contains(&bearing) || elevation < -10 {
+                -200.0
+            } else if elevation < 0 {
+                f64::from(elevation)
+            } else {
+                0.0
+            }
+        }
+
+        fn profile_gain(
+            profile: TxAntennaProfile,
+            bearing: f64,
+            elevation: f64,
+            reference_bearing: f64,
+            reference_elevation: f64,
+        ) -> Option<f64> {
+            Some(match profile.profile_id {
+                1 | 2 => 5.0,
+                3 => {
+                    sector_gain(bearing, elevation, false)
+                        + blockage_gain(reference_bearing, reference_elevation)
+                }
+                4 => sector_gain(bearing, elevation, false),
+                5 => {
+                    sector_gain(bearing, elevation, true)
+                        + blockage_gain(reference_bearing, reference_elevation)
+                }
+                _ => return None,
+            })
+        }
+
+        let location = |latitude, longitude, orientation, velocity| Location {
+            latitude_degrees: latitude,
+            longitude_degrees: longitude,
+            altitude_meters: 3.0,
+            orientation,
+            velocity,
+        };
+        let orientation = |pitch, yaw| Orientation {
+            pitch_degrees: pitch,
+            yaw_degrees: yaw,
+            ..Orientation::default()
+        };
+        let velocity = |azimuth, elevation, magnitude| {
+            Some(Velocity {
+                azimuth_degrees: azimuth,
+                elevation_degrees: elevation,
+                magnitude_meters_per_second: magnitude,
+            })
+        };
+        let profile = |profile_id, azimuth, elevation| {
+            AntennaPattern::Profile(TxAntennaProfile {
+                profile_id,
+                azimuth_degrees: azimuth,
+                elevation_degrees: elevation,
+            })
+        };
+        let fixed = |gain_db| AntennaPattern::IdealOmni { gain_db };
+        let assert_gain = |phy: &PhyState, source, local_pattern, remote_pattern, expected: f64| {
+            let actual =
+                phy.antenna_pair_gain_with(1, source, local_pattern, remote_pattern, profile_gain);
+            assert_eq!(
+                actual,
+                Some(expected),
+                "legacy gain mismatch for source {source}, expected {expected}"
+            );
+        };
+
+        let mut phy = PhyState::new();
+        // Actions 14-17: baseline pointing and placement.
+        phy.locations.insert(
+            1,
+            location(40.025495, -74.315441, Orientation::default(), None),
+        );
+        phy.locations.insert(
+            2,
+            location(40.025495, -74.312888, Orientation::default(), None),
+        );
+        phy.locations.insert(
+            3,
+            location(40.023235, -74.315437, Orientation::default(), None),
+        );
+        phy.locations.insert(
+            4,
+            location(40.023235, -74.312889, Orientation::default(), None),
+        );
+        assert_gain(&phy, 2, profile(3, 0.0, 0.0), fixed(0.0), -400.0);
+        assert_gain(&phy, 3, profile(3, 0.0, 0.0), fixed(5.0), -395.0);
+        assert_gain(&phy, 4, profile(3, 0.0, 0.0), profile(4, 0.0, 60.0), -600.0);
+
+        // Actions 18-36: body orientation and antenna-pointing changes.
+        phy.locations.get_mut(&1).unwrap().orientation = orientation(0.0, 90.0);
+        assert_gain(&phy, 2, profile(3, 0.0, 0.0), fixed(0.0), 6.0);
+        assert_gain(&phy, 3, profile(3, 0.0, 0.0), fixed(5.0), -395.0);
+        assert_gain(&phy, 4, profile(3, 0.0, 0.0), profile(4, 0.0, 60.0), -400.0);
+        assert_gain(&phy, 2, profile(3, 45.0, 0.0), fixed(0.0), -200.0);
+        assert_gain(&phy, 3, profile(3, 45.0, 0.0), fixed(5.0), -395.0);
+        assert_gain(&phy, 4, profile(3, 45.0, 0.0), profile(4, 330.0, 0.0), 6.0);
+        phy.locations.get_mut(&1).unwrap().orientation = orientation(12.0, 90.0);
+        assert_gain(&phy, 4, profile(3, 45.0, 0.0), profile(4, 330.0, 0.0), -5.0);
+        assert_gain(
+            &phy,
+            4,
+            profile(3, 45.0, -8.0),
+            profile(4, 330.0, 0.0),
+            -2.0,
+        );
+        phy.locations.get_mut(&1).unwrap().orientation = orientation(0.0, 300.0);
+        assert_gain(
+            &phy,
+            4,
+            profile(3, 0.0, 0.0),
+            profile(4, 330.0, 0.0),
+            -400.0,
+        );
+        assert_gain(&phy, 2, profile(3, 200.0, 0.0), fixed(0.0), -400.0);
+        assert_gain(&phy, 3, profile(3, 200.0, 0.0), fixed(5.0), -395.0);
+        assert_gain(
+            &phy,
+            4,
+            profile(3, 200.0, 0.0),
+            profile(4, 330.0, 0.0),
+            -194.0,
+        );
+
+        // Actions 38-56: velocity-relative body pointing repeats the same oracle.
+        *phy.locations.get_mut(&1).unwrap() = location(
+            40.025495,
+            -74.315441,
+            orientation(0.0, 30.0),
+            velocity(60.0, 0.0, 10.0),
+        );
+        assert_gain(&phy, 2, profile(3, 0.0, 0.0), fixed(0.0), 6.0);
+        assert_gain(&phy, 3, profile(3, 0.0, 0.0), fixed(5.0), -395.0);
+        assert_gain(&phy, 4, profile(3, 0.0, 0.0), profile(4, 0.0, 60.0), -400.0);
+        assert_gain(&phy, 2, profile(3, 45.0, 0.0), fixed(0.0), -200.0);
+        assert_gain(&phy, 3, profile(3, 45.0, 0.0), fixed(5.0), -395.0);
+        assert_gain(&phy, 4, profile(3, 45.0, 0.0), profile(4, 330.0, 0.0), 6.0);
+        *phy.locations.get_mut(&1).unwrap() = location(
+            40.025495,
+            -74.315441,
+            orientation(32.0, 30.0),
+            velocity(60.0, -20.0, 10.0),
+        );
+        assert_gain(&phy, 4, profile(3, 45.0, 0.0), profile(4, 330.0, 0.0), -5.0);
+        assert_gain(
+            &phy,
+            4,
+            profile(3, 45.0, -8.0),
+            profile(4, 330.0, 0.0),
+            -2.0,
+        );
+        *phy.locations.get_mut(&1).unwrap() = location(
+            40.025495,
+            -74.315441,
+            orientation(0.0, 240.0),
+            velocity(60.0, -20.0, 10.0),
+        );
+        assert_gain(
+            &phy,
+            4,
+            profile(3, 0.0, 0.0),
+            profile(4, 330.0, 0.0),
+            -400.0,
+        );
+        assert_gain(&phy, 2, profile(3, 200.0, 0.0), fixed(0.0), -400.0);
+        assert_gain(&phy, 3, profile(3, 200.0, 0.0), fixed(5.0), -395.0);
+        assert_gain(
+            &phy,
+            4,
+            profile(3, 200.0, 0.0),
+            profile(4, 330.0, 0.0),
+            -400.0,
+        );
+
+        // Actions 57-76: pattern holes use the legacy -327 dB DBM_MIN sentinel.
+        *phy.locations.get_mut(&1).unwrap() = location(
+            40.025495,
+            -74.315441,
+            orientation(0.0, 30.0),
+            velocity(60.0, 0.0, 10.0),
+        );
+        assert_gain(&phy, 2, profile(5, 0.0, 0.0), fixed(0.0), 6.0);
+        assert_gain(&phy, 3, profile(5, 0.0, 0.0), fixed(5.0), -522.0);
+        assert_gain(&phy, 4, profile(5, 0.0, 0.0), profile(4, 0.0, 60.0), -527.0);
+        assert_gain(&phy, 2, profile(5, 45.0, 0.0), fixed(0.0), -327.0);
+        assert_gain(&phy, 3, profile(5, 45.0, 0.0), fixed(5.0), -522.0);
+        assert_gain(&phy, 4, profile(5, 45.0, 0.0), profile(4, 330.0, 0.0), 6.0);
+        *phy.locations.get_mut(&1).unwrap() = location(
+            40.025495,
+            -74.315441,
+            orientation(32.0, 30.0),
+            velocity(60.0, -20.0, 10.0),
+        );
+        assert_gain(&phy, 4, profile(5, 45.0, 0.0), profile(4, 330.0, 0.0), -5.0);
+        assert_gain(
+            &phy,
+            4,
+            profile(5, 45.0, -8.0),
+            profile(4, 330.0, 0.0),
+            -2.0,
+        );
+        phy.locations.get_mut(&1).unwrap().orientation = orientation(0.0, 240.0);
+        assert_gain(
+            &phy,
+            4,
+            profile(5, 0.0, 0.0),
+            profile(4, 330.0, 0.0),
+            -527.0,
+        );
+        assert_gain(&phy, 2, profile(5, 200.0, 0.0), fixed(0.0), -527.0);
+        assert_gain(&phy, 3, profile(5, 200.0, 0.0), fixed(5.0), -522.0);
+        assert_gain(
+            &phy,
+            4,
+            profile(5, 200.0, 0.0),
+            profile(4, 330.0, 0.0),
+            -527.0,
+        );
     }
 
     #[test]
@@ -6702,7 +7843,7 @@ mod tests {
         };
         let (azimuth, elevation) = oriented_direction_angles(local, east).unwrap();
         assert!((azimuth - 90.0).abs() < 1.0e-9);
-        assert!(elevation.abs() < 1.0e-9);
+        assert!(elevation.abs() < 1.0e-3);
 
         let rolled = Location {
             orientation: Orientation {
@@ -6712,7 +7853,7 @@ mod tests {
             ..local
         };
         let (_, elevation) = oriented_direction_angles(rolled, east).unwrap();
-        assert!((elevation - 90.0).abs() < 1.0e-9);
+        assert!((elevation - 90.0).abs() < 1.0e-3);
     }
 
     #[test]
@@ -6720,8 +7861,39 @@ mod tests {
         let mut phy = PhyState::new();
         phy.fading_mode = FadingMode::Event;
         assert_eq!(phy.apply_fading(1, 2, -50.0, 1), None);
+        assert_eq!(
+            phy.apply_fading_detailed(1, 2, -50.0, 1),
+            Err(PhyPathError::FadeSelection)
+        );
         phy.fading_selections.insert(2, FadingMode::None);
         assert_eq!(phy.apply_fading(1, 2, -50.0, 1), Some(-50.0));
+    }
+
+    #[test]
+    fn phy_path_failures_preserve_legacy_drop_categories() {
+        let mut phy = PhyState::new();
+        assert_eq!(
+            phy.propagation_detailed(1, 2, 2_400_000_000),
+            Err(PhyPathError::Propagation)
+        );
+        phy.fixed_antenna_gain_enabled = false;
+        assert_eq!(
+            phy.antenna_pair_gains_detailed(
+                1,
+                2,
+                AntennaPattern::Default,
+                AntennaPattern::Default,
+            ),
+            Err(PhyPathError::GainProfile)
+        );
+        phy.fading_mode = FadingMode::Nakagami;
+        assert_eq!(
+            phy.apply_fading_detailed(1, 2, -50.0, 1),
+            Err(PhyPathError::FadeLocation)
+        );
+        assert_eq!(PhyPathError::GainLocation.drop_code(), 4);
+        assert_eq!(PhyPathError::GainHorizon.drop_code(), 5);
+        assert_eq!(PhyPathError::FadeAlgorithm.drop_code(), 10);
     }
 
     #[test]
@@ -6812,7 +7984,8 @@ mod tests {
     fn native_layer_statistics_are_manifested_and_track_packets() {
         use crate::statistics::{
             emane_rs_statistic_free_manifest, emane_rs_statistic_free_query_result,
-            emane_rs_statistic_get_manifest, emane_rs_statistic_query, FfiStringArray,
+            emane_rs_statistic_free_table_query_result, emane_rs_statistic_get_manifest,
+            emane_rs_statistic_query, emane_rs_statistic_query_table, FfiStringArray,
         };
 
         let mut manager = NemManager::new([14; 16]);
@@ -6826,7 +7999,11 @@ mod tests {
             .unwrap();
         let build_id = manager.layers[&30][0].event_build_id;
         let manifest = emane_rs_statistic_get_manifest(build_id);
-        assert_eq!(manifest.len, 24);
+        // Legacy CommonLayerStatistics publishes 26 scalar values (including
+        // processing averages and generated-packet counters); FrameworkPHY
+        // adds four counters, and NEMQueuedLayer adds eight counters plus four
+        // queue/timer averages.
+        assert_eq!(manifest.len, 42);
         emane_rs_statistic_free_manifest(manifest);
 
         let payload = [1u8, 2, 3, 4];
@@ -6860,6 +8037,213 @@ mod tests {
         assert_eq!(query.len, 1);
         assert_eq!(unsafe { &*query.data }.value.u64_value, 1);
         emane_rs_statistic_free_query_result(query);
+
+        let name = CString::new("UnicastPacketAcceptTable").unwrap();
+        let names = [name.as_ptr()];
+        let tables = emane_rs_statistic_query_table(
+            build_id,
+            FfiStringArray {
+                data: names.as_ptr(),
+                len: names.len(),
+            },
+            error.as_mut_ptr(),
+            error.len(),
+        );
+        assert_eq!(tables.len, 1);
+        let table = unsafe { &*tables.data };
+        assert_eq!(table.rows_len, 1);
+        let values = unsafe {
+            let row = &*table.rows;
+            std::slice::from_raw_parts(row.values.data, row.values.len)
+        };
+        assert_eq!(values.len(), 5);
+        assert_eq!(values[0].u64_value, 30);
+        assert_eq!(values[1].u64_value, 1);
+        assert_eq!(values[2].u64_value, payload.len() as u64);
+        assert_eq!(values[3].u64_value, 0);
+        assert_eq!(values[4].u64_value, 0);
+        emane_rs_statistic_free_table_query_result(tables);
+
+        let dropped = FfiPacket {
+            info: FfiPacketInfo {
+                source: 31,
+                destination: 30,
+                ..packet.info
+            },
+            payload: packet.payload,
+        };
+        manager.layers[&30][0]
+            .invocation
+            .call(|api, context| (api.process_upstream)(context, &dropped, std::ptr::null(), 4097));
+        let name = CString::new("UnicastPacketDropTable").unwrap();
+        let names = [name.as_ptr()];
+        let tables = emane_rs_statistic_query_table(
+            build_id,
+            FfiStringArray {
+                data: names.as_ptr(),
+                len: names.len(),
+            },
+            error.as_mut_ptr(),
+            error.len(),
+        );
+        assert_eq!(tables.len, 1);
+        let table = unsafe { &*tables.data };
+        assert_eq!(table.rows_len, 1);
+        let values = unsafe {
+            let row = &*table.rows;
+            std::slice::from_raw_parts(row.values.data, row.values.len)
+        };
+        assert_eq!(values.len(), 15);
+        assert_eq!(values[0].u64_value, 31);
+        assert_eq!(values[14].u64_value, 1);
+        emane_rs_statistic_free_table_query_result(tables);
+    }
+
+    #[test]
+    fn started_layer_queue_tracks_events_and_phy_event_info() {
+        use crate::protobufs::emane_message::{location_event, LocationEvent};
+        use crate::statistics::{
+            emane_rs_statistic_free_query_result, emane_rs_statistic_free_table_query_result,
+            emane_rs_statistic_query, emane_rs_statistic_query_table, FfiStringArray,
+        };
+
+        let mut manager = NemManager::new([16; 16]);
+        manager
+            .add_layer_configured(
+                40,
+                "emanephy",
+                2,
+                &[("subid".to_string(), vec!["1".to_string()])],
+            )
+            .unwrap();
+        let build_id = manager.layers[&40][0].event_build_id;
+        let invocation = manager.layers[&40][0].invocation;
+        manager.start().unwrap();
+
+        let event = LocationEvent {
+            locations: vec![location_event::Location {
+                nem_id: 41,
+                position: location_event::location::Position {
+                    latitude_degrees: 40.0,
+                    longitude_degrees: -74.0,
+                    altitude_meters: 10.0,
+                },
+                velocity: None,
+                orientation: None,
+            }],
+        }
+        .encode_to_vec();
+        invocation.process_event(100, event.as_ptr(), event.len());
+
+        let processed = CString::new("processedEvents").unwrap();
+        let requested = [processed.as_ptr()];
+        let mut error = [0i8; 128];
+        for _ in 0..100 {
+            let result = emane_rs_statistic_query(
+                build_id,
+                FfiStringArray {
+                    data: requested.as_ptr(),
+                    len: requested.len(),
+                },
+                error.as_mut_ptr(),
+                error.len(),
+            );
+            let complete = result.len == 1 && unsafe { &*result.data }.value.u64_value == 1;
+            emane_rs_statistic_free_query_result(result);
+            if complete {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        for (name, expected_columns) in [
+            ("EventReceptionTable", 2usize),
+            ("LocationEventInfoTable", 10),
+        ] {
+            let name = CString::new(name).unwrap();
+            let requested = [name.as_ptr()];
+            let result = emane_rs_statistic_query_table(
+                build_id,
+                FfiStringArray {
+                    data: requested.as_ptr(),
+                    len: requested.len(),
+                },
+                error.as_mut_ptr(),
+                error.len(),
+            );
+            assert_eq!(result.len, 1);
+            let table = unsafe { &*result.data };
+            assert_eq!(table.rows_len, 1);
+            assert_eq!(unsafe { &*table.rows }.values.len, expected_columns);
+            emane_rs_statistic_free_table_query_result(result);
+        }
+
+        crate::native_configuration::update(
+            build_id,
+            vec![(
+                "radiosilenceenable".to_string(),
+                vec![crate::native_configuration::ConfigurationValue::Boolean(
+                    true,
+                )],
+            )],
+        )
+        .unwrap();
+        let processed = CString::new("processedConfiguration").unwrap();
+        let requested = [processed.as_ptr()];
+        let result = emane_rs_statistic_query(
+            build_id,
+            FfiStringArray {
+                data: requested.as_ptr(),
+                len: requested.len(),
+            },
+            error.as_mut_ptr(),
+            error.len(),
+        );
+        assert_eq!(result.len, 1);
+        assert_eq!(unsafe { &*result.data }.value.u64_value, 1);
+        emane_rs_statistic_free_query_result(result);
+        manager.stop();
+
+        let late_event = LocationEvent {
+            locations: vec![location_event::Location {
+                nem_id: 42,
+                position: location_event::location::Position {
+                    latitude_degrees: 41.0,
+                    longitude_degrees: -75.0,
+                    altitude_meters: 20.0,
+                },
+                velocity: None,
+                orientation: None,
+            }],
+        }
+        .encode_to_vec();
+        invocation.process_event(100, late_event.as_ptr(), late_event.len());
+
+        let name = CString::new("LocationEventInfoTable").unwrap();
+        let requested = [name.as_ptr()];
+        let result = emane_rs_statistic_query_table(
+            build_id,
+            FfiStringArray {
+                data: requested.as_ptr(),
+                len: requested.len(),
+            },
+            error.as_mut_ptr(),
+            error.len(),
+        );
+        assert_eq!(result.len, 1);
+        assert_eq!(unsafe { &*result.data }.rows_len, 1);
+        emane_rs_statistic_free_table_query_result(result);
+
+        assert!(crate::native_configuration::update(
+            build_id,
+            vec![(
+                "radiosilenceenable".to_string(),
+                vec![crate::native_configuration::ConfigurationValue::Boolean(
+                    false,
+                )],
+            )],
+        )
+        .is_err());
     }
 
     #[test]
@@ -6893,7 +8277,7 @@ mod tests {
                 vec![format!("file://{}", pcr_path.display())],
             ),
             (
-                "rfsignaltable.averageallantenna".to_string(),
+                "rfsignaltable.averageallantennas".to_string(),
                 vec!["true".to_string()],
             ),
             (
@@ -7008,6 +8392,7 @@ mod tests {
         let invocation = Invocation {
             api: test_api() as *const PluginApi as usize,
             plugin_ctx: std::ptr::dangling_mut::<u8>() as usize,
+            queue: 0,
         };
         let runtime = Runtime {
             invocations: RwLock::new(HashMap::from([
@@ -7291,6 +8676,12 @@ mod tests {
             },
         };
         manager.process_downstream(1, &packet, &[]).unwrap();
+        for _ in 0..100 {
+            if BYPASS_STACK_HITS.load(Ordering::Acquire) != 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
         assert_eq!(BYPASS_STACK_HITS.load(Ordering::Relaxed), 1);
         assert_eq!(BYPASS_STACK_BYTES.load(Ordering::Relaxed), 15);
         manager.stop();

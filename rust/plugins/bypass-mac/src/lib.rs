@@ -5,6 +5,11 @@ use emane_plugin_api::{
 };
 use std::ffi::c_void;
 use std::sync::OnceLock;
+use std::time::Instant;
+
+fn elapsed_microseconds(begin: Instant) -> u64 {
+    begin.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
+}
 
 struct BypassMac {
     id: u16,
@@ -34,7 +39,7 @@ extern "C" fn init(id: u16, framework: *const FfiFrameworkService) -> *mut c_voi
     Box::into_raw(Box::new(BypassMac {
         id,
         framework,
-        counters: CommonLayerCounters::register(framework),
+        counters: CommonLayerCounters::register_with_drop_labels(framework, "", &["Reg Id"], &[]),
         sequence: 0,
     }))
     .cast()
@@ -68,6 +73,7 @@ extern "C" fn upstream(
     let Some(mac) = (unsafe { (plugin as *mut BypassMac).as_ref() }) else {
         return;
     };
+    let begin = Instant::now();
     if packet.is_null() {
         (mac.framework.send_upstream_control)(mac.framework.framework_ctx, mac.id, messages, count);
         return;
@@ -76,8 +82,9 @@ extern "C" fn upstream(
         return;
     };
     let packet_ref = unsafe { &*packet };
-    mac.counters.upstream_rx(
+    mac.counters.upstream_rx_packet(
         mac.framework,
+        packet_ref.info.source,
         packet_ref.info.destination,
         packet_ref.payload.len,
     );
@@ -91,8 +98,12 @@ extern "C" fn upstream(
             .is_some_and(|header| header.registration_id == MAC_REGISTRATION_BYPASS)
     });
     if !valid {
-        mac.counters
-            .upstream_drop(mac.framework, packet_ref.info.destination);
+        mac.counters.upstream_drop_packet(
+            mac.framework,
+            packet_ref.info.source,
+            packet_ref.info.destination,
+            1,
+        );
         return;
     }
     let outgoing: Vec<_> = messages
@@ -100,17 +111,19 @@ extern "C" fn upstream(
         .copied()
         .filter(|message| message.msg_type != CONTROL_MODEL_HEADER)
         .collect();
+    mac.counters.upstream_tx_packet(
+        mac.framework,
+        packet_ref.info.source,
+        packet_ref.info.destination,
+        packet_ref.payload.len,
+        elapsed_microseconds(begin),
+    );
     (mac.framework.send_upstream_packet)(
         mac.framework.framework_ctx,
         mac.id,
         packet,
         outgoing.as_ptr(),
         outgoing.len(),
-    );
-    mac.counters.upstream_tx(
-        mac.framework,
-        packet_ref.info.destination,
-        packet_ref.payload.len,
     );
 }
 
@@ -123,6 +136,7 @@ extern "C" fn downstream(
     let Some(mac) = (unsafe { (plugin as *mut BypassMac).as_mut() }) else {
         return;
     };
+    let begin = Instant::now();
     if packet.is_null() {
         (mac.framework.send_downstream_control)(
             mac.framework.framework_ctx,
@@ -136,8 +150,9 @@ extern "C" fn downstream(
         return;
     };
     let packet_ref = unsafe { &*packet };
-    mac.counters.downstream_rx(
+    mac.counters.downstream_rx_packet(
         mac.framework,
+        packet_ref.info.source,
         packet_ref.info.destination,
         packet_ref.payload.len,
     );
@@ -163,17 +178,20 @@ extern "C" fn downstream(
             len: header.len(),
         },
     });
+    mac.counters.downstream_tx_packet(
+        mac.framework,
+        packet_ref.info.source,
+        packet_ref.info.destination,
+        packet_ref.payload.len,
+        elapsed_microseconds(begin),
+        false,
+    );
     (mac.framework.send_downstream_packet)(
         mac.framework.framework_ctx,
         mac.id,
         packet,
         outgoing.as_ptr(),
         outgoing.len(),
-    );
-    mac.counters.downstream_tx(
-        mac.framework,
-        packet_ref.info.destination,
-        packet_ref.payload.len,
     );
 }
 

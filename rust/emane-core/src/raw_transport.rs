@@ -81,14 +81,7 @@ impl PacketSocket {
     }
 
     fn send(&self, packet: &[u8]) -> io::Result<usize> {
-        let sent = unsafe {
-            libc::send(
-                self.as_raw_fd(),
-                packet.as_ptr().cast(),
-                packet.len(),
-                0,
-            )
-        };
+        let sent = unsafe { libc::send(self.as_raw_fd(), packet.as_ptr().cast(), packet.len(), 0) };
         if sent < 0 {
             Err(io::Error::last_os_error())
         } else {

@@ -44,7 +44,6 @@ pub mod protobufs {
     }
 }
 
-/// Strangler Fig: Phase 1
 /// Calculates the Two-Ray pathloss.
 #[no_mangle]
 pub extern "C" fn emane_rs_tworay_pathloss(
@@ -72,7 +71,6 @@ pub extern "C" fn emane_rs_tworay_pathloss(
     }
 }
 
-/// Strangler Fig: Phase 1
 /// Calculates the FreeSpace pathloss for a single frequency.
 #[no_mangle]
 pub extern "C" fn emane_rs_freespace_pathloss_single(d_distance: f64, freq_hz: f64) -> f64 {
@@ -88,7 +86,6 @@ pub extern "C" fn emane_rs_freespace_pathloss_single(d_distance: f64, freq_hz: f
     }
 }
 
-/// Strangler Fig: Phase 1
 /// Stateful Lognormal Fading Algorithm
 use rand::rngs::StdRng;
 use rand::SeedableRng;

@@ -1,7 +1,7 @@
 use emane_plugin_api::{
-    CommonLayerCounters, FfiConfigItem, FfiConfigRequest, FfiControlMessage, FfiFrameworkService,
-    FfiPacket, FfiPacketInfo, FfiSlice, PluginApi, TxAntennaProfile, TxFrequencySegment,
-    TxFrequencySegments, TxProperties, TxTransmitter, TxTransmitters, CONTROL_TX_ANTENNA_PROFILE,
+    FfiConfigItem, FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket,
+    FfiPacketInfo, FfiSlice, PluginApi, TxAntennaProfile, TxFrequencySegment, TxFrequencySegments,
+    TxProperties, TxTransmitter, TxTransmitters, CONTROL_TX_ANTENNA_PROFILE,
     CONTROL_TX_FREQUENCY_SEGMENTS, CONTROL_TX_PROPERTIES, CONTROL_TX_TRANSMITTERS,
     PLUGIN_ABI_VERSION,
 };
@@ -22,7 +22,6 @@ struct FrequencySegment {
 struct PhyApiTest {
     id: u16,
     framework: FfiFrameworkService,
-    counters: CommonLayerCounters,
     packet_size: u16,
     interval_microseconds: u64,
     destination: u16,
@@ -122,7 +121,6 @@ extern "C" fn init(id: u16, framework: *const FfiFrameworkService) -> *mut c_voi
     Box::into_raw(Box::new(PhyApiTest {
         id,
         framework,
-        counters: CommonLayerCounters::register(framework),
         packet_size: 128,
         interval_microseconds: 1_000_000,
         destination: BROADCAST_NEM,
@@ -435,9 +433,6 @@ extern "C" fn timed(plugin: *mut c_void, _: u64, event_id: u32, _: *const u8, _:
         controls.as_ptr(),
         controls.len(),
     );
-    state
-        .counters
-        .downstream_tx(state.framework, packet.info.destination, packet.payload.len);
     schedule_next(state);
 }
 

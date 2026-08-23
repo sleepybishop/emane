@@ -49,8 +49,9 @@ extern "C" fn process_upstream(
         return;
     };
     if let Some(packet) = unsafe { packet.as_ref() } {
-        plugin.counters.upstream_rx(
+        plugin.counters.upstream_rx_packet(
             plugin.framework,
+            packet.info.source,
             packet.info.destination,
             packet.payload.len,
         );
@@ -63,10 +64,12 @@ extern "C" fn process_upstream(
         count,
     );
     if let Some(packet) = unsafe { packet.as_ref() } {
-        plugin.counters.upstream_tx(
+        plugin.counters.upstream_tx_packet(
             plugin.framework,
+            packet.info.source,
             packet.info.destination,
             packet.payload.len,
+            0,
         );
     }
 }
@@ -81,8 +84,9 @@ extern "C" fn process_downstream(
         return;
     };
     if let Some(packet) = unsafe { packet.as_ref() } {
-        plugin.counters.downstream_rx(
+        plugin.counters.downstream_rx_packet(
             plugin.framework,
+            packet.info.source,
             packet.info.destination,
             packet.payload.len,
         );
@@ -95,10 +99,13 @@ extern "C" fn process_downstream(
         count,
     );
     if let Some(packet) = unsafe { packet.as_ref() } {
-        plugin.counters.downstream_tx(
+        plugin.counters.downstream_tx_packet(
             plugin.framework,
+            packet.info.source,
             packet.info.destination,
             packet.payload.len,
+            0,
+            false,
         );
     }
 }

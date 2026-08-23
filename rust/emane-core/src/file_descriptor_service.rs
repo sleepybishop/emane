@@ -1,3 +1,4 @@
+use crate::nem_queued_layer::{NemQueuedLayer, QueueTaskKind};
 use emane_plugin_api::FfiFileDescriptorCallback;
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -24,6 +25,7 @@ pub fn register(
     interests: u32,
     callback_context: *mut c_void,
     callback: FfiFileDescriptorCallback,
+    queue: usize,
 ) -> Option<u64> {
     if fd < 0 || interests == 0 || interests & !7 != 0 {
         return None;
@@ -66,9 +68,23 @@ pub fn register(
                     events |= DESCRIPTOR_EXCEPTION;
                 }
                 if events != 0 && !worker_cancel.load(Ordering::Acquire) {
-                    crate::nem_manager::with_component_execution(|| {
-                        callback(callback_context as *mut c_void, fd, events);
-                    });
+                    let operation = move || {
+                        crate::nem_manager::with_component_execution(|| {
+                            callback(callback_context as *mut c_void, fd, events);
+                        });
+                    };
+                    let queue = (queue != 0).then(|| unsafe { &*(queue as *const NemQueuedLayer) });
+                    if let Some(queue) = queue {
+                        if let Err(operation) =
+                            queue.enqueue(QueueTaskKind::FileDescriptor, Box::new(operation))
+                        {
+                            if queue.accepts_direct_calls() {
+                                operation();
+                            }
+                        }
+                    } else {
+                        operation();
+                    }
                 }
                 descriptor.revents = 0;
             }
@@ -122,6 +138,7 @@ mod tests {
             DESCRIPTOR_READ,
             &calls as *const AtomicUsize as *mut c_void,
             ready,
+            0,
         )
         .unwrap();
         let byte = [1u8];

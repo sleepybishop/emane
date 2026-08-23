@@ -1,7 +1,6 @@
 use emane_plugin_api::{
-    CommonLayerCounters, FfiConfigItem, FfiConfigRequest, FfiControlMessage, FfiFrameworkService,
-    FfiPacket, FfiSlice, PluginApi, TimingAnalysisHeader, CONTROL_TIMING_ANALYSIS_HEADER,
-    PLUGIN_ABI_VERSION,
+    FfiConfigItem, FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket, FfiSlice,
+    PluginApi, TimingAnalysisHeader, CONTROL_TIMING_ANALYSIS_HEADER, PLUGIN_ABI_VERSION,
 };
 use std::collections::VecDeque;
 use std::ffi::{c_void, CStr};
@@ -21,7 +20,6 @@ struct Entry {
 struct TimingAnalysis {
     id: u16,
     framework: FfiFrameworkService,
-    counters: CommonLayerCounters,
     max_queue_size: u32,
     packet_id: u16,
     entries: VecDeque<Entry>,
@@ -56,7 +54,6 @@ extern "C" fn init(id: u16, framework: *const FfiFrameworkService) -> *mut c_voi
     Box::into_raw(Box::new(TimingAnalysis {
         id,
         framework,
-        counters: CommonLayerCounters::register(framework),
         max_queue_size: 0,
         packet_id: 0,
         entries: VecDeque::new(),
@@ -151,12 +148,6 @@ extern "C" fn upstream(
         );
         return;
     }
-    let packet_ref = unsafe { &*packet };
-    state.counters.upstream_rx(
-        state.framework,
-        packet_ref.info.destination,
-        packet_ref.payload.len,
-    );
     if let Some(header) = incoming.iter().find_map(|message| {
         if message.msg_type != CONTROL_TIMING_ANALYSIS_HEADER || message.payload.data.is_null() {
             return None;
@@ -187,11 +178,6 @@ extern "C" fn upstream(
         outgoing.as_ptr(),
         outgoing.len(),
     );
-    state.counters.upstream_tx(
-        state.framework,
-        packet_ref.info.destination,
-        packet_ref.payload.len,
-    );
 }
 
 extern "C" fn downstream(
@@ -215,12 +201,6 @@ extern "C" fn downstream(
         );
         return;
     }
-    let packet_ref = unsafe { &*packet };
-    state.counters.downstream_rx(
-        state.framework,
-        packet_ref.info.destination,
-        packet_ref.payload.len,
-    );
     let header = TimingAnalysisHeader {
         tx_time_microseconds: now_microseconds(),
         source: state.id,
@@ -246,11 +226,6 @@ extern "C" fn downstream(
         packet,
         outgoing.as_ptr(),
         outgoing.len(),
-    );
-    state.counters.downstream_tx(
-        state.framework,
-        packet_ref.info.destination,
-        packet_ref.payload.len,
     );
 }
 

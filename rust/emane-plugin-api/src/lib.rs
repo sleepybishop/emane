@@ -1,5 +1,7 @@
-use std::ffi::CStr;
+use std::collections::HashMap;
+use std::ffi::CString;
 use std::os::raw::{c_char, c_void};
+use std::sync::{Mutex, OnceLock};
 
 /// Native control-message identifiers used at the Rust MAC/PHY boundary.
 /// Values live outside the legacy framework range and the payloads use an
@@ -639,9 +641,6 @@ impl MimoTxProperties {
                         .iter()
                         .any(|segment| !segment.tx_power_dbm.is_finite())
             })
-            || self.transmit_antennas.iter().any(|antenna| {
-                usize::from(antenna.frequency_group_index) >= self.frequency_groups.len()
-            })
         {
             return None;
         }
@@ -727,7 +726,16 @@ impl MimoTxProperties {
             frequency_groups,
             transmit_antennas,
         };
-        result.encode().map(|_| result)
+        // A frequency-group index is a semantic property of the PHY message,
+        // not a wire-format constraint.  Keep an invalid index available to
+        // the receive path so it can account for the legacy "Antenna Freq"
+        // drop instead of treating the MIMO control as if it were absent.
+        result
+            .frequency_groups
+            .iter()
+            .flatten()
+            .all(|segment| segment.tx_power_dbm.is_finite())
+            .then_some(result)
     }
 }
 
@@ -1322,6 +1330,7 @@ unsafe impl Sync for FfiFrameworkService {}
 
 #[derive(Clone, Copy, Default)]
 struct TrafficCounters {
+    average_processing_delay: u64,
     packets_unicast_tx: u64,
     bytes_unicast_tx: u64,
     packets_broadcast_tx: u64,
@@ -1332,17 +1341,62 @@ struct TrafficCounters {
     packets_broadcast_rx: u64,
     bytes_broadcast_rx: u64,
     packets_broadcast_drop: u64,
+    packets_unicast_generated: u64,
+    bytes_unicast_generated: u64,
+    packets_broadcast_generated: u64,
+    bytes_broadcast_generated: u64,
 }
 
 #[derive(Clone, Copy, Default)]
 pub struct CommonLayerCounters {
     upstream: TrafficCounters,
     downstream: TrafficCounters,
+    unicast_drop_table: u64,
+    broadcast_drop_table: u64,
+    unicast_accept_table: u64,
+    broadcast_accept_table: u64,
+    unicast_drop_columns: usize,
+    broadcast_drop_columns: usize,
+}
+
+#[derive(Clone, Default)]
+struct CommonAcceptCounts {
+    tx_packets: u64,
+    tx_bytes: u64,
+    rx_packets: u64,
+    rx_bytes: u64,
+}
+
+#[derive(Default)]
+struct CommonTableState {
+    generation: u64,
+    accepts: HashMap<u16, CommonAcceptCounts>,
+    drops: HashMap<u16, Vec<u64>>,
+}
+
+fn common_table_states() -> &'static Mutex<HashMap<u64, CommonTableState>> {
+    static STATES: OnceLock<Mutex<HashMap<u64, CommonTableState>>> = OnceLock::new();
+    STATES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 impl CommonLayerCounters {
     pub fn register(framework: FfiFrameworkService) -> Self {
-        let register = |name: &CStr, description: &CStr| {
+        Self::register_with_drop_labels(framework, "", &[], &[])
+    }
+
+    pub fn register_with_drop_labels(
+        framework: FfiFrameworkService,
+        instance: &str,
+        unicast_drop_labels: &[&str],
+        broadcast_drop_labels: &[&str],
+    ) -> Self {
+        let register_counter = |base: &str, description: &str| {
+            let Ok(name) = CString::new(format!("{base}{instance}")) else {
+                return 0;
+            };
+            let Ok(description) = CString::new(description) else {
+                return 0;
+            };
             (framework.register_counter)(
                 framework.framework_ctx,
                 name.as_ptr(),
@@ -1350,91 +1404,208 @@ impl CommonLayerCounters {
                 true,
             )
         };
+        let register_average = |base: &str, description: &str| {
+            let Ok(name) = CString::new(format!("{base}{instance}")) else {
+                return 0;
+            };
+            let Ok(description) = CString::new(description) else {
+                return 0;
+            };
+            (framework.register_average)(
+                framework.framework_ctx,
+                name.as_ptr(),
+                description.as_ptr(),
+                true,
+            )
+        };
+        let register_table = |base: &str, labels: &[&str], description: &str| {
+            let Ok(name) = CString::new(format!("{base}{instance}")) else {
+                return 0;
+            };
+            let Ok(labels) = labels
+                .iter()
+                .map(|label| CString::new(*label))
+                .collect::<Result<Vec<_>, _>>()
+            else {
+                return 0;
+            };
+            let pointers = labels
+                .iter()
+                .map(|label| label.as_ptr())
+                .collect::<Vec<_>>();
+            let Ok(description) = CString::new(description) else {
+                return 0;
+            };
+            (framework.register_table)(
+                framework.framework_ctx,
+                name.as_ptr(),
+                pointers.as_ptr(),
+                pointers.len(),
+                description.as_ptr(),
+                true,
+            )
+        };
+        let accept_labels = [
+            "NEM",
+            "Num Pkts Tx",
+            "Num Bytes Tx",
+            "Num Pkts Rx",
+            "Num Bytes Rx",
+        ];
+        let mut unicast_drop_table = 0;
+        let mut broadcast_drop_table = 0;
+        let mut unicast_drop_columns = 0;
+        let mut broadcast_drop_columns = 0;
+        if !unicast_drop_labels.is_empty() {
+            let mut labels = Vec::with_capacity(unicast_drop_labels.len() + 1);
+            labels.push("NEM");
+            labels.extend_from_slice(unicast_drop_labels);
+            unicast_drop_table = register_table(
+                "UnicastPacketDropTable",
+                &labels,
+                "Unicast packets dropped by reason code",
+            );
+            unicast_drop_columns = unicast_drop_labels.len();
+
+            let effective_broadcast_labels = if broadcast_drop_labels.is_empty() {
+                unicast_drop_labels
+            } else {
+                broadcast_drop_labels
+            };
+            let mut labels = Vec::with_capacity(effective_broadcast_labels.len() + 1);
+            labels.push("NEM");
+            labels.extend_from_slice(effective_broadcast_labels);
+            broadcast_drop_table = register_table(
+                "BroadcastPacketDropTable",
+                &labels,
+                "Broadcast packets dropped by reason code",
+            );
+            broadcast_drop_columns = effective_broadcast_labels.len();
+        }
         Self {
             upstream: TrafficCounters {
-                packets_unicast_tx: register(
-                    c"numUpstreamPacketsUnicastTx",
-                    c"Number of upstream unicast packets transmitted",
+                average_processing_delay: register_average(
+                    "avgUpstreamProcessingDelay",
+                    "Average upstream processing delay",
                 ),
-                bytes_unicast_tx: register(
-                    c"numUpstreamBytesUnicastTx",
-                    c"Number of upstream unicast bytes transmitted",
+                packets_unicast_tx: register_counter(
+                    "numUpstreamPacketsUnicastTx",
+                    "Number of upstream unicast packets transmitted",
                 ),
-                packets_broadcast_tx: register(
-                    c"numUpstreamPacketsBroadcastTx",
-                    c"Number of upstream broadcast packets transmitted",
+                bytes_unicast_tx: register_counter(
+                    "numUpstreamBytesUnicastTx",
+                    "Number of upstream unicast bytes transmitted",
                 ),
-                bytes_broadcast_tx: register(
-                    c"numUpstreamBytesBroadcastTx",
-                    c"Number of upstream broadcast bytes transmitted",
+                packets_broadcast_tx: register_counter(
+                    "numUpstreamPacketsBroadcastTx",
+                    "Number of upstream broadcast packets transmitted",
                 ),
-                packets_unicast_rx: register(
-                    c"numUpstreamPacketsUnicastRx",
-                    c"Number of upstream unicast packets received",
+                bytes_broadcast_tx: register_counter(
+                    "numUpstreamBytesBroadcastTx",
+                    "Number of upstream broadcast bytes transmitted",
                 ),
-                bytes_unicast_rx: register(
-                    c"numUpstreamBytesUnicastRx",
-                    c"Number of upstream unicast bytes received",
+                packets_unicast_rx: register_counter(
+                    "numUpstreamPacketsUnicastRx",
+                    "Number of upstream unicast packets received",
                 ),
-                packets_unicast_drop: register(
-                    c"numUpstreamPacketsUnicastDrop",
-                    c"Number of upstream unicast packets dropped",
+                bytes_unicast_rx: register_counter(
+                    "numUpstreamBytesUnicastRx",
+                    "Number of upstream unicast bytes received",
                 ),
-                packets_broadcast_rx: register(
-                    c"numUpstreamPacketsBroadcastRx",
-                    c"Number of upstream broadcast packets received",
+                packets_unicast_drop: register_counter(
+                    "numUpstreamPacketsUnicastDrop",
+                    "Number of upstream unicast packets dropped",
                 ),
-                bytes_broadcast_rx: register(
-                    c"numUpstreamBytesBroadcastRx",
-                    c"Number of upstream broadcast bytes received",
+                packets_broadcast_rx: register_counter(
+                    "numUpstreamPacketsBroadcastRx",
+                    "Number of upstream broadcast packets received",
                 ),
-                packets_broadcast_drop: register(
-                    c"numUpstreamPacketsBroadcastDrop",
-                    c"Number of upstream broadcast packets dropped",
+                bytes_broadcast_rx: register_counter(
+                    "numUpstreamBytesBroadcastRx",
+                    "Number of upstream broadcast bytes received",
                 ),
+                packets_broadcast_drop: register_counter(
+                    "numUpstreamPacketsBroadcastDrop",
+                    "Number of upstream broadcast packets dropped",
+                ),
+                ..TrafficCounters::default()
             },
             downstream: TrafficCounters {
-                packets_unicast_tx: register(
-                    c"numDownstreamPacketsUnicastTx",
-                    c"Number of downstream unicast packets transmitted",
+                average_processing_delay: register_average(
+                    "avgDownstreamProcessingDelay",
+                    "Average downstream processing delay",
                 ),
-                bytes_unicast_tx: register(
-                    c"numDownstreamBytesUnicastTx",
-                    c"Number of downstream unicast bytes transmitted",
+                packets_unicast_tx: register_counter(
+                    "numDownstreamPacketsUnicastTx",
+                    "Number of downstream unicast packets transmitted",
                 ),
-                packets_broadcast_tx: register(
-                    c"numDownstreamPacketsBroadcastTx",
-                    c"Number of downstream broadcast packets transmitted",
+                bytes_unicast_tx: register_counter(
+                    "numDownstreamBytesUnicastTx",
+                    "Number of downstream unicast bytes transmitted",
                 ),
-                bytes_broadcast_tx: register(
-                    c"numDownstreamBytesBroadcastTx",
-                    c"Number of downstream broadcast bytes transmitted",
+                packets_broadcast_tx: register_counter(
+                    "numDownstreamPacketsBroadcastTx",
+                    "Number of downstream broadcast packets transmitted",
                 ),
-                packets_unicast_rx: register(
-                    c"numDownstreamPacketsUnicastRx",
-                    c"Number of downstream unicast packets received",
+                bytes_broadcast_tx: register_counter(
+                    "numDownstreamBytesBroadcastTx",
+                    "Number of downstream broadcast bytes transmitted",
                 ),
-                bytes_unicast_rx: register(
-                    c"numDownstreamBytesUnicastRx",
-                    c"Number of downstream unicast bytes received",
+                packets_unicast_rx: register_counter(
+                    "numDownstreamPacketsUnicastRx",
+                    "Number of downstream unicast packets received",
                 ),
-                packets_unicast_drop: register(
-                    c"numDownstreamPacketsUnicastDrop",
-                    c"Number of downstream unicast packets dropped",
+                bytes_unicast_rx: register_counter(
+                    "numDownstreamBytesUnicastRx",
+                    "Number of downstream unicast bytes received",
                 ),
-                packets_broadcast_rx: register(
-                    c"numDownstreamPacketsBroadcastRx",
-                    c"Number of downstream broadcast packets received",
+                packets_unicast_drop: register_counter(
+                    "numDownstreamPacketsUnicastDrop",
+                    "Number of downstream unicast packets dropped",
                 ),
-                bytes_broadcast_rx: register(
-                    c"numDownstreamBytesBroadcastRx",
-                    c"Number of downstream broadcast bytes received",
+                packets_broadcast_rx: register_counter(
+                    "numDownstreamPacketsBroadcastRx",
+                    "Number of downstream broadcast packets received",
                 ),
-                packets_broadcast_drop: register(
-                    c"numDownstreamPacketsBroadcastDrop",
-                    c"Number of downstream broadcast packets dropped",
+                bytes_broadcast_rx: register_counter(
+                    "numDownstreamBytesBroadcastRx",
+                    "Number of downstream broadcast bytes received",
+                ),
+                packets_broadcast_drop: register_counter(
+                    "numDownstreamPacketsBroadcastDrop",
+                    "Number of downstream broadcast packets dropped",
+                ),
+                packets_unicast_generated: register_counter(
+                    "numDownstreamPacketsUnicastGenerated",
+                    "Number of layer generated downstream unicast packets",
+                ),
+                bytes_unicast_generated: register_counter(
+                    "numDownstreamBytesUnicastGenerated",
+                    "Number of layer generated downstream unicast bytes",
+                ),
+                packets_broadcast_generated: register_counter(
+                    "numDownstreamPacketsBroadcastGenerated",
+                    "Number of layer generated downstream broadcast packets",
+                ),
+                bytes_broadcast_generated: register_counter(
+                    "numDownstreamBytesBroadcastGenerated",
+                    "Number of layer generated downstream broadcast bytes",
                 ),
             },
+            unicast_drop_table,
+            broadcast_drop_table,
+            unicast_accept_table: register_table(
+                "UnicastPacketAcceptTable",
+                &accept_labels,
+                "Unicast packets accepted",
+            ),
+            broadcast_accept_table: register_table(
+                "BroadcastPacketAcceptTable",
+                &accept_labels,
+                "Broadcast packets accepted",
+            ),
+            unicast_drop_columns,
+            broadcast_drop_columns,
         }
     }
 
@@ -1468,8 +1639,22 @@ impl CommonLayerCounters {
         framework: FfiFrameworkService,
         destination: u16,
         bytes: usize,
+        processing_delay_microseconds: u64,
+        self_generated: bool,
     ) {
-        let (packets, byte_counter) = if destination == u16::MAX {
+        let (packets, byte_counter) = if self_generated {
+            if destination == u16::MAX {
+                (
+                    counters.packets_broadcast_generated,
+                    counters.bytes_broadcast_generated,
+                )
+            } else {
+                (
+                    counters.packets_unicast_generated,
+                    counters.bytes_unicast_generated,
+                )
+            }
+        } else if destination == u16::MAX {
             (counters.packets_broadcast_tx, counters.bytes_broadcast_tx)
         } else {
             (counters.packets_unicast_tx, counters.bytes_unicast_tx)
@@ -1480,6 +1665,13 @@ impl CommonLayerCounters {
             byte_counter,
             u64::try_from(bytes).unwrap_or(u64::MAX),
         );
+        if counters.average_processing_delay != 0 {
+            (framework.sample_average)(
+                framework.framework_ctx,
+                counters.average_processing_delay,
+                processing_delay_microseconds as f64,
+            );
+        }
     }
 
     fn drop(counters: TrafficCounters, framework: FfiFrameworkService, destination: u16) {
@@ -1491,28 +1683,190 @@ impl CommonLayerCounters {
         Self::increment(framework, handle, 1);
     }
 
-    pub fn downstream_rx(self, framework: FfiFrameworkService, destination: u16, bytes: usize) {
+    fn set_accept_row(
+        self,
+        framework: FfiFrameworkService,
+        source: u16,
+        destination: u16,
+        bytes: usize,
+        upstream: bool,
+    ) {
+        let table = if destination == u16::MAX {
+            self.broadcast_accept_table
+        } else {
+            self.unicast_accept_table
+        };
+        if table == 0 {
+            return;
+        }
+        let generation = (framework.table_generation)(framework.framework_ctx, table);
+        let mut states = common_table_states().lock().unwrap();
+        let state = states.entry(table).or_default();
+        if state.generation != generation {
+            state.generation = generation;
+            state.accepts.clear();
+            state.drops.clear();
+        }
+        let counts = state.accepts.entry(source).or_default();
+        if upstream {
+            counts.rx_packets = counts.rx_packets.saturating_add(1);
+            counts.rx_bytes = counts
+                .rx_bytes
+                .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+        } else {
+            counts.tx_packets = counts.tx_packets.saturating_add(1);
+            counts.tx_bytes = counts
+                .tx_bytes
+                .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+        }
+        let key = [u64::from(source)];
+        let values = [
+            statistic_u64(u64::from(source)),
+            statistic_u64(counts.tx_packets),
+            statistic_u64(counts.tx_bytes),
+            statistic_u64(counts.rx_packets),
+            statistic_u64(counts.rx_bytes),
+        ];
+        (framework.set_table_row)(
+            framework.framework_ctx,
+            table,
+            key.as_ptr(),
+            key.len(),
+            values.as_ptr(),
+            values.len(),
+        );
+    }
+
+    fn set_drop_row(
+        self,
+        framework: FfiFrameworkService,
+        source: u16,
+        destination: u16,
+        drop_code: usize,
+        upstream: bool,
+    ) {
+        let broadcast = destination == u16::MAX;
+        let (table, columns) = if broadcast {
+            (self.broadcast_drop_table, self.broadcast_drop_columns)
+        } else {
+            (self.unicast_drop_table, self.unicast_drop_columns)
+        };
+        if table == 0 || drop_code == 0 || drop_code > columns {
+            return;
+        }
+        let peer = if upstream { source } else { destination };
+        let generation = (framework.table_generation)(framework.framework_ctx, table);
+        let mut states = common_table_states().lock().unwrap();
+        let state = states.entry(table).or_default();
+        if state.generation != generation {
+            state.generation = generation;
+            state.accepts.clear();
+            state.drops.clear();
+        }
+        let counts = state.drops.entry(peer).or_insert_with(|| vec![0; columns]);
+        counts[drop_code - 1] = counts[drop_code - 1].saturating_add(1);
+        let key = [u64::from(peer)];
+        let mut values = Vec::with_capacity(columns + 1);
+        values.push(statistic_u64(u64::from(peer)));
+        values.extend(counts.iter().copied().map(statistic_u64));
+        (framework.set_table_row)(
+            framework.framework_ctx,
+            table,
+            key.as_ptr(),
+            key.len(),
+            values.as_ptr(),
+            values.len(),
+        );
+    }
+
+    pub fn downstream_rx_packet(
+        self,
+        framework: FfiFrameworkService,
+        _source: u16,
+        destination: u16,
+        bytes: usize,
+    ) {
         Self::inbound(self.downstream, framework, destination, bytes);
     }
 
-    pub fn downstream_tx(self, framework: FfiFrameworkService, destination: u16, bytes: usize) {
-        Self::outbound(self.downstream, framework, destination, bytes);
+    pub fn downstream_tx_packet(
+        self,
+        framework: FfiFrameworkService,
+        source: u16,
+        destination: u16,
+        bytes: usize,
+        processing_delay_microseconds: u64,
+        self_generated: bool,
+    ) {
+        Self::outbound(
+            self.downstream,
+            framework,
+            destination,
+            bytes,
+            processing_delay_microseconds,
+            self_generated,
+        );
+        self.set_accept_row(framework, source, destination, bytes, false);
     }
 
-    pub fn downstream_drop(self, framework: FfiFrameworkService, destination: u16) {
+    pub fn downstream_drop_packet(
+        self,
+        framework: FfiFrameworkService,
+        source: u16,
+        destination: u16,
+        drop_code: usize,
+    ) {
         Self::drop(self.downstream, framework, destination);
+        self.set_drop_row(framework, source, destination, drop_code, false);
     }
 
-    pub fn upstream_rx(self, framework: FfiFrameworkService, destination: u16, bytes: usize) {
+    pub fn upstream_rx_packet(
+        self,
+        framework: FfiFrameworkService,
+        _source: u16,
+        destination: u16,
+        bytes: usize,
+    ) {
         Self::inbound(self.upstream, framework, destination, bytes);
     }
 
-    pub fn upstream_tx(self, framework: FfiFrameworkService, destination: u16, bytes: usize) {
-        Self::outbound(self.upstream, framework, destination, bytes);
+    pub fn upstream_tx_packet(
+        self,
+        framework: FfiFrameworkService,
+        source: u16,
+        destination: u16,
+        bytes: usize,
+        processing_delay_microseconds: u64,
+    ) {
+        Self::outbound(
+            self.upstream,
+            framework,
+            destination,
+            bytes,
+            processing_delay_microseconds,
+            false,
+        );
+        self.set_accept_row(framework, source, destination, bytes, true);
     }
 
-    pub fn upstream_drop(self, framework: FfiFrameworkService, destination: u16) {
+    pub fn upstream_drop_packet(
+        self,
+        framework: FfiFrameworkService,
+        source: u16,
+        destination: u16,
+        drop_code: usize,
+    ) {
         Self::drop(self.upstream, framework, destination);
+        self.set_drop_row(framework, source, destination, drop_code, true);
+    }
+}
+
+fn statistic_u64(value: u64) -> FfiStatisticValue {
+    FfiStatisticValue {
+        value_type: STATISTIC_VALUE_U64,
+        u64_value: value,
+        f64_value: 0.0,
+        string_value: std::ptr::null(),
     }
 }
 
@@ -1771,7 +2125,17 @@ mod tests {
         };
         assert_eq!(
             MimoTxProperties::decode(&mimo_tx.encode().unwrap()),
-            Some(mimo_tx)
+            Some(mimo_tx.clone())
+        );
+        let mut invalid_group = mimo_tx.encode().unwrap();
+        let antenna_offset = invalid_group.len() - 2 * MimoTxProperties::ANTENNA_LEN;
+        invalid_group[antenna_offset..antenna_offset + 2].copy_from_slice(&9u16.to_be_bytes());
+        assert_eq!(
+            MimoTxProperties::decode(&invalid_group)
+                .unwrap()
+                .transmit_antennas[0]
+                .frequency_group_index,
+            9
         );
         let rx_antenna = RxAntennaAdd {
             antenna: MimoTxAntenna {

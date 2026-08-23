@@ -148,6 +148,7 @@ struct PendingRx {
     deliverable: bool,
     cts_required: bool,
     end_of_reception: i64,
+    acquired_at: i64,
 }
 
 #[derive(Clone, Default)]
@@ -239,7 +240,7 @@ struct State {
 struct Ieee80211Mac {
     id: u16,
     framework: FfiFrameworkService,
-    counters: CommonLayerCounters,
+    counters: [CommonLayerCounters; 4],
     model_counters: HashMap<String, u64>,
     one_hop_neighbor_table: u64,
     two_hop_neighbor_table: u64,
@@ -424,7 +425,25 @@ impl Ieee80211Mac {
         Self {
             id,
             framework,
-            counters: CommonLayerCounters::register(framework),
+            counters: std::array::from_fn(|category| {
+                CommonLayerCounters::register_with_drop_labels(
+                    framework,
+                    &category.to_string(),
+                    &[
+                        "SINR",
+                        "Reg Id",
+                        "Dst MAC",
+                        "Queue Overflow",
+                        "Bad Control",
+                        "Bad Spectrum Query",
+                        "Flow Control",
+                        "Duplicate",
+                        "Rx During Tx",
+                        "Hidden Busy",
+                    ],
+                    &[],
+                )
+            }),
             model_counters,
             one_hop_neighbor_table,
             two_hop_neighbor_table,
@@ -558,6 +577,7 @@ fn record_packet_accept(
     destination: u16,
     size: usize,
     inbound: bool,
+    processing_delay_microseconds: u64,
 ) {
     let broadcast = destination == BROADCAST_NEM;
     let name = format!(
@@ -592,6 +612,7 @@ fn record_packet_accept(
             statistic_u64(info.rx_bytes),
         ],
     );
+    let _ = processing_delay_microseconds;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -630,6 +651,21 @@ fn record_packet_drop(
     row.push(statistic_u64(u64::from(nem_id)));
     row.extend(info.bytes.iter().copied().map(statistic_u64));
     mac.set_packet_table_row(&name, &[u64::from(nem_id)], &row);
+    if inbound {
+        mac.counters[category].upstream_drop_packet(
+            mac.framework,
+            source,
+            destination,
+            reason as usize + 1,
+        );
+    } else {
+        mac.counters[category].downstream_drop_packet(
+            mac.framework,
+            source,
+            destination,
+            reason as usize + 1,
+        );
+    }
 }
 
 fn parse_bool(value: &str) -> Option<bool> {
@@ -1484,17 +1520,20 @@ fn send_downstream(
             len: payload.len(),
         },
     };
+    mac.counters[pending.category].downstream_tx_packet(
+        mac.framework,
+        pending.packet.info.source,
+        pending.packet.info.destination,
+        payload.len(),
+        now_us().saturating_sub(pending.acquired_at).max(0) as u64,
+        header.message_type == MSG_TYPE_UNICAST_CTS_CTRL,
+    );
     (mac.framework.send_downstream_packet)(
         mac.framework.framework_ctx,
         mac.id,
         &packet,
         messages.as_ptr(),
         messages.len(),
-    );
-    mac.counters.downstream_tx(
-        mac.framework,
-        pending.packet.info.destination,
-        pending.packet.payload.len(),
     );
     (mac.framework.update_neighbor_tx)(
         mac.framework.framework_ctx,
@@ -1585,8 +1624,6 @@ fn drive(mac: &Ieee80211Mac, now: i64) {
                         },
                         1,
                     );
-                    mac.counters
-                        .downstream_drop(mac.framework, expired.packet.info.destination);
                     state.queue_discards[category] =
                         state.queue_discards[category].saturating_add(1);
                     if state.flow_control {
@@ -1623,8 +1660,6 @@ fn drive(mac: &Ieee80211Mac, now: i64) {
                             },
                             1,
                         );
-                        mac.counters
-                            .downstream_drop(mac.framework, pending.packet.info.destination);
                         state.queue_discards[pending.category] =
                             state.queue_discards[pending.category].saturating_add(1);
                         if state.flow_control {
@@ -1712,6 +1747,7 @@ fn drive(mac: &Ieee80211Mac, now: i64) {
                         pending.packet.info.destination,
                         pending.packet.payload.len(),
                         false,
+                        now.saturating_sub(pending.acquired_at).max(0) as u64,
                     );
                     pending.ready_at = state.current_eot.saturating_add(
                         i64::try_from(pending.post_delay_microseconds).unwrap_or(i64::MAX),
@@ -1741,8 +1777,6 @@ fn drive(mac: &Ieee80211Mac, now: i64) {
                                 },
                                 1,
                             );
-                            mac.counters
-                                .downstream_drop(mac.framework, pending.packet.info.destination);
                         } else {
                             pending.retries = pending.retries.saturating_add(1);
                             pending.phase = TxPhase::Idle;
@@ -1784,7 +1818,7 @@ fn drive(mac: &Ieee80211Mac, now: i64) {
     }
 }
 
-fn send_upstream(mac: &Ieee80211Mac, packet: OwnedPacket) {
+fn send_upstream(mac: &Ieee80211Mac, packet: OwnedPacket, category: usize, acquired_at: i64) {
     let messages: Vec<_> = packet
         .controls
         .iter()
@@ -1803,6 +1837,13 @@ fn send_upstream(mac: &Ieee80211Mac, packet: OwnedPacket) {
             len: packet.payload.len(),
         },
     };
+    mac.counters[category].upstream_tx_packet(
+        mac.framework,
+        packet.info.source,
+        packet.info.destination,
+        packet.payload.len(),
+        now_us().saturating_sub(acquired_at).max(0) as u64,
+    );
     (mac.framework.send_upstream_packet)(
         mac.framework.framework_ctx,
         mac.id,
@@ -1810,12 +1851,10 @@ fn send_upstream(mac: &Ieee80211Mac, packet: OwnedPacket) {
         messages.as_ptr(),
         messages.len(),
     );
-    mac.counters
-        .upstream_tx(mac.framework, packet.info.destination, packet.payload.len());
 }
 
 fn complete_receive(mac: &Ieee80211Mac, id: u64) {
-    let (packet, cts, dropped_destination, neighbor_metric) = {
+    let (packet, cts, neighbor_metric) = {
         let mut state = mac.state.lock().unwrap();
         let Some(pending) = state.pending_rx.remove(&id) else {
             return;
@@ -1933,6 +1972,7 @@ fn complete_receive(mac: &Ieee80211Mac, id: u64) {
                 pending.packet.info.destination,
                 pending.packet.payload.len(),
                 true,
+                now_us().saturating_sub(pending.acquired_at).max(0) as u64,
             );
         } else {
             record_packet_drop(
@@ -1950,7 +1990,6 @@ fn complete_receive(mac: &Ieee80211Mac, id: u64) {
                 true,
             );
         }
-        let dropped_destination = (!accepted).then_some(pending.packet.info.destination);
         let neighbor_metric = reception_ok.then_some((
             pending.source,
             pending.sequence,
@@ -1960,20 +1999,16 @@ fn complete_receive(mac: &Ieee80211Mac, id: u64) {
             pending.data_rate_bps,
         ));
         (
-            accepted.then_some(pending.packet),
+            accepted.then_some((pending.packet, pending.category, pending.acquired_at)),
             cts,
-            dropped_destination,
             neighbor_metric,
         )
     };
     if let Some((destination, sequence, rate_index)) = cts {
         send_cts(mac, destination, sequence, rate_index);
     }
-    if let Some(packet) = packet {
-        send_upstream(mac, packet);
-    }
-    if let Some(destination) = dropped_destination {
-        mac.counters.upstream_drop(mac.framework, destination);
+    if let Some((packet, category, acquired_at)) = packet {
+        send_upstream(mac, packet, category, acquired_at);
     }
     if let Some((source, sequence, sinr, noise, duration, data_rate)) = neighbor_metric {
         (mac.framework.update_neighbor_rx)(
@@ -2271,27 +2306,27 @@ extern "C" fn process_downstream(
     let Some(packet) = own_packet(packet, messages, count) else {
         return;
     };
-    mac.counters
-        .downstream_rx(mac.framework, packet.info.destination, packet.payload.len());
     let now = now_us();
     let (ready, category, depth, max_depth, discards) = {
         let mut state = mac.state.lock().unwrap();
         let category = dscp_to_category(packet.info.priority, state.wmm);
+        mac.counters[category].downstream_rx_packet(
+            mac.framework,
+            packet.info.source,
+            packet.info.destination,
+            packet.payload.len(),
+        );
         if !state.started || (state.flow_control && state.available_tokens == 0) {
-            if state.started && state.flow_control {
-                record_packet_drop(
-                    mac,
-                    &mut state,
-                    category,
-                    packet.info.source,
-                    packet.info.destination,
-                    packet.payload.len(),
-                    PacketDropReason::FlowControl,
-                    false,
-                );
-            }
-            mac.counters
-                .downstream_drop(mac.framework, packet.info.destination);
+            record_packet_drop(
+                mac,
+                &mut state,
+                category,
+                packet.info.source,
+                packet.info.destination,
+                packet.payload.len(),
+                PacketDropReason::FlowControl,
+                false,
+            );
             return;
         }
         let config = state.categories[category];
@@ -2326,8 +2361,6 @@ extern "C" fn process_downstream(
             if let Some(tokens) = update {
                 send_flow_update(mac, tokens);
             }
-            mac.counters
-                .downstream_drop(mac.framework, packet.info.destination);
             return;
         }
         if config.queue_size == 0 {
@@ -2356,8 +2389,6 @@ extern "C" fn process_downstream(
             if let Some(tokens) = update {
                 send_flow_update(mac, tokens);
             }
-            mac.counters
-                .downstream_drop(mac.framework, packet.info.destination);
             return;
         }
         if state.flow_control {
@@ -2375,8 +2406,6 @@ extern "C" fn process_downstream(
                     PacketDropReason::QueueOverflow,
                     false,
                 );
-                mac.counters
-                    .downstream_drop(mac.framework, dropped.packet.info.destination);
             }
             state.queue_discards[category] = state.queue_discards[category].saturating_add(1);
             if state.flow_control {
@@ -2451,8 +2480,17 @@ extern "C" fn process_upstream(
     let Some((raw_info, raw_size)) = packet_metadata(packet) else {
         return;
     };
-    mac.counters
-        .upstream_rx(mac.framework, raw_info.destination, raw_size);
+    let received_at = now_us();
+    let category = {
+        let state = mac.state.lock().unwrap();
+        dscp_to_category(raw_info.priority, state.wmm)
+    };
+    mac.counters[category].upstream_rx_packet(
+        mac.framework,
+        raw_info.source,
+        raw_info.destination,
+        raw_size,
+    );
     let Some(message_views) = controls(messages, count) else {
         record_upstream_drop(mac, raw_info, raw_size, PacketDropReason::BadControl);
         return;
@@ -2605,6 +2643,7 @@ extern "C" fn process_upstream(
                 cts_required: header.message_type == MSG_TYPE_UNICAST_RTS_CTS_DATA
                     && destination == mac.id,
                 end_of_reception,
+                acquired_at: received_at,
             },
         );
         (id, end_of_reception.max(now))

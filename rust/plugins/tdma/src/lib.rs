@@ -1,11 +1,11 @@
 mod pcr;
 
 use emane_plugin_api::{
-    CommonLayerCounters, FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket,
-    FfiPacketInfo, FfiSlice, FfiStatisticValue, FlowControlToken, FrequencyOfInterest, ModelHeader,
-    PluginApi, RxProperties, TxProperties, CONTROL_FLOW_CONTROL_TOKEN, CONTROL_FREQUENCY_INTEREST,
-    CONTROL_MODEL_HEADER, CONTROL_RX_PROPERTIES, CONTROL_TX_PROPERTIES, MAC_REGISTRATION_TDMA,
-    PLUGIN_ABI_VERSION, STATISTIC_VALUE_F64, STATISTIC_VALUE_STRING, STATISTIC_VALUE_U64,
+    FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket, FfiPacketInfo, FfiSlice,
+    FfiStatisticValue, FlowControlToken, FrequencyOfInterest, ModelHeader, PluginApi, RxProperties,
+    TxProperties, CONTROL_FLOW_CONTROL_TOKEN, CONTROL_FREQUENCY_INTEREST, CONTROL_MODEL_HEADER,
+    CONTROL_RX_PROPERTIES, CONTROL_TX_PROPERTIES, MAC_REGISTRATION_TDMA, PLUGIN_ABI_VERSION,
+    STATISTIC_VALUE_F64, STATISTIC_VALUE_STRING, STATISTIC_VALUE_U64,
 };
 use pcr::PcrManager;
 use prost::Message;
@@ -311,7 +311,6 @@ struct State {
 struct TdmaMac {
     id: u16,
     framework: FfiFrameworkService,
-    counters: CommonLayerCounters,
     model_counters: HashMap<String, u64>,
     tables: HashMap<String, u64>,
     state: Mutex<State>,
@@ -482,7 +481,6 @@ impl TdmaMac {
         let mac = Self {
             id,
             framework,
-            counters: CommonLayerCounters::register(framework),
             model_counters,
             tables,
             state: Mutex::new(State {
@@ -1491,8 +1489,6 @@ fn take_transmission(
             PacketDropReason::TooBig,
         );
         publish_queue_tables(mac, state, index);
-        mac.counters
-            .downstream_drop(mac.framework, dropped.packet.info.destination);
         if state.flow_control_enable {
             state.available_tokens = state
                 .available_tokens
@@ -1707,10 +1703,6 @@ fn transmit_slot(mac: &TdmaMac, absolute_slot: u64) {
         messages.as_ptr(),
         messages.len(),
     );
-    for item in &items {
-        mac.counters
-            .downstream_tx(mac.framework, item.info.destination, item.bytes.len());
-    }
     (mac.framework.update_neighbor_tx)(
         mac.framework.framework_ctx,
         destination,
@@ -1731,8 +1723,6 @@ extern "C" fn downstream(
     let Some(packet) = own_packet(packet) else {
         return;
     };
-    mac.counters
-        .downstream_rx(mac.framework, packet.info.destination, packet.payload.len());
     let mut state = mac.state.lock().unwrap();
     if state.flow_control_enable && state.available_tokens == 0 {
         record_packet_drop(
@@ -1744,8 +1734,6 @@ extern "C" fn downstream(
             packet.payload.len(),
             PacketDropReason::FlowControl,
         );
-        mac.counters
-            .downstream_drop(mac.framework, packet.info.destination);
         return;
     }
     let index = priority_to_queue(packet.info.priority);
@@ -1761,8 +1749,6 @@ extern "C" fn downstream(
             PacketDropReason::QueueOverflow,
         );
         publish_queue_tables(mac, &state, index);
-        mac.counters
-            .downstream_drop(mac.framework, packet.info.destination);
         return;
     }
     if state.queues[index].len() >= state.queue_depth {
@@ -1784,8 +1770,6 @@ extern "C" fn downstream(
             PacketDropReason::QueueOverflow,
         );
         publish_queue_tables(mac, &state, index);
-        mac.counters
-            .downstream_drop(mac.framework, dropped.packet.info.destination);
         if state.flow_control_enable {
             state.available_tokens = state
                 .available_tokens
@@ -1827,8 +1811,6 @@ fn send_upstream(mac: &TdmaMac, packet: OwnedPacket) {
         std::ptr::null(),
         0,
     );
-    mac.counters
-        .upstream_tx(mac.framework, packet.info.destination, packet.payload.len());
 }
 
 extern "C" fn upstream(
@@ -1843,8 +1825,6 @@ extern "C" fn upstream(
     let Some(packet) = own_packet(packet) else {
         return;
     };
-    mac.counters
-        .upstream_rx(mac.framework, packet.info.destination, packet.payload.len());
     let Some(messages) = controls(messages, count) else {
         return;
     };

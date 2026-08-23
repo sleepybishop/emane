@@ -58,7 +58,7 @@ struct State {
     queue: VecDeque<PendingTx>,
     current_end_of_transmission: i64,
     next_transmit_wakeup: i64,
-    pending_receptions: HashMap<u64, OwnedPacket>,
+    pending_receptions: HashMap<u64, (OwnedPacket, i64)>,
     next_reception_id: u64,
     radiometric_enabled: bool,
     radiometric_report_interval_microseconds: u64,
@@ -105,7 +105,20 @@ impl RfpipeMac {
         Self {
             id,
             framework,
-            counters: CommonLayerCounters::register(framework),
+            counters: CommonLayerCounters::register_with_drop_labels(
+                framework,
+                "0",
+                &[
+                    "SINR",
+                    "Reg Id",
+                    "Dst MAC",
+                    "Queue Overflow",
+                    "Bad Control",
+                    "Bad Spectrum Query",
+                    "Flow Control",
+                ],
+                &[],
+            ),
             queue_delay_counter,
             average_queue_delay,
             queue_high_water_counter,
@@ -346,7 +359,13 @@ fn schedule_transmit(mac: &RfpipeMac, when: i64) {
     }
 }
 
-fn send_packet(mac: &RfpipeMac, packet: OwnedPacket, header: ModelHeader, duration: u64) {
+fn send_packet(
+    mac: &RfpipeMac,
+    packet: OwnedPacket,
+    header: ModelHeader,
+    duration: u64,
+    acquired_at: i64,
+) {
     let serialization = RfPipeMacHeader {
         data_rate_bps: header.data_rate_bps,
     }
@@ -406,6 +425,14 @@ fn send_packet(mac: &RfpipeMac, packet: OwnedPacket, header: ModelHeader, durati
             len: payload.len(),
         },
     };
+    mac.counters.downstream_tx_packet(
+        mac.framework,
+        packet.info.source,
+        packet.info.destination,
+        packet.payload.len(),
+        now_microseconds().saturating_sub(acquired_at).max(0) as u64,
+        false,
+    );
     (mac.framework.send_downstream_packet)(
         mac.framework.framework_ctx,
         mac.id,
@@ -413,8 +440,6 @@ fn send_packet(mac: &RfpipeMac, packet: OwnedPacket, header: ModelHeader, durati
         message_views.as_ptr(),
         message_views.len(),
     );
-    mac.counters
-        .downstream_tx(mac.framework, packet.info.destination, packet.payload.len());
     (mac.framework.update_neighbor_tx)(
         mac.framework.framework_ctx,
         packet.info.destination,
@@ -477,7 +502,12 @@ fn drive_transmit(mac: &RfpipeMac, now: i64) {
             };
             state.sequence = state.sequence.wrapping_add(1);
             state.current_end_of_transmission = now.saturating_add(pending.duration as i64);
-            Some((pending.packet, header, pending.duration))
+            Some((
+                pending.packet,
+                header,
+                pending.duration,
+                pending.acquired_at,
+            ))
         } else {
             None
         };
@@ -489,8 +519,8 @@ fn drive_transmit(mac: &RfpipeMac, now: i64) {
         });
         (transmission, next_wakeup, flow_update)
     };
-    if let Some((packet, header, duration)) = transmission {
-        send_packet(mac, packet, header, duration);
+    if let Some((packet, header, duration, acquired_at)) = transmission {
+        send_packet(mac, packet, header, duration, acquired_at);
     }
     if let Some(tokens) = flow_update {
         send_flow_update(mac, tokens);
@@ -500,7 +530,7 @@ fn drive_transmit(mac: &RfpipeMac, now: i64) {
     }
 }
 
-fn send_upstream(mac: &RfpipeMac, packet: OwnedPacket) {
+fn send_upstream(mac: &RfpipeMac, packet: OwnedPacket, received_at: i64) {
     let messages: Vec<_> = packet
         .controls
         .iter()
@@ -519,6 +549,13 @@ fn send_upstream(mac: &RfpipeMac, packet: OwnedPacket) {
             len: packet.payload.len(),
         },
     };
+    mac.counters.upstream_tx_packet(
+        mac.framework,
+        packet.info.source,
+        packet.info.destination,
+        packet.payload.len(),
+        now_microseconds().saturating_sub(received_at) as u64,
+    );
     (mac.framework.send_upstream_packet)(
         mac.framework.framework_ctx,
         mac.id,
@@ -526,8 +563,6 @@ fn send_upstream(mac: &RfpipeMac, packet: OwnedPacket) {
         messages.as_ptr(),
         messages.len(),
     );
-    mac.counters
-        .upstream_tx(mac.framework, packet.info.destination, packet.payload.len());
 }
 
 extern "C" fn init(id: u16, framework: *const FfiFrameworkService) -> *mut c_void {
@@ -610,7 +645,7 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                     _ => return false,
                 };
             }
-            "rfsignaltable.averageallantenna" => {
+            "rfsignaltable.averageallantennas" => {
                 let Some(value) = parse_bool(value) else {
                     return false;
                 };
@@ -707,16 +742,44 @@ extern "C" fn process_upstream(
         (mac.framework.send_upstream_control)(mac.framework.framework_ctx, mac.id, messages, count);
         return;
     }
+    let Some(packet_ref) = (unsafe { packet.as_ref() }) else {
+        return;
+    };
+    let received_at = now_microseconds();
+    mac.counters.upstream_rx_packet(
+        mac.framework,
+        packet_ref.info.source,
+        packet_ref.info.destination,
+        packet_ref.payload.len,
+    );
     let Some(message_views) = controls(messages, count) else {
+        mac.counters.upstream_drop_packet(
+            mac.framework,
+            packet_ref.info.source,
+            packet_ref.info.destination,
+            5,
+        );
         return;
     };
     let (Some(header), Some(rx)) = (
         find_header(message_views),
         find_rx_properties(message_views),
     ) else {
+        mac.counters.upstream_drop_packet(
+            mac.framework,
+            packet_ref.info.source,
+            packet_ref.info.destination,
+            5,
+        );
         return;
     };
     if header.registration_id != MAC_REGISTRATION_RFPIPE {
+        mac.counters.upstream_drop_packet(
+            mac.framework,
+            packet_ref.info.source,
+            packet_ref.info.destination,
+            2,
+        );
         return;
     }
     let Some(mut packet) = own_packet(packet, messages, count) else {
@@ -736,8 +799,6 @@ extern "C" fn process_upstream(
         return;
     }
     packet.payload.drain(..serialization_len + 2);
-    mac.counters
-        .upstream_rx(mac.framework, packet.info.destination, packet.payload.len());
     (mac.framework.update_neighbor_rx)(
         mac.framework.framework_ctx,
         packet.info.source,
@@ -761,28 +822,36 @@ extern "C" fn process_upstream(
         rx.noise_floor_dbm,
         receiver_sensitivity_dbm,
     );
-    let accepted = {
+    let (por_accepted, destination_accepted) = {
         let mut state = mac.state.lock().unwrap();
         let sinr = rx.rx_power_dbm - rx.noise_floor_dbm;
         let probability = state
             .pcr_curve
             .as_ref()
             .map_or(1.0, |curve| curve.probability(sinr, packet.payload.len()));
-        probability >= random_unit(&mut state)
-            && (state.promiscuous_mode
+        (
+            probability >= random_unit(&mut state),
+            state.promiscuous_mode
                 || packet.info.destination == mac.id
-                || packet.info.destination == BROADCAST_NEM)
+                || packet.info.destination == BROADCAST_NEM,
+        )
     };
-    if !accepted {
-        mac.counters
-            .upstream_drop(mac.framework, packet.info.destination);
+    if !por_accepted || !destination_accepted {
+        mac.counters.upstream_drop_packet(
+            mac.framework,
+            packet.info.source,
+            packet.info.destination,
+            if por_accepted { 3 } else { 1 },
+        );
         return;
     }
     let (reception_id, when) = {
         let mut state = mac.state.lock().unwrap();
         state.next_reception_id = state.next_reception_id.wrapping_add(1).max(1);
         let reception_id = state.next_reception_id;
-        state.pending_receptions.insert(reception_id, packet);
+        state
+            .pending_receptions
+            .insert(reception_id, (packet, received_at));
         (
             reception_id,
             now_microseconds().saturating_add(rx.duration_microseconds as i64),
@@ -790,14 +859,14 @@ extern "C" fn process_upstream(
     };
     let timer = schedule(mac, when, EVENT_RECEIVE, &reception_id.to_be_bytes());
     if timer == 0 {
-        if let Some(packet) = mac
+        if let Some((packet, received_at)) = mac
             .state
             .lock()
             .unwrap()
             .pending_receptions
             .remove(&reception_id)
         {
-            send_upstream(mac, packet);
+            send_upstream(mac, packet, received_at);
         }
     } else {
         mac.state.lock().unwrap().timers.insert(timer);
@@ -825,14 +894,22 @@ extern "C" fn process_downstream(
     let Some(packet) = own_packet(packet, messages, count) else {
         return;
     };
-    mac.counters
-        .downstream_rx(mac.framework, packet.info.destination, packet.payload.len());
+    mac.counters.downstream_rx_packet(
+        mac.framework,
+        packet.info.source,
+        packet.info.destination,
+        packet.payload.len(),
+    );
     let now = now_microseconds();
     let (ready_at, queue_depth, queue_discards) = {
         let mut state = mac.state.lock().unwrap();
         if !state.started || (state.flow_control_enable && state.available_tokens == 0) {
-            mac.counters
-                .downstream_drop(mac.framework, packet.info.destination);
+            mac.counters.downstream_drop_packet(
+                mac.framework,
+                packet.info.source,
+                packet.info.destination,
+                7,
+            );
             return;
         }
         if state.flow_control_enable {
@@ -851,8 +928,12 @@ extern "C" fn process_downstream(
             .max(now);
         while state.queue.len() >= QUEUE_CAPACITY {
             if let Some(dropped) = state.queue.pop_front() {
-                mac.counters
-                    .downstream_drop(mac.framework, dropped.packet.info.destination);
+                mac.counters.downstream_drop_packet(
+                    mac.framework,
+                    dropped.packet.info.source,
+                    dropped.packet.info.destination,
+                    4,
+                );
             }
             state.queue_discards = state.queue_discards.saturating_add(1);
             if state.flow_control_enable {
@@ -928,8 +1009,8 @@ extern "C" fn process_timed_event(
         }
         EVENT_RECEIVE => {
             let packet = mac.state.lock().unwrap().pending_receptions.remove(&value);
-            if let Some(packet) = packet {
-                send_upstream(mac, packet);
+            if let Some((packet, received_at)) = packet {
+                send_upstream(mac, packet, received_at);
             }
         }
         EVENT_R2RI_REPORT => {
