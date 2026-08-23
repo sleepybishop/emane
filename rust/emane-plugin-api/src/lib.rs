@@ -1119,8 +1119,27 @@ fn read_u64(data: &[u8], offset: &mut usize) -> Option<u64> {
 
 // Version 2 made configuration and start failures explicit. Version 3 adds
 // framework event delivery. Version 4 adds native statistics, version 5 adds
-// R2RI metrics, and version 6 adds native RF tables and event publication.
-pub const PLUGIN_ABI_VERSION: u32 = 6;
+// R2RI metrics, version 6 adds native RF tables and event publication, and
+// version 7 adds the framework file-descriptor service. Version 8 adds native
+// floating-point statistics. Version 10 adds typed native statistic tables;
+// version 11 lets their owners clear rows when model state is replaced;
+// version 12 adds removal of individual table rows.
+pub const PLUGIN_ABI_VERSION: u32 = 13;
+
+pub const STATISTIC_VALUE_U64: u32 = 1;
+pub const STATISTIC_VALUE_F64: u32 = 2;
+pub const STATISTIC_VALUE_STRING: u32 = 3;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FfiStatisticValue {
+    pub value_type: u32,
+    pub u64_value: u64,
+    pub f64_value: f64,
+    pub string_value: *const c_char,
+}
+
+pub type FfiFileDescriptorCallback = extern "C" fn(context: *mut c_void, fd: i32, events: u32);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -1201,6 +1220,41 @@ pub struct FfiFrameworkService {
         clearable: bool,
     ) -> u64,
     pub increment_counter: extern "C" fn(ctx: *mut c_void, handle: u64, amount: u64) -> bool,
+    pub maximize_counter: extern "C" fn(ctx: *mut c_void, handle: u64, value: u64) -> bool,
+    pub register_double: extern "C" fn(
+        ctx: *mut c_void,
+        name: *const c_char,
+        description: *const c_char,
+        clearable: bool,
+    ) -> u64,
+    pub set_double: extern "C" fn(ctx: *mut c_void, handle: u64, value: f64) -> bool,
+    pub register_average: extern "C" fn(
+        ctx: *mut c_void,
+        name: *const c_char,
+        description: *const c_char,
+        clearable: bool,
+    ) -> u64,
+    pub sample_average: extern "C" fn(ctx: *mut c_void, handle: u64, sample: f64) -> bool,
+    pub register_table: extern "C" fn(
+        ctx: *mut c_void,
+        name: *const c_char,
+        labels: *const *const c_char,
+        label_count: usize,
+        description: *const c_char,
+        clearable: bool,
+    ) -> u64,
+    pub set_table_row: extern "C" fn(
+        ctx: *mut c_void,
+        handle: u64,
+        key: *const u64,
+        key_count: usize,
+        values: *const FfiStatisticValue,
+        value_count: usize,
+    ) -> bool,
+    pub clear_table: extern "C" fn(ctx: *mut c_void, handle: u64) -> bool,
+    pub remove_table_row:
+        extern "C" fn(ctx: *mut c_void, handle: u64, key: *const u64, key_count: usize) -> bool,
+    pub table_generation: extern "C" fn(ctx: *mut c_void, handle: u64) -> u64,
     pub update_neighbor_tx: extern "C" fn(
         ctx: *mut c_void,
         destination: u16,
@@ -1217,6 +1271,7 @@ pub struct FfiFrameworkService {
         duration_microseconds: u64,
         data_rate_bps: u64,
     ),
+    pub update_neighbor_status: extern "C" fn(ctx: *mut c_void),
     pub update_queue_metric: extern "C" fn(
         ctx: *mut c_void,
         queue_id: u16,
@@ -1252,6 +1307,14 @@ pub struct FfiFrameworkService {
     ) -> bool,
     pub publish_event:
         extern "C" fn(ctx: *mut c_void, event_id: u16, data: *const u8, data_len: usize) -> bool,
+    pub register_file_descriptor: extern "C" fn(
+        ctx: *mut c_void,
+        fd: i32,
+        interests: u32,
+        callback_context: *mut c_void,
+        callback: FfiFileDescriptorCallback,
+    ) -> u64,
+    pub unregister_file_descriptor: extern "C" fn(ctx: *mut c_void, handle: u64) -> bool,
 }
 
 unsafe impl Send for FfiFrameworkService {}
