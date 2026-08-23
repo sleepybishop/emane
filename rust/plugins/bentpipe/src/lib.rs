@@ -2,11 +2,13 @@ mod pcr_manager;
 
 use emane_plugin_api::{
     AntennaPattern, CommonLayerCounters, FfiConfigRequest, FfiControlMessage, FfiFrameworkService,
-    FfiPacket, FfiPacketInfo, FfiSlice, MimoRxProperties, MimoTxAntenna, MimoTxFrequencySegment,
-    MimoTxProperties, ModelHeader, PluginApi, RxAntennaAdd, RxProperties, TxAntennaProfile,
-    TxProperties, CONTROL_MIMO_RX_PROPERTIES, CONTROL_MIMO_TX_PROPERTIES, CONTROL_MODEL_HEADER,
-    CONTROL_RX_ANTENNA_ADD, CONTROL_RX_PROPERTIES, CONTROL_TX_PROPERTIES,
-    MAC_REGISTRATION_BENTPIPE, PLUGIN_ABI_VERSION,
+    FfiPacket, FfiPacketInfo, FfiSlice, FfiStatisticValue, MimoRxProperties, MimoTxAntenna,
+    MimoTxFrequencySegment, MimoTxProperties, ModelHeader, PluginApi, RxAntennaAdd,
+    RxAntennaRemove, RxProperties, TxAntennaProfile, TxProperties, CONTROL_MIMO_RX_PROPERTIES,
+    CONTROL_MIMO_TX_PROPERTIES, CONTROL_MODEL_HEADER, CONTROL_RX_ANTENNA_ADD,
+    CONTROL_RX_ANTENNA_REMOVE, CONTROL_RX_PROPERTIES, CONTROL_TX_PROPERTIES,
+    MAC_REGISTRATION_BENTPIPE, PLUGIN_ABI_VERSION, STATISTIC_VALUE_F64, STATISTIC_VALUE_STRING,
+    STATISTIC_VALUE_U64,
 };
 use pcr_manager::PCRManager;
 use prost::Message;
@@ -148,6 +150,59 @@ struct Reassembly {
     last_update: i64,
 }
 
+#[derive(Default)]
+struct QueueStatistics {
+    enqueued: u64,
+    dequeued: u64,
+    overflow: u64,
+    too_big: u64,
+    high_water: u64,
+    fragment_histogram: [u64; 10],
+    aggregate_histogram: [u64; 10],
+}
+
+#[derive(Default)]
+struct SlotStatistics {
+    valid: u64,
+    missed: u64,
+    quantiles: [u64; 8],
+}
+
+#[derive(Default)]
+struct NeighborStatistics {
+    samples: u64,
+    sinr_sum: f64,
+    noise_floor_sum: f64,
+    sinr_window: VecDeque<f64>,
+    noise_floor_window: VecDeque<f64>,
+}
+
+#[derive(Clone, Default)]
+struct PacketAcceptInfo {
+    tx_bytes: u64,
+    rx_bytes: u64,
+}
+
+#[derive(Clone, Default)]
+struct PacketDropInfo {
+    bytes: [u64; 13],
+}
+
+#[derive(Clone, Copy)]
+enum PacketDropReason {
+    Sinr = 0,
+    RegistrationId = 1,
+    Destination = 2,
+    QueueOverflow = 3,
+    BadControl = 4,
+    TooBig = 6,
+    MissingFragment = 8,
+    BadCurve = 9,
+    Lock = 10,
+    RxOff = 11,
+    TxOff = 12,
+}
+
 #[derive(Clone, Copy)]
 struct AntennaDefinition {
     pattern: AntennaPattern,
@@ -158,6 +213,14 @@ struct State {
     transponders: BTreeMap<u16, Transponder>,
     configured_transponder_fields: HashMap<u16, u32>,
     queues: HashMap<u16, VecDeque<PendingTx>>,
+    queue_statistics: HashMap<u16, QueueStatistics>,
+    slot_statistics: HashMap<u16, SlotStatistics>,
+    neighbor_statistics: HashMap<(u16, u16), NeighborStatistics>,
+    broadcast_accept: HashMap<u16, PacketAcceptInfo>,
+    broadcast_drop: HashMap<u16, PacketDropInfo>,
+    unicast_accept: HashMap<u16, PacketAcceptInfo>,
+    unicast_drop: HashMap<u16, PacketDropInfo>,
+    table_generations: HashMap<String, u64>,
     queue_depth: usize,
     aggregation_enable: bool,
     fragmentation_enable: bool,
@@ -169,6 +232,7 @@ struct State {
     packet_sequence: u64,
     frame_sequence: u64,
     current_eot: HashMap<u16, i64>,
+    receive_end: HashMap<u16, i64>,
     wakeups: HashMap<u16, i64>,
     timers: HashSet<u64>,
     reassembly: HashMap<(u16, u64), Reassembly>,
@@ -180,19 +244,212 @@ struct BentpipeMac {
     id: u16,
     framework: FfiFrameworkService,
     counters: CommonLayerCounters,
+    tables: HashMap<String, u64>,
     state: Mutex<State>,
 }
 
 impl BentpipeMac {
     fn new(id: u16, framework: FfiFrameworkService) -> Self {
+        let mut tables: HashMap<String, u64> = [
+            (
+                "AntennaStatusTable",
+                &[
+                    "Index",
+                    "Profile",
+                    "Bandwidth",
+                    "Rx Frequency",
+                    "Fixed Gain",
+                    "Azimuth",
+                    "Elevation",
+                    "Mask",
+                ][..],
+            ),
+            (
+                "NeighborStatusTable",
+                &[
+                    "NEM",
+                    "Transponder",
+                    "SINR_wma",
+                    "NF_wma",
+                    "Samples",
+                    "SINR_avg",
+                    "NF_avg",
+                    "Timestamp",
+                ],
+            ),
+            (
+                "QueueStatusTable",
+                &[
+                    "Transponder",
+                    "Enqueued",
+                    "Dequeued",
+                    "Overflow",
+                    "Too Big",
+                    "Depth",
+                    "High Water",
+                ],
+            ),
+            (
+                "QueueFragmentHistogram",
+                &[
+                    "Transponder",
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                    "6",
+                    "7",
+                    "8",
+                    "9",
+                    ">9",
+                ],
+            ),
+            (
+                "QueueAggregateHistogram",
+                &[
+                    "Transponder",
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                    "6",
+                    "7",
+                    "8",
+                    "9",
+                    ">9",
+                ],
+            ),
+            (
+                "TxSlotStatusTable",
+                &[
+                    "Transponder",
+                    "Valid",
+                    "Missed",
+                    ".25",
+                    ".50",
+                    ".75",
+                    "1.0",
+                    "1.25",
+                    "1.50",
+                    "1.75",
+                    ">1.75",
+                ],
+            ),
+            (
+                "TransponderStatusTable",
+                &[
+                    "Idx",
+                    "Rx Hz",
+                    "Rx Bw",
+                    "Rx Ant",
+                    "Rx Enable",
+                    "Action",
+                    "Tx Hz",
+                    "Tx Bw",
+                    "Tx Bps",
+                    "Tx Ant",
+                    "Tx dBm",
+                    "Tx Enable",
+                ],
+            ),
+            (
+                "TransponderStatusExTable",
+                &["Idx", "Tx U_Delay", "Tx Slots/Frame", "Tx Slot Size", "MTU"],
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(name, labels)| {
+            let c_name = std::ffi::CString::new(name).ok()?;
+            let c_labels = labels
+                .iter()
+                .map(|label| std::ffi::CString::new(*label))
+                .collect::<Result<Vec<_>, _>>()
+                .ok()?;
+            let pointers = c_labels
+                .iter()
+                .map(|label| label.as_ptr())
+                .collect::<Vec<_>>();
+            let handle = (framework.register_table)(
+                framework.framework_ctx,
+                c_name.as_ptr(),
+                pointers.as_ptr(),
+                pointers.len(),
+                c"BentPipe model status".as_ptr(),
+                false,
+            );
+            (handle != 0).then(|| (name.to_string(), handle))
+        })
+        .collect();
+        let mut register_packet_table = |name: &str, labels: &[&str]| {
+            let Ok(c_name) = std::ffi::CString::new(name) else {
+                return;
+            };
+            let Ok(c_labels) = labels
+                .iter()
+                .map(|label| std::ffi::CString::new(*label))
+                .collect::<Result<Vec<_>, _>>()
+            else {
+                return;
+            };
+            let pointers = c_labels
+                .iter()
+                .map(|label| label.as_ptr())
+                .collect::<Vec<_>>();
+            let handle = (framework.register_table)(
+                framework.framework_ctx,
+                c_name.as_ptr(),
+                pointers.as_ptr(),
+                pointers.len(),
+                c"BentPipe packet status".as_ptr(),
+                true,
+            );
+            if handle != 0 {
+                tables.insert(name.to_string(), handle);
+            }
+        };
+        for name in ["BroadcastByteAcceptTable0", "UnicastByteAcceptTable0"] {
+            register_packet_table(name, &["NEM", "Num Bytes Tx", "Num Bytes Rx"]);
+        }
+        for name in ["BroadcastByteDropTable0", "UnicastByteDropTable0"] {
+            register_packet_table(
+                name,
+                &[
+                    "NEM",
+                    "SINR",
+                    "Reg Id",
+                    "Dst MAC",
+                    "Queue Overflow",
+                    "Bad Control",
+                    "Bad Spectrum Query",
+                    "Big",
+                    "Long",
+                    "Miss Fragment",
+                    "Bad Curve",
+                    "Lock",
+                    "Rx Off",
+                    "Tx off",
+                ],
+            );
+        }
         Self {
             id,
             framework,
             counters: CommonLayerCounters::register(framework),
+            tables,
             state: Mutex::new(State {
                 transponders: BTreeMap::new(),
                 configured_transponder_fields: HashMap::new(),
                 queues: HashMap::new(),
+                queue_statistics: HashMap::new(),
+                slot_statistics: HashMap::new(),
+                neighbor_statistics: HashMap::new(),
+                broadcast_accept: HashMap::new(),
+                broadcast_drop: HashMap::new(),
+                unicast_accept: HashMap::new(),
+                unicast_drop: HashMap::new(),
+                table_generations: HashMap::new(),
                 queue_depth: DEFAULT_QUEUE_DEPTH,
                 aggregation_enable: true,
                 fragmentation_enable: true,
@@ -204,12 +461,394 @@ impl BentpipeMac {
                 packet_sequence: 0,
                 frame_sequence: 0,
                 current_eot: HashMap::new(),
+                receive_end: HashMap::new(),
                 wakeups: HashMap::new(),
                 timers: HashSet::new(),
                 reassembly: HashMap::new(),
                 random_state: 0xD1B5_4A32_D192_ED03 ^ u64::from(id),
                 started: false,
             }),
+        }
+    }
+
+    fn set_table_row(&self, name: &str, key: &[u64], values: &[FfiStatisticValue]) {
+        if let Some(handle) = self.tables.get(name).copied() {
+            (self.framework.set_table_row)(
+                self.framework.framework_ctx,
+                handle,
+                key.as_ptr(),
+                key.len(),
+                values.as_ptr(),
+                values.len(),
+            );
+        }
+    }
+
+    fn table_generation(&self, name: &str) -> u64 {
+        self.tables.get(name).copied().map_or(0, |handle| {
+            (self.framework.table_generation)(self.framework.framework_ctx, handle)
+        })
+    }
+}
+
+fn stat_u64(value: u64) -> FfiStatisticValue {
+    FfiStatisticValue {
+        value_type: STATISTIC_VALUE_U64,
+        u64_value: value,
+        f64_value: 0.0,
+        string_value: std::ptr::null(),
+    }
+}
+
+fn stat_f64(value: f64) -> FfiStatisticValue {
+    FfiStatisticValue {
+        value_type: STATISTIC_VALUE_F64,
+        u64_value: 0,
+        f64_value: value,
+        string_value: std::ptr::null(),
+    }
+}
+
+fn stat_string(value: &CStr) -> FfiStatisticValue {
+    FfiStatisticValue {
+        value_type: STATISTIC_VALUE_STRING,
+        u64_value: 0,
+        f64_value: 0.0,
+        string_value: value.as_ptr(),
+    }
+}
+
+fn publish_configuration_tables(mac: &BentpipeMac, state: &State) {
+    for (index, transponder) in &state.transponders {
+        let enabled_rx = if transponder.receive_enable {
+            c"on"
+        } else {
+            c"off"
+        };
+        let enabled_tx = if transponder.transmit_enable {
+            c"on"
+        } else {
+            c"off"
+        };
+        let action = match transponder.receive_action {
+            ReceiveAction::Ubend => c"ubend",
+            ReceiveAction::Process => c"process",
+            ReceiveAction::Unknown => c"unknown",
+        };
+        mac.set_table_row(
+            "TransponderStatusTable",
+            &[u64::from(*index)],
+            &[
+                stat_u64(u64::from(*index)),
+                stat_u64(transponder.receive_frequency_hz),
+                stat_u64(transponder.receive_bandwidth_hz),
+                stat_u64(u64::from(transponder.receive_antenna_index)),
+                stat_string(enabled_rx),
+                stat_string(action),
+                stat_u64(transponder.transmit_frequency_hz),
+                stat_u64(transponder.transmit_bandwidth_hz),
+                stat_u64(transponder.transmit_data_rate_bps),
+                stat_u64(u64::from(transponder.transmit_antenna_index)),
+                stat_f64(transponder.transmit_power_dbm),
+                stat_string(enabled_tx),
+            ],
+        );
+        mac.set_table_row(
+            "TransponderStatusExTable",
+            &[u64::from(*index)],
+            &[
+                stat_u64(u64::from(*index)),
+                stat_u64(transponder.transmit_delay_us),
+                stat_u64(u64::from(transponder.transmit_slots_per_frame)),
+                stat_u64(transponder.transmit_slot_size_us),
+                stat_u64(effective_mtu(transponder) as u64),
+            ],
+        );
+    }
+
+    for (antenna_index, antenna) in &state.antennas {
+        for transponder in state
+            .transponders
+            .values()
+            .filter(|transponder| transponder.receive_antenna_index == *antenna_index)
+        {
+            let (profile, fixed_gain, azimuth, elevation) = match antenna.pattern {
+                AntennaPattern::Profile(profile) => (
+                    stat_u64(u64::from(profile.profile_id)),
+                    stat_string(c"NA"),
+                    stat_f64(profile.azimuth_degrees),
+                    stat_f64(profile.elevation_degrees),
+                ),
+                AntennaPattern::IdealOmni { gain_db } => (
+                    stat_string(c"NA"),
+                    stat_f64(gain_db),
+                    stat_string(c"NA"),
+                    stat_string(c"NA"),
+                ),
+                AntennaPattern::Default => continue,
+            };
+            mac.set_table_row(
+                "AntennaStatusTable",
+                &[u64::from(*antenna_index), transponder.receive_frequency_hz],
+                &[
+                    stat_u64(u64::from(*antenna_index)),
+                    profile,
+                    stat_u64(transponder.receive_bandwidth_hz),
+                    stat_u64(transponder.receive_frequency_hz),
+                    fixed_gain,
+                    azimuth,
+                    elevation,
+                    stat_u64(u64::from(antenna.spectral_mask_index)),
+                ],
+            );
+        }
+    }
+}
+
+fn publish_queue_tables(mac: &BentpipeMac, state: &State, index: u16) {
+    let Some(statistics) = state.queue_statistics.get(&index) else {
+        return;
+    };
+    let depth = state.queues.get(&index).map_or(0, VecDeque::len) as u64;
+    mac.set_table_row(
+        "QueueStatusTable",
+        &[u64::from(index)],
+        &[
+            stat_u64(u64::from(index)),
+            stat_u64(statistics.enqueued),
+            stat_u64(statistics.dequeued),
+            stat_u64(statistics.overflow),
+            stat_u64(statistics.too_big),
+            stat_u64(depth),
+            stat_u64(statistics.high_water),
+        ],
+    );
+    for (name, histogram) in [
+        ("QueueFragmentHistogram", &statistics.fragment_histogram),
+        ("QueueAggregateHistogram", &statistics.aggregate_histogram),
+    ] {
+        let mut values = Vec::with_capacity(11);
+        values.push(stat_u64(u64::from(index)));
+        values.extend(histogram.iter().copied().map(stat_u64));
+        mac.set_table_row(name, &[u64::from(index)], &values);
+    }
+}
+
+fn update_slot_statistics(
+    mac: &BentpipeMac,
+    state: &mut State,
+    index: u16,
+    valid: bool,
+    ratio: f64,
+) {
+    let statistics = state.slot_statistics.entry(index).or_default();
+    if valid {
+        statistics.valid += 1;
+    } else {
+        statistics.missed += 1;
+    }
+    let quantile = if ratio <= 0.25 {
+        0
+    } else if ratio <= 0.50 {
+        1
+    } else if ratio <= 0.75 {
+        2
+    } else if ratio <= 1.0 {
+        3
+    } else if ratio <= 1.25 {
+        4
+    } else if ratio <= 1.50 {
+        5
+    } else if ratio <= 1.75 {
+        6
+    } else {
+        7
+    };
+    statistics.quantiles[quantile] += 1;
+    let mut values = vec![
+        stat_u64(u64::from(index)),
+        stat_u64(statistics.valid),
+        stat_u64(statistics.missed),
+    ];
+    values.extend(statistics.quantiles.iter().copied().map(stat_u64));
+    mac.set_table_row("TxSlotStatusTable", &[u64::from(index)], &values);
+}
+
+fn weighted_moving_average(samples: &VecDeque<f64>) -> f64 {
+    let denominator = samples.len() * (samples.len() + 1) / 2;
+    if denominator == 0 {
+        0.0
+    } else {
+        samples
+            .iter()
+            .enumerate()
+            .map(|(index, sample)| *sample * (index + 1) as f64)
+            .sum::<f64>()
+            / denominator as f64
+    }
+}
+
+fn update_neighbor_statistics(
+    mac: &BentpipeMac,
+    state: &mut State,
+    remote: u16,
+    transponder: u16,
+    sinr: f64,
+    noise_floor: f64,
+    timestamp: u64,
+) {
+    let statistics = state
+        .neighbor_statistics
+        .entry((remote, transponder))
+        .or_default();
+    statistics.samples += 1;
+    statistics.sinr_sum += sinr;
+    statistics.noise_floor_sum += noise_floor;
+    for (window, sample) in [
+        (&mut statistics.sinr_window, sinr),
+        (&mut statistics.noise_floor_window, noise_floor),
+    ] {
+        if window.len() == 20 {
+            window.pop_front();
+        }
+        window.push_back(sample);
+    }
+    mac.set_table_row(
+        "NeighborStatusTable",
+        &[u64::from(remote), u64::from(transponder)],
+        &[
+            stat_u64(u64::from(remote)),
+            stat_u64(u64::from(transponder)),
+            stat_f64(weighted_moving_average(&statistics.sinr_window)),
+            stat_f64(weighted_moving_average(&statistics.noise_floor_window)),
+            stat_u64(statistics.samples),
+            stat_f64(statistics.sinr_sum / statistics.samples as f64),
+            stat_f64(statistics.noise_floor_sum / statistics.samples as f64),
+            stat_u64(timestamp),
+        ],
+    );
+}
+
+fn record_packet_accept(
+    mac: &BentpipeMac,
+    state: &mut State,
+    source: u16,
+    destination: u16,
+    size: usize,
+    inbound: bool,
+) {
+    let broadcast = destination == BROADCAST_NEM;
+    let name = if broadcast {
+        "BroadcastByteAcceptTable0"
+    } else {
+        "UnicastByteAcceptTable0"
+    };
+    let generation = mac.table_generation(name);
+    let reset = state
+        .table_generations
+        .insert(name.to_string(), generation)
+        .is_some_and(|previous| previous != generation);
+    let infos = if broadcast {
+        &mut state.broadcast_accept
+    } else {
+        &mut state.unicast_accept
+    };
+    if reset {
+        infos.clear();
+    }
+    let info = infos.entry(source).or_default();
+    if inbound {
+        info.rx_bytes = info.rx_bytes.saturating_add(size as u64);
+    } else {
+        info.tx_bytes = info.tx_bytes.saturating_add(size as u64);
+    }
+    mac.set_table_row(
+        name,
+        &[u64::from(source)],
+        &[
+            stat_u64(u64::from(source)),
+            stat_u64(info.tx_bytes),
+            stat_u64(info.rx_bytes),
+        ],
+    );
+}
+
+fn record_packet_drop(
+    mac: &BentpipeMac,
+    state: &mut State,
+    source: u16,
+    destination: u16,
+    size: usize,
+    reason: PacketDropReason,
+) {
+    let broadcast = destination == BROADCAST_NEM;
+    let name = if broadcast {
+        "BroadcastByteDropTable0"
+    } else {
+        "UnicastByteDropTable0"
+    };
+    let generation = mac.table_generation(name);
+    let reset = state
+        .table_generations
+        .insert(name.to_string(), generation)
+        .is_some_and(|previous| previous != generation);
+    let infos = if broadcast {
+        &mut state.broadcast_drop
+    } else {
+        &mut state.unicast_drop
+    };
+    if reset {
+        infos.clear();
+    }
+    let info = infos.entry(source).or_default();
+    info.bytes[reason as usize] = info.bytes[reason as usize].saturating_add(size as u64);
+    let mut row = Vec::with_capacity(14);
+    row.push(stat_u64(u64::from(source)));
+    row.extend(info.bytes.iter().copied().map(stat_u64));
+    mac.set_table_row(name, &[u64::from(source)], &row);
+}
+
+fn record_component_drops(
+    mac: &BentpipeMac,
+    state: &mut State,
+    source: u16,
+    components: &[BentPipeComponent],
+    reason: PacketDropReason,
+) {
+    for component in components {
+        if let Ok(destination) = u16::try_from(component.destination) {
+            record_packet_drop(
+                mac,
+                state,
+                source,
+                destination,
+                component.data.len(),
+                reason,
+            );
+        }
+    }
+}
+
+fn expire_reassembly(mac: &BentpipeMac, state: &mut State, now: i64) {
+    let timeout = state.fragment_timeout_us;
+    let expired = state
+        .reassembly
+        .iter()
+        .filter_map(|(key, entry)| {
+            (now.saturating_sub(entry.last_update) >= timeout).then_some(*key)
+        })
+        .collect::<Vec<_>>();
+    for key in expired {
+        if let Some(entry) = state.reassembly.remove(&key) {
+            let size = entry.parts.values().map(|(_, data)| data.len()).sum();
+            record_packet_drop(
+                mac,
+                state,
+                key.0,
+                entry.destination,
+                size,
+                PacketDropReason::MissingFragment,
+            );
         }
     }
 }
@@ -501,7 +1140,13 @@ fn effective_mtu(transponder: &Transponder) -> usize {
     }
 }
 
-fn enqueue(state: &mut State, index: u16, packet: OwnedPacket, ready_at: i64) -> bool {
+fn enqueue(
+    mac: &BentpipeMac,
+    state: &mut State,
+    index: u16,
+    packet: OwnedPacket,
+    ready_at: i64,
+) -> bool {
     let Some(transponder) = state.transponders.get(&index) else {
         return false;
     };
@@ -509,36 +1154,83 @@ fn enqueue(state: &mut State, index: u16, packet: OwnedPacket, ready_at: i64) ->
         return false;
     }
     let mtu = effective_mtu(transponder);
-    if mtu == 0 || (packet.payload.len() > mtu && !state.fragmentation_enable) {
+    if mtu == 0 {
         return false;
+    }
+    if state.queue_depth == 0 {
+        state.queue_statistics.entry(index).or_default().overflow += 1;
+        record_packet_drop(
+            mac,
+            state,
+            packet.info.source,
+            packet.info.destination,
+            packet.payload.len(),
+            PacketDropReason::QueueOverflow,
+        );
+        mac.counters
+            .downstream_drop(mac.framework, packet.info.destination);
+        publish_queue_tables(mac, state, index);
+        return true;
     }
     let sequence = state.packet_sequence;
     state.packet_sequence = state.packet_sequence.wrapping_add(1);
-    let queue = state.queues.entry(index).or_default();
-    while queue.len() >= state.queue_depth {
-        let position = queue
-            .iter()
-            .position(|entry| entry.offset == 0)
-            .unwrap_or(0);
-        queue.remove(position);
+    let (dropped_packets, depth) = {
+        let queue = state.queues.entry(index).or_default();
+        let mut dropped_packets = Vec::new();
+        while queue.len() >= state.queue_depth {
+            let position = queue
+                .iter()
+                .position(|entry| entry.offset == 0)
+                .unwrap_or(0);
+            dropped_packets.push(
+                queue
+                    .remove(position)
+                    .expect("a full BentPipe queue must contain a packet"),
+            );
+        }
+        queue.push_back(PendingTx {
+            packet,
+            sequence,
+            offset: 0,
+            fragment_index: 0,
+            ready_at,
+        });
+        (dropped_packets, queue.len() as u64)
+    };
+    state.queue_statistics.entry(index).or_default().overflow += dropped_packets.len() as u64;
+    for dropped in dropped_packets {
+        record_packet_drop(
+            mac,
+            state,
+            dropped.packet.info.source,
+            dropped.packet.info.destination,
+            dropped.packet.payload.len(),
+            PacketDropReason::QueueOverflow,
+        );
+        mac.counters
+            .downstream_drop(mac.framework, dropped.packet.info.destination);
     }
-    queue.push_back(PendingTx {
-        packet,
-        sequence,
-        offset: 0,
-        fragment_index: 0,
-        ready_at,
-    });
+    let statistics = state.queue_statistics.entry(index).or_default();
+    statistics.enqueued += 1;
+    statistics.high_water = statistics.high_water.max(depth);
+    publish_queue_tables(mac, state, index);
     true
 }
 
-fn dequeue_components(state: &mut State, index: u16, mtu: usize, now: i64) -> Vec<TxComponent> {
+fn dequeue_components(
+    mac: &BentpipeMac,
+    state: &mut State,
+    index: u16,
+    mtu: usize,
+    now: i64,
+) -> Vec<TxComponent> {
     let aggregate = state.aggregation_enable;
     let fragment = state.fragmentation_enable;
     let Some(queue) = state.queues.get_mut(&index) else {
         return Vec::new();
     };
     let mut components = Vec::new();
+    let mut dropped_packets = Vec::new();
     let mut used = 0usize;
 
     while used < mtu {
@@ -587,9 +1279,41 @@ fn dequeue_components(state: &mut State, index: u16, mtu: usize, now: i64) -> Ve
         } else {
             // Legacy strict dequeue drops an oversized head packet so it cannot
             // permanently block smaller packets behind it.
-            queue.pop_front();
+            let dropped = queue.pop_front().expect("queue front");
+            dropped_packets.push(dropped);
         }
     }
+    state.queue_statistics.entry(index).or_default().too_big += dropped_packets.len() as u64;
+    for dropped in dropped_packets {
+        record_packet_drop(
+            mac,
+            state,
+            dropped.packet.info.source,
+            dropped.packet.info.destination,
+            dropped.packet.payload.len(),
+            PacketDropReason::TooBig,
+        );
+        mac.counters
+            .downstream_drop(mac.framework, dropped.packet.info.destination);
+    }
+    if !components.is_empty() {
+        let statistics = state.queue_statistics.entry(index).or_default();
+        let completed = components
+            .iter()
+            .filter(|component| !component.more)
+            .count() as u64;
+        statistics.dequeued += completed;
+        for component in &components {
+            if !component.more {
+                let parts = usize::try_from(component.fragment_index)
+                    .unwrap_or(usize::MAX)
+                    .saturating_add(1);
+                statistics.fragment_histogram[parts.saturating_sub(1).min(9)] += 1;
+            }
+        }
+        statistics.aggregate_histogram[components.len().saturating_sub(1).min(9)] += 1;
+    }
+    publish_queue_tables(mac, state, index);
     components
 }
 
@@ -654,6 +1378,19 @@ fn send_downstream(
     transponder: &Transponder,
     antenna: AntennaDefinition,
 ) {
+    {
+        let mut state = mac.state.lock().unwrap();
+        for component in &components {
+            record_packet_accept(
+                mac,
+                &mut state,
+                mac.id,
+                component.packet.info.destination,
+                component.packet.payload.len(),
+                false,
+            );
+        }
+    }
     let start_of_transmission = now_us();
     let wire = BentPipeMessage {
         start_of_transmission_microseconds: start_of_transmission.max(0) as u64,
@@ -672,7 +1409,13 @@ fn send_downstream(
             })
             .collect(),
     };
-    let payload = wire.encode_to_vec();
+    let serialization = wire.encode_to_vec();
+    let Ok(serialization_len) = u16::try_from(serialization.len()) else {
+        return;
+    };
+    let mut payload = Vec::with_capacity(serialization.len() + 2);
+    payload.extend_from_slice(&serialization_len.to_be_bytes());
+    payload.extend_from_slice(&serialization);
     let destination = components
         .first()
         .map(|component| component.packet.info.destination)
@@ -797,8 +1540,8 @@ fn send_downstream(
     }
 }
 
-fn drive(mac: &BentpipeMac, index: u16, now: i64) {
-    let (components, frame_sequence, transponder, antenna, next) = {
+fn drive(mac: &BentpipeMac, index: u16, now: i64, expected: Option<i64>) {
+    let (components, frame_sequence, transponder, antenna, next) = 'decision: {
         let mut state = mac.state.lock().unwrap();
         let Some(transponder) = state.transponders.get(&index).cloned() else {
             return;
@@ -810,7 +1553,28 @@ fn drive(mac: &BentpipeMac, index: u16, now: i64) {
         else {
             return;
         };
-        let allowed = next_slot(&transponder, now);
+        let slotted = transponder.transmit_slot_size_us != 0
+            && transponder.transmit_slots_per_frame != 0
+            && !transponder.transmit_slots.is_empty();
+        let allowed = expected
+            .filter(|_| slotted)
+            .unwrap_or_else(|| next_slot(&transponder, now));
+        if let Some(expected) = expected.filter(|_| slotted) {
+            let ratio = now.saturating_sub(expected) as f64
+                / transponder.transmit_slot_size_us.max(1) as f64;
+            let valid = now < expected.saturating_add(transponder.transmit_slot_size_us as i64);
+            update_slot_statistics(mac, &mut state, index, valid, ratio);
+            if !valid {
+                let next = next_slot(&transponder, now);
+                break 'decision (
+                    Vec::new(),
+                    state.frame_sequence,
+                    transponder,
+                    antenna,
+                    Some(next),
+                );
+            }
+        }
         let eot = state.current_eot.get(&index).copied().unwrap_or(0);
         let ready = state
             .queues
@@ -820,7 +1584,7 @@ fn drive(mac: &BentpipeMac, index: u16, now: i64) {
         let can_send = ready.is_some_and(|ready| ready <= now) && eot <= now && allowed <= now;
         let components = if can_send {
             let mtu = effective_mtu(&transponder);
-            let components = dequeue_components(&mut state, index, mtu, now);
+            let components = dequeue_components(mac, &mut state, index, mtu, now);
             if !components.is_empty() {
                 let bytes = components
                     .iter()
@@ -906,6 +1670,7 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
         return false;
     };
     let mut state = mac.state.lock().unwrap();
+    let mut refresh_receive_antennas = false;
     for (name, values) in items {
         match name.as_str() {
             "pcrcurveuri" => {
@@ -919,7 +1684,7 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                 let Some(Ok(value)) = values.first().map(|value| value.parse::<usize>()) else {
                     return false;
                 };
-                if value == 0 {
+                if value > u16::MAX as usize {
                     return false;
                 }
                 state.queue_depth = value;
@@ -940,25 +1705,31 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                 continue;
             }
             "antenna.defines" => {
-                let mut antennas = HashMap::new();
+                let mut antennas = if state.started {
+                    state.antennas.clone()
+                } else {
+                    HashMap::new()
+                };
                 for value in values {
                     let Some((index, antenna)) = parse_antenna(&value) else {
                         return false;
                     };
-                    if antennas.insert(index, antenna).is_some() {
+                    if state.started && !state.antennas.contains_key(&index) {
                         return false;
                     }
+                    if !state.started && antennas.contains_key(&index) {
+                        return false;
+                    }
+                    antennas.insert(index, antenna);
                 }
                 state.antennas = antennas;
+                refresh_receive_antennas = true;
                 continue;
             }
             "reassembly.fragmentcheckthreshold" => {
                 let Some(Ok(value)) = values.first().map(|value| value.parse::<u16>()) else {
                     return false;
                 };
-                if value == 0 {
-                    return false;
-                }
                 state.fragment_check_us = i64::from(value) * 1_000_000;
                 continue;
             }
@@ -966,9 +1737,6 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                 let Some(Ok(value)) = values.first().map(|value| value.parse::<u16>()) else {
                     return false;
                 };
-                if value == 0 {
-                    return false;
-                }
                 state.fragment_timeout_us = i64::from(value) * 1_000_000;
                 continue;
             }
@@ -981,6 +1749,9 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
             let Some(field) = transponder_config_bit(&name) else {
                 return false;
             };
+            if state.started && !state.transponders.contains_key(&index) {
+                return false;
+            }
             *state
                 .configured_transponder_fields
                 .entry(index)
@@ -991,7 +1762,8 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                     transponder.receive_frequency_hz = match parse_scaled_u64(value) {
                         Some(value) => value,
                         None => return false,
-                    }
+                    };
+                    refresh_receive_antennas = true;
                 }
                 "transponder.receive.bandwidth" => {
                     transponder.receive_bandwidth_hz = match parse_scaled_u64(value) {
@@ -1112,6 +1884,114 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
             }
         }
     }
+    if state.started {
+        let mut receive_antennas: HashMap<u16, (u64, Vec<u64>)> = HashMap::new();
+        let mut receive_channels = HashSet::new();
+        const REQUIRED_FIELDS: u32 = (1 << 18) - 1;
+        for (index, transponder) in &state.transponders {
+            let slotted = transponder.transmit_slots_per_frame != 0
+                || transponder.transmit_slot_size_us != 0
+                || !transponder.transmit_slots.is_empty();
+            if transponder.receive_frequency_hz == 0
+                || transponder.receive_bandwidth_hz == 0
+                || transponder.receive_action == ReceiveAction::Unknown
+                || transponder.transmit_frequency_hz == 0
+                || transponder.transmit_bandwidth_hz == 0
+                || transponder.transmit_data_rate_bps == 0
+                || effective_mtu(transponder) == 0
+                || !state
+                    .antennas
+                    .contains_key(&transponder.receive_antenna_index)
+                || !state
+                    .antennas
+                    .contains_key(&transponder.transmit_antenna_index)
+                || state.configured_transponder_fields.get(index).copied() != Some(REQUIRED_FIELDS)
+                || !state.pcr.contains_curve(transponder.curve_index)
+                || !receive_channels.insert((
+                    transponder.receive_antenna_index,
+                    transponder.receive_frequency_hz,
+                ))
+                || (slotted
+                    && (transponder.transmit_slots_per_frame == 0
+                        || transponder.transmit_slot_size_us == 0
+                        || transponder.transmit_slots.is_empty()))
+                || transponder
+                    .transmit_slots
+                    .iter()
+                    .any(|slot| *slot >= transponder.transmit_slots_per_frame)
+            {
+                return false;
+            }
+            let receive = receive_antennas
+                .entry(transponder.receive_antenna_index)
+                .or_insert_with(|| (transponder.receive_bandwidth_hz, Vec::new()));
+            if receive.0 != transponder.receive_bandwidth_hz {
+                return false;
+            }
+            receive.1.push(transponder.receive_frequency_hz);
+        }
+        let definitions = if refresh_receive_antennas {
+            let definitions = receive_antennas
+                .into_iter()
+                .map(|(antenna_index, (bandwidth_hz, mut frequencies_hz))| {
+                    frequencies_hz.sort_unstable();
+                    frequencies_hz.dedup();
+                    let definition = *state.antennas.get(&antenna_index)?;
+                    Some(RxAntennaAdd {
+                        antenna: MimoTxAntenna {
+                            frequency_group_index: 0,
+                            antenna_index,
+                            bandwidth_hz,
+                            spectral_mask_index: definition.spectral_mask_index,
+                            pattern: definition.pattern,
+                        },
+                        frequencies_hz,
+                    })
+                })
+                .collect::<Option<Vec<_>>>();
+            let Some(definitions) = definitions else {
+                return false;
+            };
+            Some(definitions)
+        } else {
+            None
+        };
+        publish_configuration_tables(mac, &state);
+        drop(state);
+        if let Some(definitions) = definitions {
+            for definition in definitions {
+                let remove = RxAntennaRemove {
+                    antenna_index: definition.antenna.antenna_index,
+                }
+                .encode();
+                let Some(add) = definition.encode() else {
+                    return false;
+                };
+                let messages = [
+                    FfiControlMessage {
+                        msg_type: CONTROL_RX_ANTENNA_REMOVE,
+                        payload: FfiSlice {
+                            data: remove.as_ptr(),
+                            len: remove.len(),
+                        },
+                    },
+                    FfiControlMessage {
+                        msg_type: CONTROL_RX_ANTENNA_ADD,
+                        payload: FfiSlice {
+                            data: add.as_ptr(),
+                            len: add.len(),
+                        },
+                    },
+                ];
+                (mac.framework.send_downstream_control)(
+                    mac.framework.framework_ctx,
+                    mac.id,
+                    messages.as_ptr(),
+                    messages.len(),
+                );
+            }
+        }
+    }
     true
 }
 
@@ -1198,6 +2078,7 @@ extern "C" fn start(plugin: *mut c_void) -> bool {
         state.started = false;
         return false;
     };
+    publish_configuration_tables(mac, &state);
     drop(state);
     let payloads = definitions
         .iter()
@@ -1237,6 +2118,7 @@ extern "C" fn stop(plugin: *mut c_void) {
         state.started = false;
         state.queues.clear();
         state.reassembly.clear();
+        state.receive_end.clear();
         state.wakeups.clear();
         state.timers.drain().collect::<Vec<_>>()
     };
@@ -1267,17 +2149,6 @@ extern "C" fn upstream(
     let Some(message_views) = controls(messages, count) else {
         return;
     };
-    let Some(header_data) = find_control(message_views, CONTROL_MODEL_HEADER) else {
-        return;
-    };
-    let Some(header) = ModelHeader::decode(header_data) else {
-        return;
-    };
-    if header.registration_id != MAC_REGISTRATION_BENTPIPE
-        || header.message_type != BENTPIPE_MESSAGE_TYPE
-    {
-        return;
-    }
     let packet_ref = unsafe { &*packet };
     if packet_ref.payload.len > 64 << 20
         || (packet_ref.payload.len != 0 && packet_ref.payload.data.is_null())
@@ -1289,10 +2160,49 @@ extern "C" fn upstream(
     } else {
         unsafe { std::slice::from_raw_parts(packet_ref.payload.data, packet_ref.payload.len) }
     };
-    let Ok(wire) = BentPipeMessage::decode(payload) else {
+    if payload.len() < 2 {
+        return;
+    }
+    let serialization_len = u16::from_be_bytes([payload[0], payload[1]]) as usize;
+    if serialization_len == 0 || payload.len() < serialization_len + 2 {
+        return;
+    }
+    let Ok(wire) = BentPipeMessage::decode(&payload[2..2 + serialization_len]) else {
         return;
     };
+    let header = find_control(message_views, CONTROL_MODEL_HEADER).and_then(ModelHeader::decode);
+    let Some(header) = header else {
+        let mut state = mac.state.lock().unwrap();
+        record_component_drops(
+            mac,
+            &mut state,
+            packet_ref.info.source,
+            &wire.messages,
+            PacketDropReason::BadControl,
+        );
+        return;
+    };
+    if header.registration_id != MAC_REGISTRATION_BENTPIPE
+        || header.message_type != BENTPIPE_MESSAGE_TYPE
+    {
+        record_packet_drop(
+            mac,
+            &mut mac.state.lock().unwrap(),
+            packet_ref.info.source,
+            packet_ref.info.destination,
+            packet_ref.payload.len,
+            PacketDropReason::RegistrationId,
+        );
+        return;
+    }
     let Ok(curve_index) = u16::try_from(wire.curve_index) else {
+        record_component_drops(
+            mac,
+            &mut mac.state.lock().unwrap(),
+            packet_ref.info.source,
+            &wire.messages,
+            PacketDropReason::BadCurve,
+        );
         return;
     };
     mac.counters.upstream_rx(
@@ -1315,18 +2225,27 @@ extern "C" fn upstream(
                             .transponders
                             .iter()
                             .find(|(_, transponder)| {
-                                transponder.receive_enable
-                                    && transponder.receive_antenna_index
-                                        == info.receive_antenna_index
+                                transponder.receive_antenna_index == info.receive_antenna_index
                                     && transponder.receive_frequency_hz == segment.frequency_hz
                             })
                             .map(|(index, transponder)| {
                                 (
                                     *index,
+                                    transponder.receive_enable,
                                     transponder.receive_action,
                                     transponder.transmit_delay_us,
                                     segment.rx_power_dbm,
                                     info.noise_floor_dbm,
+                                    mimo.tx_time_microseconds
+                                        .saturating_add(
+                                            i64::try_from(mimo.propagation_microseconds)
+                                                .unwrap_or(i64::MAX),
+                                        )
+                                        .saturating_add(
+                                            i64::try_from(segment.offset_microseconds)
+                                                .unwrap_or(i64::MAX),
+                                        ),
+                                    info.span_microseconds,
                                 )
                             })
                     })
@@ -1338,13 +2257,13 @@ extern "C" fn upstream(
                     .transponders
                     .iter()
                     .find(|(_, transponder)| {
-                        transponder.receive_enable
-                            && transponder.receive_frequency_hz == rx.frequency_hz
+                        transponder.receive_frequency_hz == rx.frequency_hz
                             && transponder.receive_antenna_index == rx.antenna_index
                     })
                     .map(|(index, transponder)| {
                         (
                             *index,
+                            transponder.receive_enable,
                             transponder.receive_action,
                             transponder.transmit_delay_us,
                             rx.rx_power_dbm
@@ -1356,24 +2275,83 @@ extern "C" fn upstream(
                                         _ => 0.0,
                                     }),
                             rx.noise_floor_dbm,
+                            rx.tx_time_microseconds.saturating_add(
+                                i64::try_from(rx.propagation_microseconds).unwrap_or(i64::MAX),
+                            ),
+                            rx.duration_microseconds,
                         )
                     })
             });
-        let Some((index, receive_action, transmit_delay_us, rx_power_dbm, noise_floor_dbm)) =
-            observation
+        let Some((
+            index,
+            receive_enable,
+            receive_action,
+            transmit_delay_us,
+            rx_power_dbm,
+            noise_floor_dbm,
+            start_of_reception,
+            span_microseconds,
+        )) = observation
         else {
             return;
         };
+        if !receive_enable {
+            record_component_drops(
+                mac,
+                &mut state,
+                packet_ref.info.source,
+                &wire.messages,
+                PacketDropReason::RxOff,
+            );
+            return;
+        }
+        if start_of_reception < state.receive_end.get(&index).copied().unwrap_or(0) {
+            record_component_drops(
+                mac,
+                &mut state,
+                packet_ref.info.source,
+                &wire.messages,
+                PacketDropReason::Lock,
+            );
+            return;
+        }
+        state.receive_end.insert(
+            index,
+            start_of_reception.saturating_add(i64::try_from(span_microseconds).unwrap_or(i64::MAX)),
+        );
         let Some(probability) = state.pcr.get_por(
             curve_index,
             (rx_power_dbm - noise_floor_dbm) as f32,
             packet_ref.payload.len,
         ) else {
+            record_component_drops(
+                mac,
+                &mut state,
+                packet_ref.info.source,
+                &wire.messages,
+                PacketDropReason::BadCurve,
+            );
             return;
         };
         if probability < random_unit(&mut state) {
+            record_component_drops(
+                mac,
+                &mut state,
+                packet_ref.info.source,
+                &wire.messages,
+                PacketDropReason::Sinr,
+            );
             return;
         }
+        update_neighbor_statistics(
+            mac,
+            &mut state,
+            packet_ref.info.source,
+            index,
+            rx_power_dbm - noise_floor_dbm,
+            noise_floor_dbm,
+            wire.start_of_transmission_microseconds,
+        );
         (index, receive_action, transmit_delay_us)
     };
     let controls = message_views
@@ -1403,6 +2381,14 @@ extern "C" fn upstream(
             ReceiveAction::Unknown => false,
         };
         if !accepted {
+            record_packet_drop(
+                mac,
+                &mut mac.state.lock().unwrap(),
+                packet_ref.info.source,
+                destination,
+                component.data.len(),
+                PacketDropReason::Destination,
+            );
             continue;
         }
         let info = FfiPacketInfo {
@@ -1412,10 +2398,7 @@ extern "C" fn upstream(
         let completed = if let Some(fragment) = component.fragment {
             let mut state = mac.state.lock().unwrap();
             let now = now_us();
-            let timeout = state.fragment_timeout_us;
-            state
-                .reassembly
-                .retain(|_, entry| now.saturating_sub(entry.last_update) < timeout);
+            expire_reassembly(mac, &mut state, now);
             let key = (packet_ref.info.source, fragment.sequence);
             let entry = state.reassembly.entry(key).or_insert_with(|| Reassembly {
                 info,
@@ -1481,18 +2464,43 @@ extern "C" fn upstream(
             })
         };
         let Some(packet) = completed else { continue };
+        record_packet_accept(
+            mac,
+            &mut mac.state.lock().unwrap(),
+            packet_ref.info.source,
+            packet.info.destination,
+            packet.payload.len(),
+            true,
+        );
         match decision.1 {
             ReceiveAction::Process => send_upstream(mac, packet),
             ReceiveAction::Ubend => {
                 let now = now_us();
                 let when = now.saturating_add(decision.2 as i64);
-                let queued = enqueue(&mut mac.state.lock().unwrap(), decision.0, packet, when);
+                let destination = packet.info.destination;
+                let size = packet.payload.len();
+                let queued = enqueue(
+                    mac,
+                    &mut mac.state.lock().unwrap(),
+                    decision.0,
+                    packet,
+                    when,
+                );
                 if queued {
                     if when <= now {
-                        drive(mac, decision.0, now);
+                        drive(mac, decision.0, now, None);
                     } else {
                         schedule_transmit(mac, decision.0, when);
                     }
+                } else {
+                    record_packet_drop(
+                        mac,
+                        &mut mac.state.lock().unwrap(),
+                        mac.id,
+                        destination,
+                        size,
+                        PacketDropReason::TxOff,
+                    );
                 }
             }
             ReceiveAction::Unknown => {}
@@ -1536,8 +2544,8 @@ extern "C" fn downstream(
     };
     let Some(index) = index else { return };
     let now = now_us();
-    if enqueue(&mut mac.state.lock().unwrap(), index, packet, now) {
-        drive(mac, index, now);
+    if enqueue(mac, &mut mac.state.lock().unwrap(), index, packet, now) {
+        drive(mac, index, now, None);
     }
 }
 
@@ -1558,10 +2566,7 @@ extern "C" fn timed(
             return;
         }
         let now = now_us();
-        let timeout = state.fragment_timeout_us;
-        state
-            .reassembly
-            .retain(|_, entry| now.saturating_sub(entry.last_update) < timeout);
+        expire_reassembly(mac, &mut state, now);
         drop(state);
         schedule_reassembly_check(mac);
         return;
@@ -1579,7 +2584,7 @@ extern "C" fn timed(
         }
         state.wakeups.remove(&index);
     }
-    drive(mac, index, now_us());
+    drive(mac, index, now_us(), Some(expected));
 }
 
 extern "C" fn process_event(_: *mut c_void, _: u16, _: *const u8, _: usize) {}
@@ -1699,7 +2704,39 @@ mod tests {
     extern "C" fn increment_noop(_: *mut c_void, _: u64, _: u64) -> bool {
         true
     }
+    extern "C" fn register_double_noop(
+        _: *mut c_void,
+        _: *const std::os::raw::c_char,
+        _: *const std::os::raw::c_char,
+        _: bool,
+    ) -> u64 {
+        0
+    }
+    extern "C" fn set_double_noop(_: *mut c_void, _: u64, _: f64) -> bool {
+        true
+    }
+    extern "C" fn register_table_noop(
+        _: *mut c_void,
+        _: *const std::os::raw::c_char,
+        _: *const *const std::os::raw::c_char,
+        _: usize,
+        _: *const std::os::raw::c_char,
+        _: bool,
+    ) -> u64 {
+        0
+    }
+    extern "C" fn set_table_row_noop(
+        _: *mut c_void,
+        _: u64,
+        _: *const u64,
+        _: usize,
+        _: *const emane_plugin_api::FfiStatisticValue,
+        _: usize,
+    ) -> bool {
+        true
+    }
     extern "C" fn neighbor_tx_noop(_: *mut c_void, _: u16, _: u64, _: u64) {}
+    extern "C" fn neighbor_status_noop(_: *mut c_void) {}
     extern "C" fn neighbor_rx_noop(
         _: *mut c_void,
         _: u16,
@@ -1735,6 +2772,24 @@ mod tests {
     extern "C" fn publish_event_noop(_: *mut c_void, _: u16, _: *const u8, _: usize) -> bool {
         true
     }
+    extern "C" fn register_descriptor_noop(
+        _: *mut c_void,
+        _: i32,
+        _: u32,
+        _: *mut c_void,
+        _: emane_plugin_api::FfiFileDescriptorCallback,
+    ) -> u64 {
+        0
+    }
+    extern "C" fn unregister_descriptor_noop(_: *mut c_void, _: u64) -> bool {
+        false
+    }
+    extern "C" fn table_generation_noop(_: *mut c_void, _: u64) -> u64 {
+        0
+    }
+    extern "C" fn remove_table_row_noop(_: *mut c_void, _: u64, _: *const u64, _: usize) -> bool {
+        true
+    }
 
     fn framework(capture: bool) -> FfiFrameworkService {
         FfiFrameworkService {
@@ -1748,14 +2803,27 @@ mod tests {
             log: log_noop,
             register_counter: register_noop,
             increment_counter: increment_noop,
+            maximize_counter: increment_noop,
+            register_double: register_double_noop,
+            set_double: set_double_noop,
+            register_average: register_double_noop,
+            sample_average: set_double_noop,
+            register_table: register_table_noop,
+            set_table_row: set_table_row_noop,
+            clear_table: unregister_descriptor_noop,
+            remove_table_row: remove_table_row_noop,
+            table_generation: table_generation_noop,
             update_neighbor_tx: neighbor_tx_noop,
             update_neighbor_rx: neighbor_rx_noop,
+            update_neighbor_status: neighbor_status_noop,
             update_queue_metric: queue_noop,
             publish_r2ri: publish_noop,
             register_rf_signal_table: register_rf_noop,
             configure_rf_signal_table: configure_rf_noop,
             update_rf_signal_table: update_rf_noop,
             publish_event: publish_event_noop,
+            register_file_descriptor: register_descriptor_noop,
+            unregister_file_descriptor: unregister_descriptor_noop,
         }
     }
 
@@ -1796,7 +2864,7 @@ mod tests {
     #[test]
     fn legacy_aggregation_combines_components_and_respects_disable() {
         let mac = BentpipeMac::new(1, framework(false));
-        let mut state = mac.state.into_inner().unwrap();
+        let mut state = mac.state.lock().unwrap();
         state.transponders.insert(
             1,
             Transponder {
@@ -1806,17 +2874,17 @@ mod tests {
                 ..Transponder::default()
             },
         );
-        assert!(enqueue(&mut state, 1, packet(2, b"abc"), 10));
-        assert!(enqueue(&mut state, 1, packet(3, b"defg"), 10));
-        let components = dequeue_components(&mut state, 1, 10, 10);
+        assert!(enqueue(&mac, &mut state, 1, packet(2, b"abc"), 10));
+        assert!(enqueue(&mac, &mut state, 1, packet(3, b"defg"), 10));
+        let components = dequeue_components(&mac, &mut state, 1, 10, 10);
         assert_eq!(components.len(), 2);
         assert_eq!(components[0].packet.payload, b"abc");
         assert_eq!(components[1].packet.payload, b"defg");
 
         state.aggregation_enable = false;
-        assert!(enqueue(&mut state, 1, packet(2, b"a"), 10));
-        assert!(enqueue(&mut state, 1, packet(2, b"b"), 10));
-        assert_eq!(dequeue_components(&mut state, 1, 10, 10).len(), 1);
+        assert!(enqueue(&mac, &mut state, 1, packet(2, b"a"), 10));
+        assert!(enqueue(&mac, &mut state, 1, packet(2, b"b"), 10));
+        assert_eq!(dequeue_components(&mac, &mut state, 1, 10, 10).len(), 1);
         assert_eq!(state.queues[&1].len(), 1);
     }
 
@@ -1856,7 +2924,8 @@ mod tests {
             },
         );
         let capture = CAPTURE.lock().unwrap();
-        let wire = BentPipeMessage::decode(capture.packet.as_slice()).unwrap();
+        let length = u16::from_be_bytes(capture.packet[..2].try_into().unwrap()) as usize;
+        let wire = BentPipeMessage::decode(&capture.packet[2..2 + length]).unwrap();
         assert_eq!(wire.curve_index, 4);
         assert_eq!(wire.messages.len(), 2);
         assert_eq!(wire.messages[0].destination, 2);
@@ -1880,7 +2949,7 @@ mod tests {
     #[test]
     fn fragmentation_is_reassembled_by_index_and_offset() {
         let mac = BentpipeMac::new(1, framework(false));
-        let mut state = mac.state.into_inner().unwrap();
+        let mut state = mac.state.lock().unwrap();
         state.transponders.insert(
             1,
             Transponder {
@@ -1890,9 +2959,9 @@ mod tests {
                 ..Transponder::default()
             },
         );
-        assert!(enqueue(&mut state, 1, packet(2, b"abcdefgh"), 0));
-        let first = dequeue_components(&mut state, 1, 4, 0);
-        let second = dequeue_components(&mut state, 1, 4, 0);
+        assert!(enqueue(&mac, &mut state, 1, packet(2, b"abcdefgh"), 0));
+        let first = dequeue_components(&mac, &mut state, 1, 4, 0);
+        let second = dequeue_components(&mac, &mut state, 1, 4, 0);
         assert_eq!(first[0].packet.payload, b"abcd");
         assert!(first[0].more);
         assert_eq!(first[0].fragment_index, 0);
@@ -1931,7 +3000,7 @@ mod tests {
                 },
             );
         }
-        let wire = BentPipeMessage {
+        let serialization = BentPipeMessage {
             start_of_transmission_microseconds: 0,
             curve_index: 0,
             messages: vec![
@@ -1948,6 +3017,9 @@ mod tests {
             ],
         }
         .encode_to_vec();
+        let mut wire = Vec::with_capacity(serialization.len() + 2);
+        wire.extend_from_slice(&(serialization.len() as u16).to_be_bytes());
+        wire.extend_from_slice(&serialization);
         let header = ModelHeader {
             registration_id: MAC_REGISTRATION_BENTPIPE,
             sequence: 1,
@@ -2022,7 +3094,43 @@ mod tests {
             (0, 0, true, b"abc".as_slice()),
             (1, 3, false, b"def".as_slice()),
         ] {
-            let wire = BentPipeMessage {
+            let fragment_mimo = MimoRxProperties {
+                tx_time_microseconds: 20 + i64::from(index) * 20,
+                propagation_microseconds: 0,
+                antenna_infos: vec![emane_plugin_api::MimoRxAntennaInfo {
+                    receive_antenna_index: 7,
+                    transmit_antenna_index: 7,
+                    span_microseconds: 10,
+                    receiver_sensitivity_dbm: -100.0,
+                    noise_floor_dbm: -90.0,
+                    segments: vec![emane_plugin_api::RxFrequencySegment {
+                        frequency_hz: 2_400_000_000,
+                        rx_power_dbm: -70.0,
+                        duration_microseconds: 10,
+                        offset_microseconds: 0,
+                    }],
+                }],
+                doppler_shifts_hz: Vec::new(),
+            }
+            .encode()
+            .unwrap();
+            let fragment_controls = [
+                FfiControlMessage {
+                    msg_type: CONTROL_MODEL_HEADER,
+                    payload: FfiSlice {
+                        data: header.as_ptr(),
+                        len: header.len(),
+                    },
+                },
+                FfiControlMessage {
+                    msg_type: CONTROL_MIMO_RX_PROPERTIES,
+                    payload: FfiSlice {
+                        data: fragment_mimo.as_ptr(),
+                        len: fragment_mimo.len(),
+                    },
+                },
+            ];
+            let serialization = BentPipeMessage {
                 start_of_transmission_microseconds: 0,
                 curve_index: 0,
                 messages: vec![BentPipeComponent {
@@ -2037,6 +3145,9 @@ mod tests {
                 }],
             }
             .encode_to_vec();
+            let mut wire = Vec::with_capacity(serialization.len() + 2);
+            wire.extend_from_slice(&(serialization.len() as u16).to_be_bytes());
+            wire.extend_from_slice(&serialization);
             let packet = FfiPacket {
                 info: FfiPacketInfo {
                     source: 1,
@@ -2053,8 +3164,8 @@ mod tests {
             upstream(
                 &receiver as *const BentpipeMac as *mut c_void,
                 &packet,
-                controls.as_ptr(),
-                controls.len(),
+                fragment_controls.as_ptr(),
+                fragment_controls.len(),
             );
             if more {
                 assert!(UPSTREAM_CAPTURE.lock().unwrap().is_empty());

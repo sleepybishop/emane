@@ -1,7 +1,7 @@
 use emane_plugin_api::{
     CommEffectHeader, CommonLayerCounters, FfiConfigItem, FfiConfigRequest, FfiControlMessage,
-    FfiFrameworkService, FfiPacket, FfiPacketInfo, FfiSlice, PluginApi, CONTROL_COMM_EFFECT_HEADER,
-    PLUGIN_ABI_VERSION,
+    FfiFrameworkService, FfiPacket, FfiPacketInfo, FfiSlice, FfiStatisticValue, PluginApi,
+    CONTROL_COMM_EFFECT_HEADER, PLUGIN_ABI_VERSION, STATISTIC_VALUE_U64,
 };
 use prost::Message;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -160,9 +160,135 @@ struct CommEffectShim {
     filter_file: Option<String>,
     filters: Vec<Filter>,
     profiles: HashMap<u16, Effect>,
+    broadcast_accept: HashMap<u16, PacketAcceptInfo>,
+    broadcast_drop: HashMap<u16, PacketDropInfo>,
+    unicast_accept: HashMap<u16, PacketAcceptInfo>,
+    unicast_drop: HashMap<u16, PacketDropInfo>,
+    packet_tables: HashMap<String, u64>,
+    table_generations: HashMap<String, u64>,
     end_of_reception: HashMap<u16, u64>,
     sequence: u32,
     rng: StdRng,
+}
+
+#[derive(Default)]
+struct PacketAcceptInfo {
+    tx_bytes: u64,
+    rx_bytes: u64,
+}
+
+#[derive(Default)]
+struct PacketDropInfo {
+    bytes: [u64; 8],
+}
+
+#[derive(Clone, Copy)]
+enum PacketDropReason {
+    Effect = 0,
+    GroupId = 1,
+    RegistrationId = 2,
+    Destination = 3,
+    BadMessage = 4,
+    NoProfile = 5,
+    ReceiveBuffer = 6,
+    Timer = 7,
+}
+
+fn statistic_u64(value: u64) -> FfiStatisticValue {
+    FfiStatisticValue {
+        value_type: STATISTIC_VALUE_U64,
+        u64_value: value,
+        f64_value: 0.0,
+        string_value: std::ptr::null(),
+    }
+}
+
+fn packet_table_generation(state: &CommEffectShim, name: &str) -> u64 {
+    state.packet_tables.get(name).copied().map_or(0, |handle| {
+        (state.framework.table_generation)(state.framework.framework_ctx, handle)
+    })
+}
+
+fn set_packet_row(state: &CommEffectShim, name: &str, nem_id: u16, values: &[FfiStatisticValue]) {
+    if let Some(handle) = state.packet_tables.get(name).copied() {
+        let key = [u64::from(nem_id)];
+        (state.framework.set_table_row)(
+            state.framework.framework_ctx,
+            handle,
+            key.as_ptr(),
+            key.len(),
+            values.as_ptr(),
+            values.len(),
+        );
+    }
+}
+
+fn record_accept(state: &mut CommEffectShim, info: FfiPacketInfo, size: usize, inbound: bool) {
+    let broadcast = info.destination == BROADCAST_NEM;
+    let name = format!(
+        "{}ByteAcceptTable0",
+        if broadcast { "Broadcast" } else { "Unicast" }
+    );
+    let generation = packet_table_generation(state, &name);
+    let reset = state
+        .table_generations
+        .insert(name.clone(), generation)
+        .is_some_and(|previous| previous != generation);
+    let infos = if broadcast {
+        &mut state.broadcast_accept
+    } else {
+        &mut state.unicast_accept
+    };
+    if reset {
+        infos.clear();
+    }
+    let entry = infos.entry(info.source).or_default();
+    if inbound {
+        entry.rx_bytes = entry.rx_bytes.saturating_add(size as u64);
+    } else {
+        entry.tx_bytes = entry.tx_bytes.saturating_add(size as u64);
+    }
+    let values = [
+        statistic_u64(u64::from(info.source)),
+        statistic_u64(entry.tx_bytes),
+        statistic_u64(entry.rx_bytes),
+    ];
+    set_packet_row(state, &name, info.source, &values);
+}
+
+fn record_drop(
+    state: &mut CommEffectShim,
+    info: FfiPacketInfo,
+    size: usize,
+    reason: PacketDropReason,
+) {
+    let broadcast = info.destination == BROADCAST_NEM;
+    let name = format!(
+        "{}ByteDropTable0",
+        if broadcast { "Broadcast" } else { "Unicast" }
+    );
+    let generation = packet_table_generation(state, &name);
+    let reset = state
+        .table_generations
+        .insert(name.clone(), generation)
+        .is_some_and(|previous| previous != generation);
+    let infos = if broadcast {
+        &mut state.broadcast_drop
+    } else {
+        &mut state.unicast_drop
+    };
+    if reset {
+        infos.clear();
+    }
+    let entry = infos.entry(info.source).or_default();
+    entry.bytes[reason as usize] = entry.bytes[reason as usize].saturating_add(size as u64);
+    let mut values = Vec::with_capacity(9);
+    values.push(statistic_u64(u64::from(info.source)));
+    values.extend(entry.bytes.iter().copied().map(statistic_u64));
+    set_packet_row(state, &name, info.source, &values);
+    state
+        .counters
+        .upstream_drop(state.framework, info.destination);
 }
 
 fn unix_microseconds() -> u64 {
@@ -231,11 +357,86 @@ fn parse_bool(value: &str) -> Option<bool> {
     }
 }
 
+fn register_packet_table(
+    framework: FfiFrameworkService,
+    name: &'static CStr,
+    labels: &[&CStr],
+    description: &'static CStr,
+) -> u64 {
+    let pointers = labels
+        .iter()
+        .map(|label| label.as_ptr())
+        .collect::<Vec<_>>();
+    (framework.register_table)(
+        framework.framework_ctx,
+        name.as_ptr(),
+        pointers.as_ptr(),
+        pointers.len(),
+        description.as_ptr(),
+        true,
+    )
+}
+
 extern "C" fn init(id: u16, framework: *const FfiFrameworkService) -> *mut c_void {
     let Some(framework) = (unsafe { framework.as_ref() }) else {
         return std::ptr::null_mut();
     };
     let framework = *framework;
+    let accept_labels = [c"NEM", c"Num Bytes Tx", c"Num Bytes Rx"];
+    let drop_labels = [
+        c"NEM",
+        c"Effect",
+        c"Grp Id",
+        c"Reg Id",
+        c"Dst MAC",
+        c"Bad Msg",
+        c"No Profile",
+        c"Rx Buff",
+        c"Timer",
+    ];
+    let mut packet_tables = HashMap::new();
+    for (name, handle) in [
+        (
+            "BroadcastByteAcceptTable0",
+            register_packet_table(
+                framework,
+                c"BroadcastByteAcceptTable0",
+                &accept_labels,
+                c"Broadcast bytes accepted",
+            ),
+        ),
+        (
+            "UnicastByteAcceptTable0",
+            register_packet_table(
+                framework,
+                c"UnicastByteAcceptTable0",
+                &accept_labels,
+                c"Unicast bytes accepted",
+            ),
+        ),
+        (
+            "BroadcastByteDropTable0",
+            register_packet_table(
+                framework,
+                c"BroadcastByteDropTable0",
+                &drop_labels,
+                c"Broadcast bytes dropped by reason",
+            ),
+        ),
+        (
+            "UnicastByteDropTable0",
+            register_packet_table(
+                framework,
+                c"UnicastByteDropTable0",
+                &drop_labels,
+                c"Unicast bytes dropped by reason",
+            ),
+        ),
+    ] {
+        if handle != 0 {
+            packet_tables.insert(name.to_string(), handle);
+        }
+    }
     Box::into_raw(Box::new(CommEffectShim {
         id,
         framework,
@@ -247,6 +448,12 @@ extern "C" fn init(id: u16, framework: *const FfiFrameworkService) -> *mut c_voi
         filter_file: None,
         filters: Vec::new(),
         profiles: HashMap::new(),
+        broadcast_accept: HashMap::new(),
+        broadcast_drop: HashMap::new(),
+        unicast_accept: HashMap::new(),
+        unicast_drop: HashMap::new(),
+        packet_tables,
+        table_generations: HashMap::new(),
         end_of_reception: HashMap::new(),
         sequence: 0,
         rng: StdRng::from_entropy(),
@@ -390,6 +597,7 @@ extern "C" fn downstream(
         packet_ref.info.destination,
         packet_ref.payload.len,
     );
+    record_accept(state, packet_ref.info, packet_ref.payload.len, false);
 }
 
 extern "C" fn upstream(
@@ -418,25 +626,70 @@ extern "C" fn upstream(
         .counters
         .upstream_rx(state.framework, packet.info.destination, packet.payload.len);
     if packet.payload.len != 0 && packet.payload.data.is_null() {
+        record_drop(
+            state,
+            packet.info,
+            packet.payload.len,
+            PacketDropReason::BadMessage,
+        );
         return;
     }
+    let Some(header_message) = incoming
+        .iter()
+        .find(|message| message.msg_type == CONTROL_COMM_EFFECT_HEADER)
+    else {
+        record_drop(
+            state,
+            packet.info,
+            packet.payload.len,
+            PacketDropReason::RegistrationId,
+        );
+        return;
+    };
+    if header_message.payload.data.is_null() && header_message.payload.len != 0 {
+        record_drop(
+            state,
+            packet.info,
+            packet.payload.len,
+            PacketDropReason::BadMessage,
+        );
+        return;
+    }
+    let header_data = if header_message.payload.len == 0 {
+        &[][..]
+    } else {
+        unsafe {
+            std::slice::from_raw_parts(header_message.payload.data, header_message.payload.len)
+        }
+    };
+    let Some(header) = CommEffectHeader::decode(header_data) else {
+        record_drop(
+            state,
+            packet.info,
+            packet.payload.len,
+            PacketDropReason::BadMessage,
+        );
+        return;
+    };
     if !state.promiscuous
         && packet.info.destination != BROADCAST_NEM
         && packet.info.destination != state.id
     {
+        record_drop(
+            state,
+            packet.info,
+            packet.payload.len,
+            PacketDropReason::Destination,
+        );
         return;
     }
-    let Some(header) = incoming.iter().find_map(|message| {
-        if message.msg_type != CONTROL_COMM_EFFECT_HEADER || message.payload.data.is_null() {
-            return None;
-        }
-        CommEffectHeader::decode(unsafe {
-            std::slice::from_raw_parts(message.payload.data, message.payload.len)
-        })
-    }) else {
-        return;
-    };
     if header.group_id != state.group_id {
+        record_drop(
+            state,
+            packet.info,
+            packet.payload.len,
+            PacketDropReason::GroupId,
+        );
         return;
     }
     let payload = if packet.payload.len == 0 {
@@ -453,6 +706,13 @@ extern "C" fn upstream(
     let Some(effect) = effect else {
         if state.default_connectivity {
             send_upstream_now(state, packet, incoming);
+        } else {
+            record_drop(
+                state,
+                packet.info,
+                packet.payload.len,
+                PacketDropReason::NoProfile,
+            );
         }
         return;
     };
@@ -473,6 +733,12 @@ extern "C" fn upstream(
         && previous
             .is_some_and(|end| end.saturating_sub(now) > state.receive_buffer_period_microseconds)
     {
+        record_drop(
+            state,
+            packet.info,
+            packet.payload.len,
+            PacketDropReason::ReceiveBuffer,
+        );
         return;
     }
     let end = previous.unwrap_or(now).max(now).saturating_add(reception);
@@ -482,6 +748,16 @@ extern "C" fn upstream(
         effect.probability_loss,
         effect.probability_duplicate,
     );
+    if copies == 0 {
+        record_drop(
+            state,
+            packet.info,
+            packet.payload.len,
+            PacketDropReason::Effect,
+        );
+        return;
+    }
+    let mut timer_failure = false;
     for _ in 0..copies {
         let jitter = if effect.jitter_microseconds == 0 {
             0
@@ -497,7 +773,7 @@ extern "C" fn upstream(
             base.saturating_add(jitter as u64)
         };
         let data = encode_pending(packet, incoming);
-        (state.framework.schedule_timed_event)(
+        if (state.framework.schedule_timed_event)(
             state.framework.framework_ctx,
             state.id,
             expiration / 1_000_000,
@@ -505,11 +781,26 @@ extern "C" fn upstream(
             TIMER_UPSTREAM_PACKET,
             data.as_ptr(),
             data.len(),
+        ) == 0
+        {
+            timer_failure = true;
+        }
+    }
+    if timer_failure {
+        record_drop(
+            state,
+            packet.info,
+            packet.payload.len,
+            PacketDropReason::Timer,
         );
     }
 }
 
-fn send_upstream_now(state: &CommEffectShim, packet: &FfiPacket, incoming: &[FfiControlMessage]) {
+fn send_upstream_now(
+    state: &mut CommEffectShim,
+    packet: &FfiPacket,
+    incoming: &[FfiControlMessage],
+) {
     let outgoing: Vec<_> = incoming
         .iter()
         .copied()
@@ -525,6 +816,7 @@ fn send_upstream_now(state: &CommEffectShim, packet: &FfiPacket, incoming: &[Ffi
     state
         .counters
         .upstream_tx(state.framework, packet.info.destination, packet.payload.len);
+    record_accept(state, packet.info, packet.payload.len, true);
 }
 
 fn task_count(rng: &mut StdRng, loss: f32, duplicate: f32) -> usize {
@@ -571,7 +863,7 @@ fn encode_pending(packet: &FfiPacket, messages: &[FfiControlMessage]) -> Vec<u8>
 }
 
 extern "C" fn timed(plugin: *mut c_void, _: u64, event_id: u32, data: *const u8, data_len: usize) {
-    let Some(state) = (unsafe { (plugin as *mut CommEffectShim).as_ref() }) else {
+    let Some(state) = (unsafe { (plugin as *mut CommEffectShim).as_mut() }) else {
         return;
     };
     if event_id != TIMER_UPSTREAM_PACKET || data.is_null() {
@@ -593,6 +885,7 @@ extern "C" fn timed(plugin: *mut c_void, _: u64, event_id: u32, data: *const u8,
         pending.packet.info.destination,
         pending.packet.payload.len,
     );
+    record_accept(state, pending.packet.info, pending.packet.payload.len, true);
 }
 
 struct Pending {
@@ -957,7 +1250,39 @@ mod tests {
     extern "C" fn capture_increment(_: *mut c_void, _: u64, _: u64) -> bool {
         false
     }
+    extern "C" fn capture_register_double(
+        _: *mut c_void,
+        _: *const c_char,
+        _: *const c_char,
+        _: bool,
+    ) -> u64 {
+        0
+    }
+    extern "C" fn capture_set_double(_: *mut c_void, _: u64, _: f64) -> bool {
+        false
+    }
+    extern "C" fn capture_register_table(
+        _: *mut c_void,
+        _: *const c_char,
+        _: *const *const c_char,
+        _: usize,
+        _: *const c_char,
+        _: bool,
+    ) -> u64 {
+        0
+    }
+    extern "C" fn capture_set_table_row(
+        _: *mut c_void,
+        _: u64,
+        _: *const u64,
+        _: usize,
+        _: *const emane_plugin_api::FfiStatisticValue,
+        _: usize,
+    ) -> bool {
+        false
+    }
     extern "C" fn capture_neighbor_tx(_: *mut c_void, _: u16, _: u64, _: u64) {}
+    extern "C" fn capture_neighbor_status(_: *mut c_void) {}
     extern "C" fn capture_neighbor_rx(
         _: *mut c_void,
         _: u16,
@@ -991,6 +1316,29 @@ mod tests {
         true
     }
     extern "C" fn capture_publish_event(_: *mut c_void, _: u16, _: *const u8, _: usize) -> bool {
+        true
+    }
+    extern "C" fn capture_register_descriptor(
+        _: *mut c_void,
+        _: i32,
+        _: u32,
+        _: *mut c_void,
+        _: emane_plugin_api::FfiFileDescriptorCallback,
+    ) -> u64 {
+        0
+    }
+    extern "C" fn capture_unregister_descriptor(_: *mut c_void, _: u64) -> bool {
+        false
+    }
+    extern "C" fn capture_table_generation(_: *mut c_void, _: u64) -> u64 {
+        0
+    }
+    extern "C" fn capture_remove_table_row(
+        _: *mut c_void,
+        _: u64,
+        _: *const u64,
+        _: usize,
+    ) -> bool {
         true
     }
 
@@ -1063,14 +1411,27 @@ mod tests {
             log: capture_log,
             register_counter: capture_register,
             increment_counter: capture_increment,
+            maximize_counter: capture_increment,
+            register_double: capture_register_double,
+            set_double: capture_set_double,
+            register_average: capture_register_double,
+            sample_average: capture_set_double,
+            register_table: capture_register_table,
+            set_table_row: capture_set_table_row,
+            clear_table: capture_unregister_descriptor,
+            remove_table_row: capture_remove_table_row,
+            table_generation: capture_table_generation,
             update_neighbor_tx: capture_neighbor_tx,
             update_neighbor_rx: capture_neighbor_rx,
+            update_neighbor_status: capture_neighbor_status,
             update_queue_metric: capture_queue,
             publish_r2ri: capture_publish,
             register_rf_signal_table: capture_register_rf,
             configure_rf_signal_table: capture_configure_rf,
             update_rf_signal_table: capture_update_rf,
             publish_event: capture_publish_event,
+            register_file_descriptor: capture_register_descriptor,
+            unregister_file_descriptor: capture_unregister_descriptor,
         };
         let plugin = init(1, &framework);
         let request = FfiConfigRequest {
@@ -1142,6 +1503,16 @@ mod tests {
         assert!(!harness
             .upstream_control_types
             .contains(&CONTROL_COMM_EFFECT_HEADER));
+        let state = unsafe { &*(plugin as *const CommEffectShim) };
+        assert_eq!(state.unicast_accept.get(&1).unwrap().tx_bytes, 3);
+        assert_eq!(state.unicast_accept.get(&2).unwrap().rx_bytes, 3);
+
+        upstream(plugin, &incoming, std::ptr::null(), 0);
+        let state = unsafe { &*(plugin as *const CommEffectShim) };
+        assert_eq!(
+            state.unicast_drop.get(&2).unwrap().bytes[PacketDropReason::RegistrationId as usize],
+            3
+        );
         destroy(plugin);
     }
 }

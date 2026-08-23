@@ -2,10 +2,10 @@ mod pcr;
 
 use emane_plugin_api::{
     CommonLayerCounters, FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket,
-    FfiPacketInfo, FfiSlice, FlowControlToken, FrequencyOfInterest, ModelHeader, PluginApi,
-    RxProperties, TxProperties, CONTROL_FLOW_CONTROL_TOKEN, CONTROL_FREQUENCY_INTEREST,
+    FfiPacketInfo, FfiSlice, FfiStatisticValue, FlowControlToken, FrequencyOfInterest, ModelHeader,
+    PluginApi, RxProperties, TxProperties, CONTROL_FLOW_CONTROL_TOKEN, CONTROL_FREQUENCY_INTEREST,
     CONTROL_MODEL_HEADER, CONTROL_RX_PROPERTIES, CONTROL_TX_PROPERTIES, MAC_REGISTRATION_TDMA,
-    PLUGIN_ABI_VERSION,
+    PLUGIN_ABI_VERSION, STATISTIC_VALUE_F64, STATISTIC_VALUE_STRING, STATISTIC_VALUE_U64,
 };
 use pcr::PcrManager;
 use prost::Message;
@@ -18,8 +18,8 @@ const EVENT_TDMA_SCHEDULE: u16 = 105;
 const TIMER_TX_SLOT: u32 = 1;
 const TIMER_RX_COMPLETE: u32 = 2;
 const TIMER_REASSEMBLY_CHECK: u32 = 3;
+const TIMER_NEIGHBOR_STATUS: u32 = 4;
 const BROADCAST_NEM: u16 = u16::MAX;
-const HEADER_LEN: usize = ModelHeader::ENCODED_LEN + 19;
 const FRAME_OVERHEAD_BYTES: usize = 64;
 
 #[derive(Clone, PartialEq, Message)]
@@ -100,6 +100,49 @@ struct ScheduleStructure {
     bandwidth_hz: u64,
 }
 
+#[derive(Clone, PartialEq, Message)]
+struct TdmaBaseModelMessage {
+    #[prost(uint64, required, tag = "1")]
+    absolute_slot_index: u64,
+    #[prost(uint64, required, tag = "2")]
+    data_rate_bps: u64,
+    #[prost(message, repeated, tag = "3")]
+    messages: Vec<TdmaMessage>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct TdmaMessage {
+    #[prost(enumeration = "TdmaMessageType", required, tag = "1")]
+    message_type: i32,
+    #[prost(uint32, required, tag = "2")]
+    destination: u32,
+    #[prost(uint32, required, tag = "3")]
+    priority: u32,
+    #[prost(bytes = "vec", required, tag = "4")]
+    data: Vec<u8>,
+    #[prost(message, optional, tag = "5")]
+    fragment: Option<TdmaFragment>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct TdmaFragment {
+    #[prost(bool, required, tag = "1")]
+    more: bool,
+    #[prost(uint32, required, tag = "2")]
+    index: u32,
+    #[prost(uint32, required, tag = "3")]
+    offset: u32,
+    #[prost(uint64, required, tag = "4")]
+    sequence: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, prost::Enumeration)]
+#[repr(i32)]
+enum TdmaMessageType {
+    Data = 1,
+    Control = 2,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, prost::Enumeration)]
 #[repr(i32)]
 enum SlotType {
@@ -171,9 +214,60 @@ struct QueuedPacket {
 
 struct Reassembly {
     info: FfiPacketInfo,
-    total_len: usize,
+    message_type: TdmaMessageType,
+    total_len: Option<usize>,
     pieces: BTreeMap<usize, Vec<u8>>,
     last_update_us: i64,
+}
+
+#[derive(Default)]
+struct QueueStatistics {
+    enqueued: u64,
+    dequeued: u64,
+    overflow: u64,
+    too_big: u64,
+    classes: [u64; 5],
+    fragment_histogram: [u64; 10],
+}
+
+#[derive(Clone, Default)]
+struct PacketAcceptInfo {
+    tx_bytes: u64,
+    rx_bytes: u64,
+}
+
+#[derive(Clone, Default)]
+struct PacketDropInfo {
+    bytes: [u64; 12],
+}
+
+#[derive(Clone, Copy)]
+enum PacketDropReason {
+    Sinr = 0,
+    RegistrationId = 1,
+    Destination = 2,
+    QueueOverflow = 3,
+    BadControl = 4,
+    FlowControl = 6,
+    TooBig = 7,
+    TooLong = 8,
+    Frequency = 9,
+    SlotError = 10,
+    MissingFragment = 11,
+}
+
+#[derive(Default)]
+struct TxSlotStatistics {
+    valid: u64,
+    missed: u64,
+    too_big: u64,
+    quantiles: [u64; 8],
+}
+
+#[derive(Default)]
+struct RxSlotStatistics {
+    status: [u64; 7],
+    quantiles: [u64; 8],
 }
 
 struct State {
@@ -190,11 +284,23 @@ struct State {
     strict_dequeue: bool,
     fragment_timeout_us: i64,
     fragment_check_us: i64,
+    neighbor_metric_delete_us: u64,
+    neighbor_metric_update_us: i64,
     schedule: Option<Schedule>,
-    queues: [VecDeque<QueuedPacket>; 4],
+    queues: [VecDeque<QueuedPacket>; 5],
+    queue_statistics: [QueueStatistics; 5],
+    broadcast_accept: [HashMap<u16, PacketAcceptInfo>; 5],
+    broadcast_drop: [HashMap<u16, PacketDropInfo>; 5],
+    unicast_accept: [HashMap<u16, PacketAcceptInfo>; 5],
+    unicast_drop: [HashMap<u16, PacketDropInfo>; 5],
+    tx_slot_statistics: HashMap<u32, TxSlotStatistics>,
+    rx_slot_statistics: HashMap<u32, RxSlotStatistics>,
+    aggregation_histogram: HashMap<u64, u64>,
+    table_generations: HashMap<String, u64>,
     sequence: u64,
+    frame_sequence: u64,
     next_tx_slot: Option<u64>,
-    reassembly: HashMap<(u16, u64), Reassembly>,
+    reassembly: HashMap<(u16, u8, u64), Reassembly>,
     pending_rx: HashMap<u64, OwnedPacket>,
     next_rx_id: u64,
     timers: HashMap<u64, u32>,
@@ -206,15 +312,179 @@ struct TdmaMac {
     id: u16,
     framework: FfiFrameworkService,
     counters: CommonLayerCounters,
+    model_counters: HashMap<String, u64>,
+    tables: HashMap<String, u64>,
     state: Mutex<State>,
 }
 
 impl TdmaMac {
     fn new(id: u16, framework: FfiFrameworkService) -> Self {
-        Self {
+        let mut model_counters = HashMap::new();
+        for name in [
+            "scheduler.scheduleRejectSlotIndexRange",
+            "scheduler.scheduleRejectFrameIndexRange",
+            "scheduler.scheduleRejectUpdateBeforeFull",
+            "scheduler.scheduleRejectOther",
+            "scheduler.scheduleAcceptFull",
+            "scheduler.scheduleAcceptUpdate",
+            "TxSlotValid",
+            "TxSlotErrorMissed",
+            "TxSlotErrorTooBig",
+            "RxSlotValid",
+            "RxSlotErrorMissed",
+            "RxSlotErrorRxDuringIdle",
+            "RxSlotErrorRxDuringTx",
+            "RxSlotErrorRxTooLong",
+            "RxSlotErrorRxWrongFrequency",
+            "RxSlotErrorRxLock",
+            "highWaterMarkQueue0",
+            "highWaterMarkQueue1",
+            "highWaterMarkQueue2",
+            "highWaterMarkQueue3",
+            "highWaterMarkQueue4",
+        ] {
+            let handle = (framework.register_counter)(
+                framework.framework_ctx,
+                std::ffi::CString::new(name).unwrap().as_ptr(),
+                c"TDMA model statistic".as_ptr(),
+                true,
+            );
+            model_counters.insert(name.to_string(), handle);
+        }
+        let mut tables: HashMap<String, u64> = [
+            (
+                "scheduler.ScheduleInfoTable",
+                &[
+                    "Index",
+                    "Frame",
+                    "Slot",
+                    "Type",
+                    "Frequency",
+                    "Data Rate",
+                    "Power",
+                    "Class",
+                    "Destination",
+                ][..],
+            ),
+            ("scheduler.StructureInfoTable", &["Name", "Value"]),
+            (
+                "QueueStatusTable",
+                &[
+                    "Queue", "Enqueued", "Dequeued", "Overflow", "Too Big", "0", "1", "2", "3", "4",
+                ],
+            ),
+            (
+                "QueueFragmentHistogram",
+                &["Queue", "1", "2", "3", "4", "5", "6", "7", "8", "9", ">9"],
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(name, labels)| {
+            let name_value = std::ffi::CString::new(name).ok()?;
+            let labels = labels
+                .iter()
+                .map(|label| std::ffi::CString::new(*label))
+                .collect::<Result<Vec<_>, _>>()
+                .ok()?;
+            let pointers = labels
+                .iter()
+                .map(|label| label.as_ptr())
+                .collect::<Vec<_>>();
+            let handle = (framework.register_table)(
+                framework.framework_ctx,
+                name_value.as_ptr(),
+                pointers.as_ptr(),
+                pointers.len(),
+                c"TDMA model status".as_ptr(),
+                false,
+            );
+            (handle != 0).then(|| (name.to_string(), handle))
+        })
+        .collect();
+        let mut register_table = |name: &str, labels: &[&str], clearable: bool| {
+            let Ok(name_value) = std::ffi::CString::new(name) else {
+                return;
+            };
+            let Ok(labels) = labels
+                .iter()
+                .map(|label| std::ffi::CString::new(*label))
+                .collect::<Result<Vec<_>, _>>()
+            else {
+                return;
+            };
+            let pointers = labels
+                .iter()
+                .map(|label| label.as_ptr())
+                .collect::<Vec<_>>();
+            let handle = (framework.register_table)(
+                framework.framework_ctx,
+                name_value.as_ptr(),
+                pointers.as_ptr(),
+                pointers.len(),
+                c"TDMA model status".as_ptr(),
+                clearable,
+            );
+            if handle != 0 {
+                tables.insert(name.to_string(), handle);
+            }
+        };
+        register_table(
+            "PacketComponentAggregationHistogram",
+            &["Components", "Count"],
+            false,
+        );
+        register_table(
+            "TxSlotStatusTable",
+            &[
+                "Index", "Frame", "Slot", "Valid", "Missed", "Big", ".25", ".50", ".75", "1.0",
+                "1.25", "1.50", "1.75", ">1.75",
+            ],
+            false,
+        );
+        register_table(
+            "RxSlotStatusTable",
+            &[
+                "Index", "Frame", "Slot", "Valid", "Missed", "Idle", "Tx", "Long", "Freq", "Lock",
+                ".25", ".50", ".75", "1.0", "1.25", "1.50", "1.75", ">1.75",
+            ],
+            false,
+        );
+        for queue in 0..5 {
+            for prefix in ["BroadcastByteAcceptTable", "UnicastByteAcceptTable"] {
+                register_table(
+                    &format!("{prefix}{queue}"),
+                    &["NEM", "Num Bytes Tx", "Num Bytes Rx"],
+                    true,
+                );
+            }
+            for prefix in ["BroadcastByteDropTable", "UnicastByteDropTable"] {
+                register_table(
+                    &format!("{prefix}{queue}"),
+                    &[
+                        "NEM",
+                        "SINR",
+                        "Reg Id",
+                        "Dst MAC",
+                        "Queue Overflow",
+                        "Bad Control",
+                        "Bad Spectrum Query",
+                        "Flow Control",
+                        "Big",
+                        "Long",
+                        "Freq",
+                        "Slot Error",
+                        "Miss Fragment",
+                    ],
+                    true,
+                );
+            }
+        }
+        let mac = Self {
             id,
             framework,
             counters: CommonLayerCounters::register(framework),
+            model_counters,
+            tables,
             state: Mutex::new(State {
                 promiscuous: false,
                 flow_control_enable: false,
@@ -222,16 +492,28 @@ impl TdmaMac {
                 available_tokens: 10,
                 pcr_uri: String::new(),
                 pcr: None,
-                queue_depth: 255,
+                queue_depth: 256,
                 aggregation_enable: true,
                 aggregation_threshold: 90.0,
                 fragmentation_enable: true,
                 strict_dequeue: false,
                 fragment_timeout_us: 5_000_000,
                 fragment_check_us: 2_000_000,
+                neighbor_metric_delete_us: 60_000_000,
+                neighbor_metric_update_us: 1_000_000,
                 schedule: None,
                 queues: std::array::from_fn(|_| VecDeque::new()),
+                queue_statistics: std::array::from_fn(|_| QueueStatistics::default()),
+                broadcast_accept: std::array::from_fn(|_| HashMap::new()),
+                broadcast_drop: std::array::from_fn(|_| HashMap::new()),
+                unicast_accept: std::array::from_fn(|_| HashMap::new()),
+                unicast_drop: std::array::from_fn(|_| HashMap::new()),
+                tx_slot_statistics: HashMap::new(),
+                rx_slot_statistics: HashMap::new(),
+                aggregation_histogram: HashMap::new(),
+                table_generations: HashMap::new(),
                 sequence: 0,
+                frame_sequence: 0,
                 next_tx_slot: None,
                 reassembly: HashMap::new(),
                 pending_rx: HashMap::new(),
@@ -240,7 +522,78 @@ impl TdmaMac {
                 random_state: 0xD1B5_4A32_D192_ED03 ^ u64::from(id),
                 started: false,
             }),
+        };
+        {
+            let state = mac.state.lock().unwrap();
+            for index in 0..5 {
+                publish_queue_tables(&mac, &state, index);
+            }
         }
+        mac
+    }
+
+    fn increment(&self, name: &str, amount: u64) {
+        if let Some(handle) = self.model_counters.get(name).copied() {
+            (self.framework.increment_counter)(self.framework.framework_ctx, handle, amount);
+        }
+    }
+
+    fn maximize(&self, name: &str, value: u64) {
+        if let Some(handle) = self.model_counters.get(name).copied() {
+            (self.framework.maximize_counter)(self.framework.framework_ctx, handle, value);
+        }
+    }
+
+    fn set_table_row(&self, name: &str, key: &[u64], values: &[FfiStatisticValue]) {
+        if let Some(handle) = self.tables.get(name).copied() {
+            (self.framework.set_table_row)(
+                self.framework.framework_ctx,
+                handle,
+                key.as_ptr(),
+                key.len(),
+                values.as_ptr(),
+                values.len(),
+            );
+        }
+    }
+
+    fn clear_table(&self, name: &str) {
+        if let Some(handle) = self.tables.get(name).copied() {
+            (self.framework.clear_table)(self.framework.framework_ctx, handle);
+        }
+    }
+
+    fn table_generation(&self, name: &str) -> u64 {
+        self.tables.get(name).copied().map_or(0, |handle| {
+            (self.framework.table_generation)(self.framework.framework_ctx, handle)
+        })
+    }
+}
+
+fn stat_u64(value: u64) -> FfiStatisticValue {
+    FfiStatisticValue {
+        value_type: STATISTIC_VALUE_U64,
+        u64_value: value,
+        f64_value: 0.0,
+        string_value: std::ptr::null(),
+    }
+}
+
+fn stat_f64(value: f64) -> FfiStatisticValue {
+    FfiStatisticValue {
+        value_type: STATISTIC_VALUE_F64,
+        u64_value: 0,
+        f64_value: value,
+        string_value: std::ptr::null(),
+    }
+}
+
+fn stat_string(value: &CStr) -> FfiStatisticValue {
+    FfiStatisticValue {
+        value_type: STATISTIC_VALUE_STRING,
+        u64_value: 0,
+        f64_value: 0.0,
+        string_value: value.as_ptr(),
     }
 }
 
@@ -433,6 +786,377 @@ fn parse_schedule(data: &[u8], current: Option<&Schedule>) -> Result<(Schedule, 
     Ok((schedule, full))
 }
 
+fn publish_schedule_tables(mac: &TdmaMac, schedule: &Schedule) {
+    for (key, name, value) in [
+        (0, c"bandwidth", schedule.bandwidth_hz),
+        (1, c"frames", u64::from(schedule.frames_per_multiframe)),
+        (2, c"slots", u64::from(schedule.slots_per_frame)),
+        (3, c"slotduration", schedule.slot_duration_us),
+        (4, c"slotoverhead", schedule.overhead_us),
+    ] {
+        mac.set_table_row(
+            "scheduler.StructureInfoTable",
+            &[key],
+            &[stat_string(name), stat_u64(value)],
+        );
+    }
+    for (index, slot) in schedule.slots.iter().enumerate() {
+        let index = index as u64;
+        let frame = index / u64::from(schedule.slots_per_frame);
+        let slot_index = index % u64::from(schedule.slots_per_frame);
+        let values = match slot {
+            Slot::Tx {
+                frequency_hz,
+                data_rate_bps,
+                service_class,
+                power_dbm,
+                destination,
+            } => vec![
+                stat_u64(index),
+                stat_u64(frame),
+                stat_u64(slot_index),
+                stat_string(c"TX"),
+                stat_u64(*frequency_hz),
+                stat_u64(*data_rate_bps),
+                stat_f64(*power_dbm),
+                stat_u64(u64::from(*service_class)),
+                stat_u64(u64::from(*destination)),
+            ],
+            Slot::Rx { frequency_hz } => vec![
+                stat_u64(index),
+                stat_u64(frame),
+                stat_u64(slot_index),
+                stat_string(c"RX"),
+                stat_u64(*frequency_hz),
+                stat_string(c""),
+                stat_string(c""),
+                stat_string(c""),
+                stat_string(c""),
+            ],
+            Slot::Idle => vec![
+                stat_u64(index),
+                stat_u64(frame),
+                stat_u64(slot_index),
+                stat_string(c"IDLE"),
+                stat_string(c""),
+                stat_string(c""),
+                stat_string(c""),
+                stat_string(c""),
+                stat_string(c""),
+            ],
+        };
+        mac.set_table_row("scheduler.ScheduleInfoTable", &[index], &values);
+    }
+}
+
+fn publish_queue_tables(mac: &TdmaMac, state: &State, index: usize) {
+    let statistics = &state.queue_statistics[index];
+    let mut status = vec![
+        stat_u64(index as u64),
+        stat_u64(statistics.enqueued),
+        stat_u64(statistics.dequeued),
+        stat_u64(statistics.overflow),
+        stat_u64(statistics.too_big),
+    ];
+    status.extend(statistics.classes.iter().copied().map(stat_u64));
+    mac.set_table_row("QueueStatusTable", &[index as u64], &status);
+    let mut histogram = vec![stat_u64(index as u64)];
+    histogram.extend(statistics.fragment_histogram.iter().copied().map(stat_u64));
+    mac.set_table_row("QueueFragmentHistogram", &[index as u64], &histogram);
+}
+
+fn priority_to_queue(priority: u8) -> usize {
+    match priority {
+        8..=23 => 1,
+        32..=47 => 2,
+        48..=63 => 3,
+        _ => 0,
+    }
+}
+
+fn packet_queue(message_type: TdmaMessageType, priority: u8) -> usize {
+    if message_type == TdmaMessageType::Control {
+        4
+    } else {
+        priority_to_queue(priority)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_packet_accept(
+    mac: &TdmaMac,
+    state: &mut State,
+    queue: usize,
+    source: u16,
+    destination: u16,
+    size: usize,
+    inbound: bool,
+) {
+    let broadcast = destination == BROADCAST_NEM;
+    let prefix = if broadcast {
+        "BroadcastByteAcceptTable"
+    } else {
+        "UnicastByteAcceptTable"
+    };
+    let name = format!("{prefix}{queue}");
+    let generation = mac.table_generation(&name);
+    let reset = state
+        .table_generations
+        .insert(name.clone(), generation)
+        .is_some_and(|previous| previous != generation);
+    let infos = if broadcast {
+        &mut state.broadcast_accept[queue]
+    } else {
+        &mut state.unicast_accept[queue]
+    };
+    if reset {
+        infos.clear();
+    }
+    let info = infos.entry(source).or_default();
+    if inbound {
+        info.rx_bytes = info.rx_bytes.saturating_add(size as u64);
+    } else {
+        info.tx_bytes = info.tx_bytes.saturating_add(size as u64);
+    }
+    let row = [
+        stat_u64(u64::from(source)),
+        stat_u64(info.tx_bytes),
+        stat_u64(info.rx_bytes),
+    ];
+    mac.set_table_row(&name, &[u64::from(source)], &row);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_packet_drop(
+    mac: &TdmaMac,
+    state: &mut State,
+    queue: usize,
+    source: u16,
+    destination: u16,
+    size: usize,
+    reason: PacketDropReason,
+) {
+    let broadcast = destination == BROADCAST_NEM;
+    let prefix = if broadcast {
+        "BroadcastByteDropTable"
+    } else {
+        "UnicastByteDropTable"
+    };
+    let name = format!("{prefix}{queue}");
+    let generation = mac.table_generation(&name);
+    let reset = state
+        .table_generations
+        .insert(name.clone(), generation)
+        .is_some_and(|previous| previous != generation);
+    let infos = if broadcast {
+        &mut state.broadcast_drop[queue]
+    } else {
+        &mut state.unicast_drop[queue]
+    };
+    if reset {
+        infos.clear();
+    }
+    let info = infos.entry(source).or_default();
+    info.bytes[reason as usize] = info.bytes[reason as usize].saturating_add(size as u64);
+    let mut row = Vec::with_capacity(13);
+    row.push(stat_u64(u64::from(source)));
+    row.extend(info.bytes.iter().copied().map(stat_u64));
+    mac.set_table_row(&name, &[u64::from(source)], &row);
+}
+
+fn record_message_drop(
+    mac: &TdmaMac,
+    state: &mut State,
+    source: u16,
+    message: &TdmaMessage,
+    reason: PacketDropReason,
+) {
+    let Ok(destination) = u16::try_from(message.destination) else {
+        return;
+    };
+    let Ok(priority) = u8::try_from(message.priority) else {
+        return;
+    };
+    let Some(message_type) = TdmaMessageType::try_from(message.message_type).ok() else {
+        return;
+    };
+    record_packet_drop(
+        mac,
+        state,
+        packet_queue(message_type, priority),
+        source,
+        destination,
+        message.data.len(),
+        reason,
+    );
+}
+
+fn record_all_message_drops(
+    mac: &TdmaMac,
+    state: &mut State,
+    source: u16,
+    messages: &[TdmaMessage],
+    reason: PacketDropReason,
+) {
+    for message in messages {
+        record_message_drop(mac, state, source, message, reason);
+    }
+}
+
+fn quantile(ratio: f64) -> usize {
+    if ratio <= 0.25 {
+        0
+    } else if ratio <= 0.50 {
+        1
+    } else if ratio <= 0.75 {
+        2
+    } else if ratio <= 1.00 {
+        3
+    } else if ratio <= 1.25 {
+        4
+    } else if ratio <= 1.50 {
+        5
+    } else if ratio <= 1.75 {
+        6
+    } else {
+        7
+    }
+}
+
+fn slot_coordinates(schedule: &Schedule, absolute_slot: u64) -> (u32, u32, u32) {
+    let relative = (absolute_slot % schedule.cycle_slots()) as u32;
+    (
+        relative,
+        relative / schedule.slots_per_frame,
+        relative % schedule.slots_per_frame,
+    )
+}
+
+fn slot_ratio(schedule: &Schedule, absolute_slot: u64, now: i64) -> f64 {
+    now.saturating_sub(schedule.slot_start(absolute_slot)) as f64 / schedule.slot_duration_us as f64
+}
+
+#[derive(Clone, Copy)]
+enum TxSlotStatus {
+    Valid,
+    Missed,
+}
+
+fn update_tx_slot_status(mac: &TdmaMac, absolute_slot: u64, now: i64, status: TxSlotStatus) {
+    let mut state = mac.state.lock().unwrap();
+    let Some(schedule) = state.schedule.clone() else {
+        return;
+    };
+    let (relative, frame, slot) = slot_coordinates(&schedule, absolute_slot);
+    let q = quantile(slot_ratio(&schedule, absolute_slot, now));
+    let info = state.tx_slot_statistics.entry(relative).or_default();
+    let counter = match status {
+        TxSlotStatus::Valid => {
+            info.valid = info.valid.saturating_add(1);
+            "TxSlotValid"
+        }
+        TxSlotStatus::Missed => {
+            info.missed = info.missed.saturating_add(1);
+            "TxSlotErrorMissed"
+        }
+    };
+    info.quantiles[q] = info.quantiles[q].saturating_add(1);
+    let mut row = vec![
+        stat_u64(u64::from(relative)),
+        stat_u64(u64::from(frame)),
+        stat_u64(u64::from(slot)),
+        stat_u64(info.valid),
+        stat_u64(info.missed),
+        stat_u64(info.too_big),
+    ];
+    row.extend(info.quantiles.iter().copied().map(stat_u64));
+    mac.increment(counter, 1);
+    mac.set_table_row("TxSlotStatusTable", &[u64::from(relative)], &row);
+}
+
+#[derive(Clone, Copy)]
+enum RxSlotStatus {
+    Valid = 0,
+    Missed = 1,
+    Idle = 2,
+    Tx = 3,
+    TooLong = 4,
+    WrongFrequency = 5,
+    Lock = 6,
+}
+
+fn update_rx_slot_status(
+    mac: &TdmaMac,
+    state: &mut State,
+    absolute_slot: u64,
+    ratio_slot: u64,
+    now: i64,
+    status: RxSlotStatus,
+) {
+    let Some(schedule) = state.schedule.clone() else {
+        return;
+    };
+    let (relative, frame, slot) = slot_coordinates(&schedule, absolute_slot);
+    let q = quantile(slot_ratio(&schedule, ratio_slot, now));
+    let info = state.rx_slot_statistics.entry(relative).or_default();
+    info.status[status as usize] = info.status[status as usize].saturating_add(1);
+    info.quantiles[q] = info.quantiles[q].saturating_add(1);
+    let counter = match status {
+        RxSlotStatus::Valid => "RxSlotValid",
+        RxSlotStatus::Missed => "RxSlotErrorMissed",
+        RxSlotStatus::Idle => "RxSlotErrorRxDuringIdle",
+        RxSlotStatus::Tx => "RxSlotErrorRxDuringTx",
+        RxSlotStatus::TooLong => "RxSlotErrorRxTooLong",
+        RxSlotStatus::WrongFrequency => "RxSlotErrorRxWrongFrequency",
+        RxSlotStatus::Lock => "RxSlotErrorRxLock",
+    };
+    let mut row = vec![
+        stat_u64(u64::from(relative)),
+        stat_u64(u64::from(frame)),
+        stat_u64(u64::from(slot)),
+    ];
+    row.extend(info.status.iter().copied().map(stat_u64));
+    row.extend(info.quantiles.iter().copied().map(stat_u64));
+    mac.increment(counter, 1);
+    mac.set_table_row("RxSlotStatusTable", &[u64::from(relative)], &row);
+}
+
+fn update_aggregation_histogram(mac: &TdmaMac, state: &mut State, components: usize) {
+    let components = components as u64;
+    let count = state.aggregation_histogram.entry(components).or_default();
+    *count = count.saturating_add(1);
+    mac.set_table_row(
+        "PacketComponentAggregationHistogram",
+        &[components],
+        &[stat_u64(components), stat_u64(*count)],
+    );
+}
+
+fn expire_reassembly(mac: &TdmaMac, state: &mut State, now: i64) {
+    let timeout = state.fragment_timeout_us;
+    let expired = state
+        .reassembly
+        .iter()
+        .filter_map(|(key, entry)| {
+            (now.saturating_sub(entry.last_update_us) >= timeout).then_some(*key)
+        })
+        .collect::<Vec<_>>();
+    for key in expired {
+        if let Some(entry) = state.reassembly.remove(&key) {
+            let bytes = entry.pieces.values().map(Vec::len).sum();
+            record_packet_drop(
+                mac,
+                state,
+                packet_queue(entry.message_type, entry.info.priority),
+                key.0,
+                entry.info.destination,
+                bytes,
+                PacketDropReason::MissingFragment,
+            );
+        }
+    }
+}
+
 fn send_flow_update(mac: &TdmaMac, tokens: u16) {
     let bytes = FlowControlToken { tokens }.encode();
     let control = FfiControlMessage {
@@ -481,45 +1205,50 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                 let Ok(v) = value.parse::<u16>() else {
                     return false;
                 };
-                if v == 0 {
-                    return false;
-                }
                 state.flow_control_tokens = v;
                 state.available_tokens = v;
             }
             "pcrcurveuri" => state.pcr_uri.clone_from(value),
             "fragmenttimeoutthreshold" => {
-                let Ok(v) = value.parse::<u64>() else {
+                let Ok(v) = value.parse::<u16>() else {
                     return false;
                 };
-                state.fragment_timeout_us =
-                    i64::try_from(v.saturating_mul(1_000_000)).unwrap_or(i64::MAX);
+                state.fragment_timeout_us = i64::from(v).saturating_mul(1_000_000);
             }
             "fragmentcheckthreshold" => {
-                let Ok(v) = value.parse::<u64>() else {
+                let Ok(v) = value.parse::<u16>() else {
                     return false;
                 };
                 if v == 0 {
                     return false;
                 }
-                state.fragment_check_us =
-                    i64::try_from(v.saturating_mul(1_000_000)).unwrap_or(i64::MAX);
+                state.fragment_check_us = i64::from(v).saturating_mul(1_000_000);
             }
-            "neighbormetricdeletetime" | "neighbormetricupdateinterval" => {
-                if value
+            "neighbormetricdeletetime" => {
+                let Some(seconds) = value
                     .parse::<f64>()
                     .ok()
-                    .filter(|v| v.is_finite() && *v >= 0.0)
-                    .is_none()
-                {
+                    .filter(|v| v.is_finite() && (1.0..=3_660.0).contains(v))
+                else {
                     return false;
-                }
+                };
+                state.neighbor_metric_delete_us = (seconds * 1_000_000.0).round() as u64;
+            }
+            "neighbormetricupdateinterval" => {
+                let Some(seconds) = value
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|v| v.is_finite() && (0.1..=60.0).contains(v))
+                else {
+                    return false;
+                };
+                state.neighbor_metric_update_us = (seconds * 1_000_000.0).round() as i64;
             }
             "queue.depth" => {
                 let Ok(v) = value.parse::<usize>() else {
                     return false;
                 };
-                if v == 0 || v > 65_535 {
+                if v > 65_535 {
                     return false;
                 }
                 state.queue_depth = v;
@@ -579,6 +1308,7 @@ extern "C" fn start(plugin: *mut c_void) -> bool {
     }
     schedule_next_tx(mac, true);
     schedule_reassembly_check(mac);
+    schedule_neighbor_status(mac);
     true
 }
 
@@ -637,6 +1367,24 @@ fn schedule_reassembly_check(mac: &TdmaMac) {
     }
 }
 
+fn schedule_neighbor_status(mac: &TdmaMac) {
+    let when = {
+        let state = mac.state.lock().unwrap();
+        if !state.started {
+            return;
+        }
+        now_us().saturating_add(state.neighbor_metric_update_us)
+    };
+    let timer = schedule_timer(mac, when, TIMER_NEIGHBOR_STATUS, &0u64.to_be_bytes());
+    if timer != 0 {
+        mac.state
+            .lock()
+            .unwrap()
+            .timers
+            .insert(timer, TIMER_NEIGHBOR_STATUS);
+    }
+}
+
 fn schedule_next_tx(mac: &TdmaMac, first_after_schedule: bool) {
     let now = now_us();
     let next = {
@@ -670,57 +1418,14 @@ fn queue_index(state: &State, requested: u8, destination: u16) -> Option<usize> 
             .iter()
             .any(|queued| destination == 0 || queued.packet.info.destination == destination)
     };
-    let requested = usize::from(requested.min(3));
+    let requested = usize::from(requested.min(4));
     if eligible(requested) {
         Some(requested)
     } else if state.strict_dequeue {
         None
     } else {
-        (0..4).rev().find(|index| eligible(*index))
+        (0..5).rev().find(|index| eligible(*index))
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn encode_header(
-    sequence: u64,
-    rate: u64,
-    category: u8,
-    absolute_slot: u64,
-    offset: u32,
-    total_len: u32,
-    fragment_index: u16,
-    more: bool,
-) -> [u8; HEADER_LEN] {
-    let model = ModelHeader {
-        registration_id: MAC_REGISTRATION_TDMA,
-        sequence,
-        data_rate_bps: rate,
-        category,
-        message_type: 1,
-        flags: u16::from(more || offset != 0),
-    };
-    let mut data = [0u8; HEADER_LEN];
-    data[..24].copy_from_slice(&model.encode());
-    data[24..32].copy_from_slice(&absolute_slot.to_be_bytes());
-    data[32..36].copy_from_slice(&offset.to_be_bytes());
-    data[36..40].copy_from_slice(&total_len.to_be_bytes());
-    data[40..42].copy_from_slice(&fragment_index.to_be_bytes());
-    data[42] = u8::from(more);
-    data
-}
-
-fn decode_header(data: &[u8]) -> Option<(ModelHeader, u64, usize, usize, u16, bool)> {
-    if data.len() < HEADER_LEN || data[42] > 1 {
-        return None;
-    }
-    Some((
-        ModelHeader::decode(data)?,
-        u64::from_be_bytes(data[24..32].try_into().ok()?),
-        u32::from_be_bytes(data[32..36].try_into().ok()?) as usize,
-        u32::from_be_bytes(data[36..40].try_into().ok()?) as usize,
-        u16::from_be_bytes(data[40..42].try_into().ok()?),
-        data[42] != 0,
-    ))
 }
 
 struct Transmission {
@@ -728,7 +1433,6 @@ struct Transmission {
     bytes: Vec<u8>,
     sequence: u64,
     offset: usize,
-    total_len: usize,
     fragment_index: u16,
     more: bool,
     frequency: u64,
@@ -736,11 +1440,15 @@ struct Transmission {
     category: u8,
     power: f64,
     bandwidth: u64,
-    duration: u64,
     tx_time: i64,
 }
 
-fn take_transmission(state: &mut State, absolute_slot: u64, used: usize) -> Option<Transmission> {
+fn take_transmission(
+    mac: &TdmaMac,
+    state: &mut State,
+    absolute_slot: u64,
+    used: usize,
+) -> Option<Transmission> {
     let schedule = state.schedule.clone()?;
     let Slot::Tx {
         frequency_hz,
@@ -768,14 +1476,30 @@ fn take_transmission(state: &mut State, absolute_slot: u64, used: usize) -> Opti
     let front = state.queues[index].get_mut(position)?;
     let remaining = front.packet.payload.len().saturating_sub(front.offset);
     if remaining > available && !state.fragmentation_enable {
-        state.queues[index].remove(position);
+        if used != 0 {
+            return None;
+        }
+        let dropped = state.queues[index].remove(position)?;
+        state.queue_statistics[index].too_big += 1;
+        record_packet_drop(
+            mac,
+            state,
+            index,
+            dropped.packet.info.source,
+            dropped.packet.info.destination,
+            dropped.packet.payload.len(),
+            PacketDropReason::TooBig,
+        );
+        publish_queue_tables(mac, state, index);
+        mac.counters
+            .downstream_drop(mac.framework, dropped.packet.info.destination);
         if state.flow_control_enable {
             state.available_tokens = state
                 .available_tokens
                 .saturating_add(1)
                 .min(state.flow_control_tokens);
         }
-        return take_transmission(state, absolute_slot, used);
+        return take_transmission(mac, state, absolute_slot, used);
     }
     let take = remaining.min(available);
     let offset = front.offset;
@@ -797,14 +1521,18 @@ fn take_transmission(state: &mut State, absolute_slot: u64, used: usize) -> Opti
                 .min(state.flow_control_tokens);
         }
     }
-    let bits = (take + FRAME_OVERHEAD_BYTES) as u128 * 8_000_000;
-    let duration = bits.div_ceil(u128::from(data_rate_bps)) as u64;
-    Some(Transmission {
+    let statistics = &mut state.queue_statistics[index];
+    statistics.classes[usize::from(service_class).min(4)] += 1;
+    if !more {
+        statistics.dequeued += 1;
+        let parts = usize::from(fragment_index).saturating_add(1);
+        statistics.fragment_histogram[parts.saturating_sub(1).min(9)] += 1;
+    }
+    let transmission = Transmission {
         info,
         bytes,
         sequence,
         offset,
-        total_len,
         fragment_index,
         more,
         frequency: frequency_hz,
@@ -812,113 +1540,183 @@ fn take_transmission(state: &mut State, absolute_slot: u64, used: usize) -> Opti
         category: service_class,
         power: power_dbm,
         bandwidth: schedule.bandwidth_hz,
-        duration: duration.max(1),
         tx_time: schedule.slot_start(absolute_slot),
-    })
+    };
+    publish_queue_tables(mac, state, index);
+    Some(transmission)
 }
 
 fn transmit_slot(mac: &TdmaMac, absolute_slot: u64) {
-    let mut used = 0usize;
-    loop {
-        let (transmission, aggregate, threshold, capacity, flow_update) = {
-            let mut state = mac.state.lock().unwrap();
-            let Some(schedule) = state.schedule.as_ref() else {
-                return;
-            };
-            let Slot::Tx { data_rate_bps, .. } = schedule.slot(absolute_slot) else {
-                return;
-            };
-            let capacity = (u128::from(*data_rate_bps)
-                * u128::from(
-                    schedule
-                        .slot_duration_us
-                        .saturating_sub(schedule.overhead_us),
-                )
-                / 8_000_000)
-                .min(usize::MAX as u128) as usize;
-            let aggregate = state.aggregation_enable;
-            let threshold = state.aggregation_threshold;
-            let previous_tokens = state.available_tokens;
-            let transmission = take_transmission(&mut state, absolute_slot, used);
-            let flow_update = (state.flow_control_enable
-                && state.available_tokens != previous_tokens)
-                .then_some(state.available_tokens);
-            (transmission, aggregate, threshold, capacity, flow_update)
-        };
-        let Some(tx_item) = transmission else {
-            if let Some(tokens) = flow_update {
-                send_flow_update(mac, tokens);
-            }
-            return;
-        };
-        let header = encode_header(
-            tx_item.sequence,
-            tx_item.rate,
-            tx_item.category,
-            absolute_slot,
-            u32::try_from(tx_item.offset).unwrap_or(u32::MAX),
-            u32::try_from(tx_item.total_len).unwrap_or(u32::MAX),
-            tx_item.fragment_index,
-            tx_item.more,
-        );
-        let phy_offset = ((used as u128 * 8_000_000) / u128::from(tx_item.rate))
-            .min(u128::from(u64::MAX)) as u64;
-        let tx = TxProperties {
-            frequency_hz: tx_item.frequency,
-            bandwidth_hz: tx_item.bandwidth,
-            tx_power_dbm: tx_item.power,
-            duration_microseconds: tx_item.duration,
-            offset_microseconds: phy_offset,
-            tx_time_microseconds: tx_item.tx_time,
-            antenna_index: 0,
-            spectral_mask_index: 0,
-            sub_id: 1,
-        };
-        let tx_data = tx.encode();
-        let messages = [
-            FfiControlMessage {
-                msg_type: CONTROL_MODEL_HEADER,
-                payload: FfiSlice {
-                    data: header.as_ptr(),
-                    len: header.len(),
-                },
-            },
-            FfiControlMessage {
-                msg_type: CONTROL_TX_PROPERTIES,
-                payload: FfiSlice {
-                    data: tx_data.as_ptr(),
-                    len: tx_data.len(),
-                },
-            },
-        ];
-        let packet = FfiPacket {
-            info: tx_item.info,
-            payload: FfiSlice {
-                data: tx_item.bytes.as_ptr(),
-                len: tx_item.bytes.len(),
-            },
-        };
-        (mac.framework.send_downstream_packet)(
-            mac.framework.framework_ctx,
-            mac.id,
-            &packet,
-            messages.as_ptr(),
-            messages.len(),
-        );
-        mac.counters
-            .downstream_tx(mac.framework, tx_item.info.destination, tx_item.bytes.len());
-        if let Some(tokens) = flow_update {
-            send_flow_update(mac, tokens);
-        }
-        used = used.saturating_add(tx_item.bytes.len() + FRAME_OVERHEAD_BYTES);
-        if !aggregate
-            || tx_item.more
-            || used >= capacity
-            || used as f64 / capacity.max(1) as f64 * 100.0 >= threshold
-        {
-            return;
-        }
+    let now = now_us();
+    let on_time = mac
+        .state
+        .lock()
+        .unwrap()
+        .schedule
+        .as_ref()
+        .is_some_and(|schedule| schedule.absolute_slot(now) == absolute_slot);
+    if !on_time {
+        update_tx_slot_status(mac, absolute_slot, now, TxSlotStatus::Missed);
+        return;
     }
+    update_tx_slot_status(mac, absolute_slot, now, TxSlotStatus::Valid);
+    let (items, flow_update, frame_sequence) = {
+        let mut state = mac.state.lock().unwrap();
+        let Some(schedule) = state.schedule.as_ref() else {
+            return;
+        };
+        let Slot::Tx { data_rate_bps, .. } = schedule.slot(absolute_slot) else {
+            return;
+        };
+        let capacity = (u128::from(*data_rate_bps)
+            * u128::from(
+                schedule
+                    .slot_duration_us
+                    .saturating_sub(schedule.overhead_us),
+            )
+            / 8_000_000)
+            .min(usize::MAX as u128) as usize;
+        let aggregate = state.aggregation_enable;
+        let threshold = state.aggregation_threshold;
+        let previous_tokens = state.available_tokens;
+        let mut used = 0usize;
+        let mut items = Vec::new();
+        while let Some(item) = take_transmission(mac, &mut state, absolute_slot, used) {
+            used = used.saturating_add(item.bytes.len() + FRAME_OVERHEAD_BYTES);
+            let stop = !aggregate
+                || item.more
+                || used >= capacity
+                || used as f64 / capacity.max(1) as f64 * 100.0 >= threshold;
+            items.push(item);
+            if stop {
+                break;
+            }
+        }
+        if !items.is_empty() {
+            update_aggregation_histogram(mac, &mut state, items.len());
+            for item in &items {
+                record_packet_accept(
+                    mac,
+                    &mut state,
+                    packet_queue(TdmaMessageType::Data, item.info.priority),
+                    mac.id,
+                    item.info.destination,
+                    item.bytes.len(),
+                    false,
+                );
+            }
+        }
+        let flow_update = (state.flow_control_enable && state.available_tokens != previous_tokens)
+            .then_some(state.available_tokens);
+        let frame_sequence = state.frame_sequence;
+        if !items.is_empty() {
+            state.frame_sequence = state.frame_sequence.wrapping_add(1);
+        }
+        (items, flow_update, frame_sequence)
+    };
+    if let Some(tokens) = flow_update {
+        send_flow_update(mac, tokens);
+    }
+    let Some(first) = items.first() else { return };
+    let wire = TdmaBaseModelMessage {
+        absolute_slot_index: absolute_slot,
+        data_rate_bps: first.rate,
+        messages: items
+            .iter()
+            .map(|item| TdmaMessage {
+                message_type: TdmaMessageType::Data as i32,
+                destination: u32::from(item.info.destination),
+                priority: u32::from(item.info.priority),
+                data: item.bytes.clone(),
+                fragment: (item.offset != 0 || item.more).then(|| TdmaFragment {
+                    more: item.more,
+                    index: u32::from(item.fragment_index),
+                    offset: u32::try_from(item.offset).unwrap_or(u32::MAX),
+                    sequence: item.sequence,
+                }),
+            })
+            .collect(),
+    };
+    let serialization = wire.encode_to_vec();
+    let Ok(serialization_len) = u16::try_from(serialization.len()) else {
+        return;
+    };
+    let mut payload = Vec::with_capacity(serialization.len() + 2);
+    payload.extend_from_slice(&serialization_len.to_be_bytes());
+    payload.extend_from_slice(&serialization);
+    let destination = items
+        .iter()
+        .map(|item| item.info.destination)
+        .reduce(|left, right| if left == right { left } else { BROADCAST_NEM })
+        .unwrap_or(BROADCAST_NEM);
+    let header = ModelHeader {
+        registration_id: MAC_REGISTRATION_TDMA,
+        sequence: frame_sequence,
+        data_rate_bps: first.rate,
+        category: first.category,
+        message_type: 1,
+        flags: 0,
+    }
+    .encode();
+    let tx = TxProperties {
+        frequency_hz: first.frequency,
+        bandwidth_hz: first.bandwidth,
+        tx_power_dbm: first.power,
+        duration_microseconds: ((payload.len() + FRAME_OVERHEAD_BYTES) as u128 * 8_000_000)
+            .div_ceil(u128::from(first.rate)) as u64,
+        offset_microseconds: 0,
+        tx_time_microseconds: first.tx_time,
+        antenna_index: 0,
+        spectral_mask_index: 0,
+        sub_id: 1,
+    };
+    let tx_data = tx.encode();
+    let messages = [
+        FfiControlMessage {
+            msg_type: CONTROL_MODEL_HEADER,
+            payload: FfiSlice {
+                data: header.as_ptr(),
+                len: header.len(),
+            },
+        },
+        FfiControlMessage {
+            msg_type: CONTROL_TX_PROPERTIES,
+            payload: FfiSlice {
+                data: tx_data.as_ptr(),
+                len: tx_data.len(),
+            },
+        },
+    ];
+    let packet = FfiPacket {
+        info: FfiPacketInfo {
+            source: mac.id,
+            destination,
+            priority: first.info.priority,
+            creation_time_sec: first.info.creation_time_sec,
+            creation_time_usec: first.info.creation_time_usec,
+        },
+        payload: FfiSlice {
+            data: payload.as_ptr(),
+            len: payload.len(),
+        },
+    };
+    (mac.framework.send_downstream_packet)(
+        mac.framework.framework_ctx,
+        mac.id,
+        &packet,
+        messages.as_ptr(),
+        messages.len(),
+    );
+    for item in &items {
+        mac.counters
+            .downstream_tx(mac.framework, item.info.destination, item.bytes.len());
+    }
+    (mac.framework.update_neighbor_tx)(
+        mac.framework.framework_ctx,
+        destination,
+        first.rate,
+        now.max(0) as u64,
+    );
 }
 
 extern "C" fn downstream(
@@ -937,20 +1735,63 @@ extern "C" fn downstream(
         .downstream_rx(mac.framework, packet.info.destination, packet.payload.len());
     let mut state = mac.state.lock().unwrap();
     if state.flow_control_enable && state.available_tokens == 0 {
+        record_packet_drop(
+            mac,
+            &mut state,
+            priority_to_queue(packet.info.priority),
+            packet.info.source,
+            packet.info.source,
+            packet.payload.len(),
+            PacketDropReason::FlowControl,
+        );
         mac.counters
             .downstream_drop(mac.framework, packet.info.destination);
         return;
     }
-    let index = usize::from(packet.info.priority.min(3));
-    if state.queues[index].len() >= state.queue_depth {
-        let update = state.flow_control_enable.then_some(state.available_tokens);
-        drop(state);
-        if let Some(tokens) = update {
-            send_flow_update(mac, tokens);
-        }
+    let index = priority_to_queue(packet.info.priority);
+    if state.queue_depth == 0 {
+        state.queue_statistics[index].overflow += 1;
+        record_packet_drop(
+            mac,
+            &mut state,
+            index,
+            packet.info.source,
+            packet.info.destination,
+            packet.payload.len(),
+            PacketDropReason::QueueOverflow,
+        );
+        publish_queue_tables(mac, &state, index);
         mac.counters
             .downstream_drop(mac.framework, packet.info.destination);
         return;
+    }
+    if state.queues[index].len() >= state.queue_depth {
+        let dropped_position = state.queues[index]
+            .iter()
+            .position(|queued| queued.fragment_index == 0)
+            .unwrap_or(0);
+        let dropped = state.queues[index]
+            .remove(dropped_position)
+            .expect("a full TDMA queue must contain a packet");
+        state.queue_statistics[index].overflow += 1;
+        record_packet_drop(
+            mac,
+            &mut state,
+            index,
+            dropped.packet.info.source,
+            dropped.packet.info.destination,
+            dropped.packet.payload.len(),
+            PacketDropReason::QueueOverflow,
+        );
+        publish_queue_tables(mac, &state, index);
+        mac.counters
+            .downstream_drop(mac.framework, dropped.packet.info.destination);
+        if state.flow_control_enable {
+            state.available_tokens = state
+                .available_tokens
+                .saturating_add(1)
+                .min(state.flow_control_tokens);
+        }
     }
     if state.flow_control_enable {
         state.available_tokens -= 1;
@@ -963,6 +1804,12 @@ extern "C" fn downstream(
         offset: 0,
         fragment_index: 0,
     });
+    state.queue_statistics[index].enqueued += 1;
+    mac.maximize(
+        &format!("highWaterMarkQueue{index}"),
+        state.queues[index].len() as u64,
+    );
+    publish_queue_tables(mac, &state, index);
 }
 
 fn send_upstream(mac: &TdmaMac, packet: OwnedPacket) {
@@ -1001,6 +1848,16 @@ extern "C" fn upstream(
     let Some(messages) = controls(messages, count) else {
         return;
     };
+    if packet.payload.len() < 2 {
+        return;
+    }
+    let serialization_len = u16::from_be_bytes([packet.payload[0], packet.payload[1]]) as usize;
+    if serialization_len == 0 || packet.payload.len() < serialization_len + 2 {
+        return;
+    }
+    let Ok(wire) = TdmaBaseModelMessage::decode(&packet.payload[2..2 + serialization_len]) else {
+        return;
+    };
     let mut header = None;
     let mut rx = None;
     for message in messages {
@@ -1008,104 +1865,324 @@ extern "C" fn upstream(
             return;
         };
         match message.msg_type {
-            CONTROL_MODEL_HEADER => header = decode_header(data),
+            CONTROL_MODEL_HEADER => header = ModelHeader::decode(data),
             CONTROL_RX_PROPERTIES => rx = RxProperties::decode(data),
             _ => {}
         }
     }
-    let Some((model, absolute_slot, offset, total_len, _, more)) = header else {
+    let mut state = mac.state.lock().unwrap();
+    let Some(model) = header else {
+        record_all_message_drops(
+            mac,
+            &mut state,
+            packet.info.source,
+            &wire.messages,
+            PacketDropReason::BadControl,
+        );
         return;
     };
-    let Some(rx) = rx else { return };
-    let mut state = mac.state.lock().unwrap();
-    if model.registration_id != MAC_REGISTRATION_TDMA
-        || (!state.promiscuous
-            && packet.info.destination != mac.id
-            && packet.info.destination != BROADCAST_NEM)
-    {
+    let Some(rx) = rx else {
+        record_all_message_drops(
+            mac,
+            &mut state,
+            packet.info.source,
+            &wire.messages,
+            PacketDropReason::BadControl,
+        );
+        return;
+    };
+    if model.registration_id != MAC_REGISTRATION_TDMA {
+        record_all_message_drops(
+            mac,
+            &mut state,
+            packet.info.source,
+            &wire.messages,
+            PacketDropReason::RegistrationId,
+        );
         return;
     }
-    let Some(schedule) = state.schedule.as_ref() else {
+    if wire.data_rate_bps == 0 {
+        record_all_message_drops(
+            mac,
+            &mut state,
+            packet.info.source,
+            &wire.messages,
+            PacketDropReason::BadControl,
+        );
+        return;
+    }
+    let Some(schedule) = state.schedule.clone() else {
         return;
     };
-    let Slot::Rx { frequency_hz } = schedule.slot(absolute_slot) else {
+    let now = now_us();
+    let start_of_reception = rx
+        .tx_time_microseconds
+        .saturating_add(i64::try_from(rx.propagation_microseconds).unwrap_or(i64::MAX));
+    let end_of_reception = start_of_reception
+        .saturating_add(i64::try_from(rx.duration_microseconds).unwrap_or(i64::MAX));
+    if schedule.absolute_slot(end_of_reception) != wire.absolute_slot_index {
+        let current_slot = schedule.absolute_slot(now);
+        update_rx_slot_status(
+            mac,
+            &mut state,
+            current_slot,
+            current_slot,
+            now,
+            RxSlotStatus::TooLong,
+        );
+        record_all_message_drops(
+            mac,
+            &mut state,
+            packet.info.source,
+            &wire.messages,
+            PacketDropReason::TooLong,
+        );
         return;
+    }
+    let current_slot = schedule.absolute_slot(now);
+    if current_slot != wire.absolute_slot_index {
+        let status = match schedule.slot(wire.absolute_slot_index) {
+            Slot::Rx { .. } => RxSlotStatus::Missed,
+            Slot::Idle => RxSlotStatus::Idle,
+            Slot::Tx { .. } => RxSlotStatus::Tx,
+        };
+        update_rx_slot_status(
+            mac,
+            &mut state,
+            current_slot,
+            wire.absolute_slot_index,
+            now,
+            status,
+        );
+        record_all_message_drops(
+            mac,
+            &mut state,
+            packet.info.source,
+            &wire.messages,
+            PacketDropReason::SlotError,
+        );
+        return;
+    }
+    let frequency_hz = match schedule.slot(current_slot) {
+        Slot::Idle => {
+            update_rx_slot_status(
+                mac,
+                &mut state,
+                current_slot,
+                current_slot,
+                now,
+                RxSlotStatus::Idle,
+            );
+            record_all_message_drops(
+                mac,
+                &mut state,
+                packet.info.source,
+                &wire.messages,
+                PacketDropReason::SlotError,
+            );
+            return;
+        }
+        Slot::Tx { .. } => {
+            update_rx_slot_status(
+                mac,
+                &mut state,
+                current_slot,
+                current_slot,
+                now,
+                RxSlotStatus::Tx,
+            );
+            record_all_message_drops(
+                mac,
+                &mut state,
+                packet.info.source,
+                &wire.messages,
+                PacketDropReason::SlotError,
+            );
+            return;
+        }
+        Slot::Rx { frequency_hz } => *frequency_hz,
     };
-    if *frequency_hz != rx.frequency_hz
-        || total_len > 64 << 20
-        || offset > total_len
-        || offset.saturating_add(packet.payload.len()) > total_len
-    {
+    if !state.pending_rx.is_empty() {
+        update_rx_slot_status(
+            mac,
+            &mut state,
+            current_slot,
+            current_slot,
+            now,
+            RxSlotStatus::Lock,
+        );
+        return;
+    }
+    if frequency_hz != rx.frequency_hz {
+        update_rx_slot_status(
+            mac,
+            &mut state,
+            current_slot,
+            current_slot,
+            now,
+            RxSlotStatus::WrongFrequency,
+        );
+        record_all_message_drops(
+            mac,
+            &mut state,
+            packet.info.source,
+            &wire.messages,
+            PacketDropReason::Frequency,
+        );
         return;
     }
     let sinr = rx.rx_power_dbm - rx.noise_floor_dbm;
     if let Some(pcr) = &state.pcr {
-        let probability = pcr.probability(model.data_rate_bps, sinr, packet.payload.len());
+        let probability = pcr.probability(wire.data_rate_bps, sinr, packet.payload.len());
         if random_unit(&mut state.random_state) > probability {
+            record_all_message_drops(
+                mac,
+                &mut state,
+                packet.info.source,
+                &wire.messages,
+                PacketDropReason::Sinr,
+            );
             return;
         }
     }
-    let now = now_us();
-    let timeout = state.fragment_timeout_us;
-    state
-        .reassembly
-        .retain(|_, value| now.saturating_sub(value.last_update_us) <= timeout);
-    let complete = if offset == 0 && !more && packet.payload.len() == total_len {
-        Some(packet)
-    } else {
-        let key = (packet.info.source, model.sequence);
-        let entry = state.reassembly.entry(key).or_insert_with(|| Reassembly {
-            info: packet.info,
-            total_len,
-            pieces: BTreeMap::new(),
-            last_update_us: now,
-        });
-        if entry.total_len != total_len {
-            state.reassembly.remove(&key);
-            return;
-        }
-        entry.last_update_us = now;
-        entry.pieces.entry(offset).or_insert(packet.payload);
-        let mut expected = 0usize;
-        let mut assembled = Vec::with_capacity(total_len);
-        for (piece_offset, piece) in &entry.pieces {
-            if *piece_offset != expected {
-                break;
-            }
-            assembled.extend_from_slice(piece);
-            expected += piece.len();
-        }
-        if expected == total_len {
-            let info = entry.info;
-            state.reassembly.remove(&key);
-            Some(OwnedPacket {
-                info,
-                payload: assembled,
-            })
-        } else {
-            None
-        }
-    };
-    let Some(packet) = complete else { return };
-    state.next_rx_id = state.next_rx_id.wrapping_add(1);
-    let id = state.next_rx_id;
+    update_rx_slot_status(
+        mac,
+        &mut state,
+        current_slot,
+        current_slot,
+        now,
+        RxSlotStatus::Valid,
+    );
+    expire_reassembly(mac, &mut state, now);
     let delivery = rx
         .tx_time_microseconds
         .saturating_add(i64::try_from(rx.propagation_microseconds).unwrap_or(i64::MAX))
         .saturating_add(i64::try_from(rx.duration_microseconds).unwrap_or(i64::MAX));
-    state.pending_rx.insert(id, packet);
-    drop(state);
-    let timer = schedule_timer(mac, delivery.max(now), TIMER_RX_COMPLETE, &id.to_be_bytes());
-    if timer == 0 {
-        if let Some(packet) = mac.state.lock().unwrap().pending_rx.remove(&id) {
-            send_upstream(mac, packet);
+    let mut deliveries = Vec::new();
+    for message in wire.messages {
+        let Some(message_type) = TdmaMessageType::try_from(message.message_type).ok() else {
+            continue;
+        };
+        let (Ok(destination), Ok(priority)) = (
+            u16::try_from(message.destination),
+            u8::try_from(message.priority),
+        ) else {
+            continue;
+        };
+        if !state.promiscuous && destination != mac.id && destination != BROADCAST_NEM {
+            record_packet_drop(
+                mac,
+                &mut state,
+                packet_queue(message_type, priority),
+                packet.info.source,
+                destination,
+                message.data.len(),
+                PacketDropReason::Destination,
+            );
+            continue;
         }
-    } else {
-        mac.state
-            .lock()
-            .unwrap()
-            .timers
-            .insert(timer, TIMER_RX_COMPLETE);
+        let info = FfiPacketInfo {
+            destination,
+            priority,
+            ..packet.info
+        };
+        let complete = if let Some(fragment) = message.fragment {
+            let offset = fragment.offset as usize;
+            if offset.saturating_add(message.data.len()) > 64 << 20 {
+                continue;
+            }
+            let key = (packet.info.source, priority, fragment.sequence);
+            let entry = state.reassembly.entry(key).or_insert_with(|| Reassembly {
+                info,
+                message_type,
+                total_len: None,
+                pieces: BTreeMap::new(),
+                last_update_us: now,
+            });
+            entry.last_update_us = now;
+            entry.pieces.entry(offset).or_insert(message.data);
+            if !fragment.more {
+                entry.total_len = entry
+                    .pieces
+                    .get(&offset)
+                    .map(|piece| offset.saturating_add(piece.len()));
+            }
+            let total_len = entry.total_len;
+            let mut expected = 0usize;
+            let mut assembled = Vec::with_capacity(total_len.unwrap_or(0));
+            for (piece_offset, piece) in &entry.pieces {
+                if *piece_offset != expected {
+                    break;
+                }
+                assembled.extend_from_slice(piece);
+                expected += piece.len();
+            }
+            if total_len == Some(expected) {
+                let info = entry.info;
+                state.reassembly.remove(&key);
+                Some((
+                    OwnedPacket {
+                        info,
+                        payload: assembled,
+                    },
+                    message_type,
+                ))
+            } else {
+                None
+            }
+        } else {
+            Some((
+                OwnedPacket {
+                    info,
+                    payload: message.data,
+                },
+                message_type,
+            ))
+        };
+        let Some((complete, message_type)) = complete else {
+            continue;
+        };
+        record_packet_accept(
+            mac,
+            &mut state,
+            packet_queue(message_type, complete.info.priority),
+            packet.info.source,
+            complete.info.destination,
+            complete.payload.len(),
+            true,
+        );
+        if message_type == TdmaMessageType::Control {
+            continue;
+        }
+        state.next_rx_id = state.next_rx_id.wrapping_add(1);
+        let id = state.next_rx_id;
+        state.pending_rx.insert(id, complete);
+        deliveries.push(id);
+    }
+    drop(state);
+    (mac.framework.update_neighbor_rx)(
+        mac.framework.framework_ctx,
+        packet.info.source,
+        model.sequence,
+        sinr,
+        rx.noise_floor_dbm,
+        now.max(0) as u64,
+        rx.duration_microseconds,
+        wire.data_rate_bps,
+    );
+    for id in deliveries {
+        let timer = schedule_timer(mac, delivery.max(now), TIMER_RX_COMPLETE, &id.to_be_bytes());
+        if timer == 0 {
+            if let Some(packet) = mac.state.lock().unwrap().pending_rx.remove(&id) {
+                send_upstream(mac, packet);
+            }
+        } else {
+            mac.state
+                .lock()
+                .unwrap()
+                .timers
+                .insert(timer, TIMER_RX_COMPLETE);
+        }
     }
 }
 
@@ -1145,12 +2222,16 @@ extern "C" fn timed(plugin: *mut c_void, timer_id: u64, event: u32, data: *const
                 return;
             }
             let now = now_us();
-            let timeout = state.fragment_timeout_us;
-            state
-                .reassembly
-                .retain(|_, entry| now.saturating_sub(entry.last_update_us) < timeout);
+            expire_reassembly(mac, &mut state, now);
             drop(state);
             schedule_reassembly_check(mac);
+        }
+        TIMER_NEIGHBOR_STATUS => {
+            if !mac.state.lock().unwrap().started {
+                return;
+            }
+            (mac.framework.update_neighbor_status)(mac.framework.framework_ctx);
+            schedule_neighbor_status(mac);
         }
         _ => {}
     }
@@ -1160,7 +2241,11 @@ extern "C" fn process_event(plugin: *mut c_void, event: u16, data: *const u8, le
     let Some(mac) = (unsafe { (plugin as *mut TdmaMac).as_ref() }) else {
         return;
     };
-    if event != EVENT_TDMA_SCHEDULE || (len != 0 && data.is_null()) {
+    if event != EVENT_TDMA_SCHEDULE {
+        return;
+    }
+    if len != 0 && data.is_null() {
+        mac.increment("scheduler.scheduleRejectOther", 1);
         return;
     }
     let bytes = if len == 0 {
@@ -1172,7 +2257,44 @@ extern "C" fn process_event(plugin: *mut c_void, event: u16, data: *const u8, le
         let state = mac.state.lock().unwrap();
         parse_schedule(bytes, state.schedule.as_ref())
     };
-    let Ok((schedule, full)) = parsed else { return };
+    let (schedule, full) = match parsed {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            let counter = if error.contains("slot index is out of range") {
+                "scheduler.scheduleRejectSlotIndexRange"
+            } else if error.contains("frame index is out of range") {
+                "scheduler.scheduleRejectFrameIndexRange"
+            } else if error.contains("before full schedule") {
+                "scheduler.scheduleRejectUpdateBeforeFull"
+            } else {
+                "scheduler.scheduleRejectOther"
+            };
+            mac.increment(counter, 1);
+            return;
+        }
+    };
+    mac.increment(
+        if full {
+            "scheduler.scheduleAcceptFull"
+        } else {
+            "scheduler.scheduleAcceptUpdate"
+        },
+        1,
+    );
+    if full {
+        for name in [
+            "scheduler.ScheduleInfoTable",
+            "scheduler.StructureInfoTable",
+            "TxSlotStatusTable",
+            "RxSlotStatusTable",
+        ] {
+            mac.clear_table(name);
+        }
+        let mut state = mac.state.lock().unwrap();
+        state.tx_slot_statistics.clear();
+        state.rx_slot_statistics.clear();
+    }
+    publish_schedule_tables(mac, &schedule);
     let frequencies = schedule
         .slots
         .iter()
@@ -1280,12 +2402,24 @@ mod tests {
     }
 
     #[test]
-    fn model_header_extension_round_trips() {
-        let bytes = encode_header(7, 2_000_000, 3, 99, 12, 40, 2, true);
-        let (model, slot, offset, total, index, more) = decode_header(&bytes).unwrap();
-        assert_eq!(
-            (model.sequence, slot, offset, total, index, more),
-            (7, 99, 12, 40, 2, true)
-        );
+    fn legacy_aggregate_wire_message_round_trips() {
+        let message = TdmaBaseModelMessage {
+            absolute_slot_index: 99,
+            data_rate_bps: 2_000_000,
+            messages: vec![TdmaMessage {
+                message_type: TdmaMessageType::Data as i32,
+                destination: 7,
+                priority: 3,
+                data: vec![1, 2, 3],
+                fragment: Some(TdmaFragment {
+                    more: true,
+                    index: 2,
+                    offset: 12,
+                    sequence: 40,
+                }),
+            }],
+        };
+        let decoded = TdmaBaseModelMessage::decode(message.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(decoded, message);
     }
 }
