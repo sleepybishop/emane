@@ -11,10 +11,13 @@ radio model plugins are used to emulate the lowest layers of a waveform and can
 be combined with existing Software Defined Radio (SDR) implementations to 
 enable shared code emulation.
 
+### Architecture
+
+EMANE has been completely rewritten in **Rust** to provide memory safety, fearless concurrency, and massive performance improvements over the legacy C++ architecture. 
+It uses a pure-Rust `cdylib` architecture for its plugins and natively handles packet routing, statistics, and RF spectrum monitoring.
 
 Need more information?
 ==
 Visit the EMANE Wiki:
 
  https://github.com/adjacentlink/emane/wiki
-
