@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "emane"
+version = "1.5.3"
+description = "EMANE modules and utilities"
+authors = [{ name = "Adjacent Link", email = "emane@adjacentlink.com" }]
+license = { text = "BSD" }
+dependencies = ["protobuf"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["emane", "emane.*"]
+
+[tool.setuptools]
+script-files = [
+    "scripts/emanesh",
+    "scripts/emaneevent-dump",
+    "scripts/emaneevent-pathloss",
+    "scripts/emaneevent-pathlossex",
+    "scripts/emaneevent-commeffect",
+    "scripts/emaneevent-location",
+    "scripts/emaneevent-antennaprofile",
+    "scripts/emaneevent-tdmaschedule",
+    "scripts/emaneevent-fadingselection",
+    "scripts/emaneota-publisher",
+    "scripts/emanecommand-eel",
+    "scripts/emanegentransportxml"
+]
+
+[tool.setuptools.package-data]
+"emane.shell" = ["schema/*.xsd"]
+"emane.events" = ["schema/*.xsd"]
+"emane.ota" = ["schema/*.xsd"]
