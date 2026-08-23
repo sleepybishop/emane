@@ -575,6 +575,12 @@ fn run() -> Result<(), String> {
 }
 
 fn main() -> ExitCode {
+    #[cfg(unix)]
+    unsafe {
+        // Match normal Unix command-line behavior when manifest output is
+        // consumed by tools such as head(1), instead of panicking on EPIPE.
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
