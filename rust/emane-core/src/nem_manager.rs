@@ -1308,6 +1308,21 @@ extern "C" fn send_upstream_control(
     }
 }
 
+fn timed_event_expiration(requested: u64, now: u64) -> u64 {
+    if requested >= now {
+        requested
+    } else if requested < now / 2 {
+        // The plugin API historically accepts small relative intervals as
+        // well as absolute epoch timestamps.
+        now.saturating_add(requested)
+    } else {
+        // An absolute deadline can become slightly stale while a packet moves
+        // through the model stack. Fire it immediately instead of treating an
+        // epoch timestamp as a relative interval measured in millennia.
+        now
+    }
+}
+
 extern "C" fn schedule_timed_event(
     ctx: *mut c_void,
     _nem_id: u16,
@@ -1340,11 +1355,7 @@ extern "C" fn schedule_timed_event(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_micros() as u64;
-    let expiration = if requested < now {
-        now.saturating_add(requested)
-    } else {
-        requested
-    };
+    let expiration = timed_event_expiration(requested, now);
     emane_rs_timer_schedule(
         expiration,
         0,
@@ -6624,6 +6635,14 @@ mod tests {
     static PHY_CAPTURE_TX_POWER_BITS: AtomicU64 = AtomicU64::new(0);
     static PHY_CAPTURE_TX_GAIN_BITS: AtomicU64 = AtomicU64::new(0);
     static R2RI_CAPTURE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn timed_event_expiration_distinguishes_relative_and_stale_absolute_time() {
+        let now = 1_800_000_000_000_000u64;
+        assert_eq!(timed_event_expiration(250_000, now), now + 250_000);
+        assert_eq!(timed_event_expiration(now - 1, now), now);
+        assert_eq!(timed_event_expiration(now + 1, now), now + 1);
+    }
 
     #[test]
     fn configuration_surfaces_include_legacy_parameters_without_defaults() {

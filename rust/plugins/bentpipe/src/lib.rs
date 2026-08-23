@@ -19,6 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const EVENT_TRANSMIT: u32 = 1;
 const EVENT_REASSEMBLY_CHECK: u32 = 2;
+const EVENT_RECEIVE: u32 = 3;
 const DEFAULT_QUEUE_DEPTH: usize = 256;
 const BENTPIPE_MESSAGE_TYPE: u8 = 1;
 const BROADCAST_NEM: u16 = u16::MAX;
@@ -235,6 +236,8 @@ struct State {
     receive_end: HashMap<u16, i64>,
     wakeups: HashMap<u16, i64>,
     timers: HashSet<u64>,
+    next_receive_id: u64,
+    pending_receptions: HashMap<u64, OwnedPacket>,
     reassembly: HashMap<(u16, u64), Reassembly>,
     random_state: u64,
     started: bool,
@@ -462,6 +465,8 @@ impl BentpipeMac {
                 receive_end: HashMap::new(),
                 wakeups: HashMap::new(),
                 timers: HashSet::new(),
+                next_receive_id: 0,
+                pending_receptions: HashMap::new(),
                 reassembly: HashMap::new(),
                 random_state: 0xD1B5_4A32_D192_ED03 ^ u64::from(id),
                 started: false,
@@ -900,6 +905,20 @@ fn transponder_config_bit(name: &str) -> Option<u32> {
         .iter()
         .position(|candidate| *candidate == name)
         .map(|index| 1u32 << index)
+}
+
+const TRANSPONDER_REQUIRED_FIELDS: u32 = (1 << 18) - 1;
+const TRANSPONDER_TOSMAP_FIELD: u32 = 1 << 12;
+
+fn required_transponder_fields(action: ReceiveAction) -> u32 {
+    if action == ReceiveAction::Ubend {
+        // U-bend transponders relay received frames and never classify locally
+        // originated traffic, so the guide does not define a TOS map for each
+        // one.
+        TRANSPONDER_REQUIRED_FIELDS & !TRANSPONDER_TOSMAP_FIELD
+    } else {
+        TRANSPONDER_REQUIRED_FIELDS
+    }
 }
 
 fn parse_antenna(value: &str) -> Option<(u16, AntennaDefinition)> {
@@ -1359,6 +1378,34 @@ fn schedule_reassembly_check(mac: &BentpipeMac) {
         0,
     );
     if timer != 0 {
+        mac.state.lock().unwrap().timers.insert(timer);
+    }
+}
+
+fn schedule_receive(mac: &BentpipeMac, packet: OwnedPacket, when: i64) {
+    let id = {
+        let mut state = mac.state.lock().unwrap();
+        state.next_receive_id = state.next_receive_id.wrapping_add(1).max(1);
+        let id = state.next_receive_id;
+        state.pending_receptions.insert(id, packet);
+        id
+    };
+    let when = when.max(0) as u64;
+    let data = id.to_be_bytes();
+    let timer = (mac.framework.schedule_timed_event)(
+        mac.framework.framework_ctx,
+        mac.id,
+        when / 1_000_000,
+        (when % 1_000_000) as u32,
+        EVENT_RECEIVE,
+        data.as_ptr(),
+        data.len(),
+    );
+    if timer == 0 {
+        if let Some(packet) = mac.state.lock().unwrap().pending_receptions.remove(&id) {
+            send_upstream(mac, packet);
+        }
+    } else {
         mac.state.lock().unwrap().timers.insert(timer);
     }
 }
@@ -1870,7 +1917,6 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
     if state.started {
         let mut receive_antennas: HashMap<u16, (u64, Vec<u64>)> = HashMap::new();
         let mut receive_channels = HashSet::new();
-        const REQUIRED_FIELDS: u32 = (1 << 18) - 1;
         for (index, transponder) in &state.transponders {
             let slotted = transponder.transmit_slots_per_frame != 0
                 || transponder.transmit_slot_size_us != 0
@@ -1888,7 +1934,13 @@ extern "C" fn configure(plugin: *mut c_void, request: *const c_void) -> bool {
                 || !state
                     .antennas
                     .contains_key(&transponder.transmit_antenna_index)
-                || state.configured_transponder_fields.get(index).copied() != Some(REQUIRED_FIELDS)
+                || state
+                    .configured_transponder_fields
+                    .get(index)
+                    .copied()
+                    .unwrap_or_default()
+                    & required_transponder_fields(transponder.receive_action)
+                    != required_transponder_fields(transponder.receive_action)
                 || !state.pcr.contains_curve(transponder.curve_index)
                 || !receive_channels.insert((
                     transponder.receive_antenna_index,
@@ -1993,7 +2045,6 @@ extern "C" fn start(plugin: *mut c_void) -> bool {
     if state.pcr.load(&uri).is_err() {
         return false;
     }
-    const REQUIRED_FIELDS: u32 = (1 << 18) - 1;
     let mut receive_channels = HashSet::new();
     let mut receive_antennas: HashMap<u16, (u64, Vec<u64>)> = HashMap::new();
     for (index, transponder) in &state.transponders {
@@ -2013,7 +2064,13 @@ extern "C" fn start(plugin: *mut c_void) -> bool {
             || !state
                 .antennas
                 .contains_key(&transponder.transmit_antenna_index)
-            || state.configured_transponder_fields.get(index).copied() != Some(REQUIRED_FIELDS)
+            || state
+                .configured_transponder_fields
+                .get(index)
+                .copied()
+                .unwrap_or_default()
+                & required_transponder_fields(transponder.receive_action)
+                != required_transponder_fields(transponder.receive_action)
             || !state.pcr.contains_curve(transponder.curve_index)
             || !receive_channels.insert((
                 transponder.receive_antenna_index,
@@ -2100,6 +2157,7 @@ extern "C" fn stop(plugin: *mut c_void) {
         let mut state = mac.state.lock().unwrap();
         state.started = false;
         state.queues.clear();
+        state.pending_receptions.clear();
         state.reassembly.clear();
         state.receive_end.clear();
         state.wakeups.clear();
@@ -2330,7 +2388,12 @@ extern "C" fn upstream(
             noise_floor_dbm,
             wire.start_of_transmission_microseconds,
         );
-        (index, receive_action, transmit_delay_us)
+        (
+            index,
+            receive_action,
+            transmit_delay_us,
+            start_of_reception.saturating_add(i64::try_from(span_microseconds).unwrap_or(i64::MAX)),
+        )
     };
     let controls = message_views
         .iter()
@@ -2451,10 +2514,15 @@ extern "C" fn upstream(
             true,
         );
         match decision.1 {
-            ReceiveAction::Process => send_upstream(mac, packet),
+            ReceiveAction::Process => {
+                schedule_receive(mac, packet, decision.3.max(now_us()));
+            }
             ReceiveAction::Ubend => {
                 let now = now_us();
-                let when = now.saturating_add(decision.2 as i64);
+                let when = decision
+                    .3
+                    .max(now)
+                    .saturating_add(i64::try_from(decision.2).unwrap_or(i64::MAX));
                 let destination = packet.info.destination;
                 let size = packet.payload.len();
                 let queued = enqueue(
@@ -2545,6 +2613,20 @@ extern "C" fn timed(
         expire_reassembly(mac, &mut state, now);
         drop(state);
         schedule_reassembly_check(mac);
+        return;
+    }
+    if event_id == EVENT_RECEIVE {
+        if len != 8 || data.is_null() {
+            return;
+        }
+        let id = u64::from_be_bytes(
+            unsafe { std::slice::from_raw_parts(data, len) }
+                .try_into()
+                .unwrap(),
+        );
+        if let Some(packet) = mac.state.lock().unwrap().pending_receptions.remove(&id) {
+            send_upstream(mac, packet);
+        }
         return;
     }
     if event_id != EVENT_TRANSMIT || len != 10 || data.is_null() {
@@ -2835,6 +2917,14 @@ mod tests {
             })
         );
         assert!(parse_antenna("7:0;0;0;2").is_none());
+        assert_eq!(
+            required_transponder_fields(ReceiveAction::Process),
+            TRANSPONDER_REQUIRED_FIELDS
+        );
+        assert_eq!(
+            required_transponder_fields(ReceiveAction::Ubend),
+            TRANSPONDER_REQUIRED_FIELDS & !TRANSPONDER_TOSMAP_FIELD
+        );
     }
 
     #[test]

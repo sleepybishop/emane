@@ -1,4 +1,4 @@
-use roxmltree::Document;
+use roxmltree::{Document, ParsingOptions};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
@@ -41,8 +41,14 @@ impl AntennaPattern {
         let path = file_uri_path(uri)?;
         let content = std::fs::read_to_string(&path)
             .map_err(|e| format!("Unable to read {}: {}", path.display(), e))?;
-        let doc =
-            Document::parse(&content).map_err(|e| format!("Validation failure {}: {}", uri, e))?;
+        let doc = Document::parse_with_options(
+            &content,
+            ParsingOptions {
+                allow_dtd: true,
+                ..ParsingOptions::default()
+            },
+        )
+        .map_err(|e| format!("Validation failure {}: {}", uri, e))?;
 
         let root = doc.root_element();
         if root.tag_name().name() != "antennaprofile" {
@@ -244,8 +250,14 @@ impl AntennaProfileManifest {
         let manifest_path = file_uri_path(uri)?;
         let content = std::fs::read_to_string(&manifest_path)
             .map_err(|e| format!("Unable to read {}: {}", manifest_path.display(), e))?;
-        let doc =
-            Document::parse(&content).map_err(|e| format!("Validation failure {}: {}", uri, e))?;
+        let doc = Document::parse_with_options(
+            &content,
+            ParsingOptions {
+                allow_dtd: true,
+                ..ParsingOptions::default()
+            },
+        )
+        .map_err(|e| format!("Validation failure {}: {}", uri, e))?;
 
         let root = doc.root_element();
         if root.tag_name().name() != "profiles" {
@@ -492,12 +504,12 @@ mod tests {
         let manifest = directory.join("manifest.xml");
         std::fs::write(
             &pattern,
-            r#"<antennaprofile><antennapattern><elevation min="-90" max="90"><bearing min="0" max="5"><gain value="7.5"/></bearing></elevation></antennapattern></antennaprofile>"#,
+            r#"<!DOCTYPE antennaprofile SYSTEM "file:///usr/share/emane/dtd/antennaprofile.dtd"><antennaprofile><antennapattern><elevation min="-90" max="90"><bearing min="0" max="5"><gain value="7.5"/></bearing></elevation></antennapattern></antennaprofile>"#,
         )
         .unwrap();
         std::fs::write(
             &manifest,
-            r#"<profiles><profile id="3" antennapatternuri="pattern.xml"><placement north="1" east="2" up="3"/></profile></profiles>"#,
+            r#"<!DOCTYPE profiles SYSTEM "file:///usr/share/emane/dtd/antennaprofile.dtd"><profiles><profile id="3" antennapatternuri="pattern.xml"><placement north="1" east="2" up="3"/></profile></profiles>"#,
         )
         .unwrap();
 

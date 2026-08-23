@@ -9,7 +9,7 @@ use emane_plugin_api::{
 };
 use pcr::PcrManager;
 use prost::Message;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ffi::{c_void, CStr};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -21,6 +21,10 @@ const TIMER_REASSEMBLY_CHECK: u32 = 3;
 const TIMER_NEIGHBOR_STATUS: u32 = 4;
 const BROADCAST_NEM: u16 = u16::MAX;
 const FRAME_OVERHEAD_BYTES: usize = 64;
+// Capacity accounting reserves FRAME_OVERHEAD_BYTES per aggregated component.
+// The first component also needs the outer protobuf framing and PHY envelope.
+// This bound covers maximum-width protobuf fields; see the regression test.
+const WIRE_ENCODING_RESERVE_BYTES: usize = 80;
 
 #[derive(Clone, PartialEq, Message)]
 struct ScheduleEvent {
@@ -329,6 +333,7 @@ impl TdmaMac {
             "TxSlotValid",
             "TxSlotErrorMissed",
             "TxSlotErrorTooBig",
+            "TxFrameSent",
             "RxSlotValid",
             "RxSlotErrorMissed",
             "RxSlotErrorRxDuringIdle",
@@ -734,6 +739,25 @@ fn parse_schedule(data: &[u8], current: Option<&Schedule>) -> Result<(Schedule, 
         let frame_rate = frame.data_rate_bps.or(event.data_rate_bps);
         let frame_class = frame.service_class.or(event.service_class).unwrap_or(0);
         let frame_power = frame.power_dbm.or(event.power_dbm).unwrap_or(0.0);
+        if full {
+            let explicit = frame
+                .slots
+                .iter()
+                .map(|slot| slot.index)
+                .collect::<HashSet<_>>();
+            if explicit.len() < schedule.slots_per_frame as usize {
+                let frequency_hz = frame_frequency
+                    .filter(|frequency| *frequency != 0)
+                    .ok_or_else(|| "undefined TDMA receive slot has no frequency".to_string())?;
+                let frame_start = frame.index as usize * schedule.slots_per_frame as usize;
+                for slot_index in 0..schedule.slots_per_frame {
+                    if !explicit.contains(&slot_index) {
+                        schedule.slots[frame_start + slot_index as usize] =
+                            Slot::Rx { frequency_hz };
+                    }
+                }
+            }
+        }
         for slot in frame.slots {
             if slot.index >= schedule.slots_per_frame {
                 return Err("TDMA slot index is out of range".into());
@@ -1441,6 +1465,22 @@ struct Transmission {
     tx_time: i64,
 }
 
+fn tx_properties(transmission: &Transmission, payload_len: usize) -> TxProperties {
+    TxProperties {
+        frequency_hz: transmission.frequency,
+        bandwidth_hz: transmission.bandwidth,
+        tx_power_dbm: transmission.power,
+        duration_microseconds: ((payload_len + FRAME_OVERHEAD_BYTES) as u128 * 8_000_000)
+            .div_ceil(u128::from(transmission.rate)) as u64,
+        offset_microseconds: 0,
+        tx_time_microseconds: transmission.tx_time,
+        antenna_index: 0,
+        spectral_mask_index: 0,
+        // Zero tells the physical layer to use its configured sub-ID.
+        sub_id: 0,
+    }
+}
+
 fn take_transmission(
     mac: &TdmaMac,
     state: &mut State,
@@ -1464,7 +1504,11 @@ fn take_transmission(
     let capacity = (u128::from(data_rate_bps) * u128::from(usable_us) / 8_000_000)
         .min(usize::MAX as u128) as usize;
     let index = queue_index(state, service_class, destination)?;
-    let available = capacity.saturating_sub(FRAME_OVERHEAD_BYTES + used);
+    let available = capacity.saturating_sub(
+        FRAME_OVERHEAD_BYTES
+            .saturating_add(WIRE_ENCODING_RESERVE_BYTES)
+            .saturating_add(used),
+    );
     if available == 0 {
         return None;
     }
@@ -1654,18 +1698,7 @@ fn transmit_slot(mac: &TdmaMac, absolute_slot: u64) {
         flags: 0,
     }
     .encode();
-    let tx = TxProperties {
-        frequency_hz: first.frequency,
-        bandwidth_hz: first.bandwidth,
-        tx_power_dbm: first.power,
-        duration_microseconds: ((payload.len() + FRAME_OVERHEAD_BYTES) as u128 * 8_000_000)
-            .div_ceil(u128::from(first.rate)) as u64,
-        offset_microseconds: 0,
-        tx_time_microseconds: first.tx_time,
-        antenna_index: 0,
-        spectral_mask_index: 0,
-        sub_id: 1,
-    };
+    let tx = tx_properties(first, payload.len());
     let tx_data = tx.encode();
     let messages = [
         FfiControlMessage {
@@ -1703,6 +1736,7 @@ fn transmit_slot(mac: &TdmaMac, absolute_slot: u64) {
         messages.as_ptr(),
         messages.len(),
     );
+    mac.increment("TxFrameSent", 1);
     (mac.framework.update_neighbor_tx)(
         mac.framework.framework_ctx,
         destination,
@@ -1900,7 +1934,15 @@ extern "C" fn upstream(
         .saturating_add(i64::try_from(rx.propagation_microseconds).unwrap_or(i64::MAX));
     let end_of_reception = start_of_reception
         .saturating_add(i64::try_from(rx.duration_microseconds).unwrap_or(i64::MAX));
-    if schedule.absolute_slot(end_of_reception) != wire.absolute_slot_index {
+    // Reception occupies [start, end).  When a frame ends exactly at the slot
+    // boundary, `end` belongs to the following slot but no part of the frame
+    // does.  Test the final occupied microsecond instead.
+    let last_reception_microsecond = if rx.duration_microseconds == 0 {
+        start_of_reception
+    } else {
+        end_of_reception.saturating_sub(1)
+    };
+    if schedule.absolute_slot(last_reception_microsecond) != wire.absolute_slot_index {
         let current_slot = schedule.absolute_slot(now);
         update_rx_slot_status(
             mac,
@@ -2349,6 +2391,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn transmit_properties_defer_sub_id_to_phy_configuration() {
+        let transmission = Transmission {
+            info: FfiPacketInfo {
+                source: 1,
+                destination: 2,
+                priority: 0,
+                creation_time_sec: 0,
+                creation_time_usec: 0,
+            },
+            bytes: Vec::new(),
+            sequence: 0,
+            offset: 0,
+            fragment_index: 0,
+            more: false,
+            frequency: 1_200_000_000,
+            rate: 9_000_000,
+            category: 0,
+            power: 50.0,
+            bandwidth: 5_000_000,
+            tx_time: 123,
+        };
+
+        let properties = tx_properties(&transmission, 128);
+
+        assert_eq!(properties.sub_id, 0);
+        assert_eq!(properties.frequency_hz, transmission.frequency);
+        assert_eq!(properties.bandwidth_hz, transmission.bandwidth);
+        assert_eq!(properties.tx_power_dbm, transmission.power);
+        assert_eq!(properties.tx_time_microseconds, transmission.tx_time);
+    }
+
+    #[test]
     fn full_schedule_and_update_are_validated() {
         let event = ScheduleEvent {
             frames: vec![ScheduleFrame {
@@ -2372,13 +2446,73 @@ mod tests {
                 slot_overhead_microseconds: 100,
                 bandwidth_hz: 1_000_000,
             }),
+            frequency_hz: Some(1_000_000),
             ..Default::default()
         };
         let (schedule, full) = parse_schedule(&event.encode_to_vec(), None).unwrap();
         assert!(full);
         assert!(matches!(schedule.slots[0], Slot::Tx { .. }));
-        assert!(matches!(schedule.slots[1], Slot::Idle));
+        assert!(matches!(
+            schedule.slots[1],
+            Slot::Rx {
+                frequency_hz: 1_000_000
+            }
+        ));
         assert_eq!(schedule.next_tx(0), Some(2));
+    }
+
+    #[test]
+    fn undefined_frames_stay_idle_and_updates_preserve_unspecified_slots() {
+        let full_event = ScheduleEvent {
+            frames: vec![ScheduleFrame {
+                index: 0,
+                slots: vec![ScheduleSlot {
+                    index: 0,
+                    slot_type: SlotType::Tx as i32,
+                    tx: Some(ScheduleTx {
+                        frequency_hz: Some(1_000_000),
+                        data_rate_bps: Some(1_000_000),
+                        ..Default::default()
+                    }),
+                    rx: None,
+                }],
+                ..Default::default()
+            }],
+            structure: Some(ScheduleStructure {
+                slots_per_frame: 2,
+                frames_per_multiframe: 2,
+                slot_duration_microseconds: 1_000,
+                slot_overhead_microseconds: 100,
+                bandwidth_hz: 1_000_000,
+            }),
+            frequency_hz: Some(1_000_000),
+            ..Default::default()
+        };
+        let (schedule, _) = parse_schedule(&full_event.encode_to_vec(), None).unwrap();
+        assert!(matches!(schedule.slots[0], Slot::Tx { .. }));
+        assert!(matches!(schedule.slots[1], Slot::Rx { .. }));
+        assert!(matches!(schedule.slots[2], Slot::Idle));
+        assert!(matches!(schedule.slots[3], Slot::Idle));
+
+        let update = ScheduleEvent {
+            frames: vec![ScheduleFrame {
+                index: 0,
+                slots: vec![ScheduleSlot {
+                    index: 0,
+                    slot_type: SlotType::Idle as i32,
+                    tx: None,
+                    rx: None,
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let (updated, full) = parse_schedule(&update.encode_to_vec(), Some(&schedule)).unwrap();
+        assert!(!full);
+        assert!(matches!(updated.slots[0], Slot::Idle));
+        assert!(matches!(updated.slots[1], Slot::Rx { .. }));
+        assert!(matches!(updated.slots[2], Slot::Idle));
+        assert!(matches!(updated.slots[3], Slot::Idle));
     }
 
     #[test]
@@ -2401,5 +2535,44 @@ mod tests {
         };
         let decoded = TdmaBaseModelMessage::decode(message.encode_to_vec().as_slice()).unwrap();
         assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn wire_encoding_reserve_covers_maximum_protobuf_overhead() {
+        for count in 1..=64usize {
+            let messages = (0..count)
+                .map(|_| TdmaMessage {
+                    message_type: TdmaMessageType::Data as i32,
+                    destination: u32::MAX,
+                    priority: u32::MAX,
+                    data: vec![0; 2_048],
+                    fragment: Some(TdmaFragment {
+                        more: true,
+                        index: u32::MAX,
+                        offset: u32::MAX,
+                        sequence: u64::MAX,
+                    }),
+                })
+                .collect::<Vec<_>>();
+            let data_bytes = messages
+                .iter()
+                .map(|message| message.data.len())
+                .sum::<usize>();
+            let encoded = TdmaBaseModelMessage {
+                absolute_slot_index: u64::MAX,
+                data_rate_bps: u64::MAX,
+                messages,
+            }
+            .encoded_len()
+            .saturating_add(2)
+            .saturating_add(FRAME_OVERHEAD_BYTES);
+            let reserved = data_bytes
+                .saturating_add(count.saturating_mul(FRAME_OVERHEAD_BYTES))
+                .saturating_add(WIRE_ENCODING_RESERVE_BYTES);
+            assert!(
+                encoded <= reserved,
+                "{count} component(s) require {encoded} bytes but reserve only {reserved}"
+            );
+        }
     }
 }
