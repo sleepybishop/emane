@@ -16,6 +16,35 @@ pub struct R2RINeighborMetric {
     pub tx_data_rate_avg: u64,
 }
 
+#[derive(Clone, Debug)]
+pub struct NeighborMetricStatus {
+    pub neighbor_id: u16,
+    pub num_rx_frames: u64,
+    pub num_tx_frames: u64,
+    pub num_rx_missed_frames: u64,
+    pub rx_utilization_microseconds: u64,
+    pub last_rx_time_seconds: f64,
+    pub last_tx_time_seconds: f64,
+    pub sinr_avg: f64,
+    pub sinr_std: f64,
+    pub noise_floor_avg: f64,
+    pub noise_floor_stdv: f64,
+    pub rx_data_rate_avg: u64,
+    pub tx_data_rate_avg: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct NeighborStatusSnapshot {
+    pub neighbor_id: u16,
+    pub num_rx_frames: u64,
+    pub num_tx_frames: u64,
+    pub num_rx_missed_frames: u64,
+    pub bandwidth_utilization_ratio: f64,
+    pub sinr_avg: f64,
+    pub noise_floor_avg: f64,
+    pub rx_age_seconds: f64,
+}
+
 #[derive(Clone, Default)]
 struct NeighborData {
     _nem_id: u16,
@@ -72,7 +101,7 @@ pub struct NeighborMetricManager {
     r2ri_metric_table: HashMap<u16, Box<NeighborData>>,
     neighbor_data_table: HashMap<u16, (Box<NeighborData>, Box<NeighborData>)>,
     neighbor_delete_age_microseconds: Duration,
-    _last_neighbor_status_update_time: Duration,
+    last_neighbor_status_update_time: Duration,
 }
 
 impl NeighborMetricManager {
@@ -82,7 +111,7 @@ impl NeighborMetricManager {
             r2ri_metric_table: HashMap::new(),
             neighbor_data_table: HashMap::new(),
             neighbor_delete_age_microseconds: Duration::from_secs(60),
-            _last_neighbor_status_update_time: Duration::default(),
+            last_neighbor_status_update_time: Duration::default(),
         }
     }
 
@@ -173,6 +202,74 @@ impl NeighborMetricManager {
         }
 
         metrics
+    }
+
+    pub fn get_neighbor_metric_status(&self, nem_id: u16) -> Option<NeighborMetricStatus> {
+        let data = &self.neighbor_data_table.get(&nem_id)?.1;
+        let (sinr_avg, sinr_std) =
+            get_avg_and_std(data.sinr_sum, data.sinr_sum2, data.num_rx_frames);
+        let (noise_floor_avg, noise_floor_stdv) = get_avg_and_std(
+            data.noise_floor_sum,
+            data.noise_floor_sum2,
+            data.num_rx_frames,
+        );
+        Some(NeighborMetricStatus {
+            neighbor_id: nem_id,
+            num_rx_frames: data.num_rx_frames,
+            num_tx_frames: data.num_tx_frames,
+            num_rx_missed_frames: data.num_rx_missed_frames,
+            rx_utilization_microseconds: data.rx_utilization_microseconds,
+            last_rx_time_seconds: data.last_rx_time.as_secs_f64(),
+            last_tx_time_seconds: data.last_tx_time.as_secs_f64(),
+            sinr_avg,
+            sinr_std,
+            noise_floor_avg,
+            noise_floor_stdv,
+            rx_data_rate_avg: data.rx_data_rate_avg,
+            tx_data_rate_avg: data.tx_data_rate_avg,
+        })
+    }
+
+    pub fn get_neighbor_statuses(&mut self, current_time: Duration) -> Vec<NeighborStatusSnapshot> {
+        let elapsed = current_time.saturating_sub(self.last_neighbor_status_update_time);
+        let first_update = self.last_neighbor_status_update_time.is_zero();
+        let elapsed_seconds = elapsed.as_secs_f64();
+        let mut statuses = Vec::with_capacity(self.neighbor_data_table.len());
+        for (&neighbor_id, (interval, _)) in &mut self.neighbor_data_table {
+            let sinr_avg = if interval.num_rx_frames == 0 {
+                0.0
+            } else {
+                interval.sinr_sum / interval.num_rx_frames as f64
+            };
+            let noise_floor_avg = if interval.num_rx_frames == 0 {
+                0.0
+            } else {
+                interval.noise_floor_sum / interval.num_rx_frames as f64
+            };
+            statuses.push(NeighborStatusSnapshot {
+                neighbor_id,
+                num_rx_frames: interval.num_rx_frames,
+                num_tx_frames: interval.num_tx_frames,
+                num_rx_missed_frames: interval.num_rx_missed_frames,
+                bandwidth_utilization_ratio: if first_update || elapsed_seconds == 0.0 {
+                    0.0
+                } else {
+                    interval.rx_utilization_microseconds as f64 / 1_000_000.0 / elapsed_seconds
+                },
+                sinr_avg,
+                noise_floor_avg,
+                rx_age_seconds: if interval.have_ever_had_rx_activity {
+                    current_time
+                        .saturating_sub(interval.last_rx_time)
+                        .as_secs_f64()
+                } else {
+                    0.0
+                },
+            });
+            interval.clear_data();
+        }
+        self.last_neighbor_status_update_time = current_time;
+        statuses
     }
 
     fn lookup_r2ri_metric(&mut self, nem_id: u16) -> &mut NeighborData {
@@ -594,5 +691,49 @@ pub extern "C" fn emane_rs_neighbor_metric_manager_free_status(
         unsafe {
             Vec::from_raw_parts(ptr, len, len);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn neighbor_status_uses_interval_data_without_clearing_long_term_metrics() {
+        let mut manager = NeighborMetricManager::new(1);
+        manager.handle_rx_activity(
+            2,
+            1,
+            &[0; 16],
+            10.0,
+            -90.0,
+            Duration::from_secs_f64(1.0),
+            Duration::from_millis(200),
+            1_000_000,
+        );
+        let first = manager.get_neighbor_statuses(Duration::from_secs(2));
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].num_rx_frames, 1);
+        assert_eq!(first[0].bandwidth_utilization_ratio, 0.0);
+
+        manager.handle_rx_activity(
+            2,
+            2,
+            &[0; 16],
+            20.0,
+            -80.0,
+            Duration::from_secs_f64(2.5),
+            Duration::from_millis(100),
+            2_000_000,
+        );
+        let second = manager.get_neighbor_statuses(Duration::from_secs(3));
+        assert_eq!(second[0].num_rx_frames, 1);
+        assert!((second[0].bandwidth_utilization_ratio - 0.1).abs() < 1.0e-12);
+        assert!((second[0].rx_age_seconds - 0.5).abs() < 1.0e-12);
+        assert_eq!(second[0].sinr_avg, 20.0);
+
+        let long_term = manager.get_neighbor_metric_status(2).unwrap();
+        assert_eq!(long_term.num_rx_frames, 2);
+        assert_eq!(long_term.sinr_avg, 15.0);
     }
 }

@@ -1,7 +1,4 @@
-#[cfg(feature = "legacy-ffi")]
-use crate::config::{FfiAny, FfiAnyArray, VoidPtr};
-use std::collections::HashMap;
-#[cfg(not(feature = "legacy-ffi"))]
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
@@ -10,7 +7,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::rf_signal_table::RFSignalTable;
 
-#[cfg(not(feature = "legacy-ffi"))]
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct FfiAny {
@@ -21,18 +17,15 @@ pub struct FfiAny {
     pub s_value: *const c_char,
 }
 
-#[cfg(not(feature = "legacy-ffi"))]
 #[repr(C)]
 pub struct FfiAnyArray {
     pub data: *const FfiAny,
     pub len: usize,
 }
 
-#[cfg(not(feature = "legacy-ffi"))]
 #[derive(Clone, Copy)]
 struct VoidPtr(*mut c_void);
 
-#[cfg(not(feature = "legacy-ffi"))]
 unsafe impl Send for VoidPtr {}
 
 #[repr(C)]
@@ -103,29 +96,6 @@ pub struct FfiStatisticTableQueryResult {
     pub len: usize,
 }
 
-#[cfg(all(feature = "legacy-ffi", not(test)))]
-extern "C" {
-    fn emane_c_statistic_as_any(p_statistic: *mut std::ffi::c_void) -> FfiAny;
-    fn emane_c_statistic_free_any_string(s: *const c_char);
-    fn emane_c_statistic_clear(p_statistic: *mut std::ffi::c_void);
-    fn emane_c_statistic_table_clear(
-        p_clear_func: *mut std::ffi::c_void,
-        p_table: *mut std::ffi::c_void,
-    );
-    fn emane_c_statistic_table_get_values(
-        p_table: *mut std::ffi::c_void,
-        out_labels: *mut FfiStringArray,
-        out_rows: *mut *mut FfiTableRow,
-        out_rows_len: *mut usize,
-    );
-    fn emane_c_statistic_table_free_values(
-        labels: FfiStringArray,
-        rows: *mut FfiTableRow,
-        rows_len: usize,
-    );
-}
-
-#[cfg(any(test, not(feature = "legacy-ffi")))]
 unsafe extern "C" fn emane_c_statistic_as_any(_: *mut std::ffi::c_void) -> FfiAny {
     FfiAny {
         any_type: 1,
@@ -136,20 +106,16 @@ unsafe extern "C" fn emane_c_statistic_as_any(_: *mut std::ffi::c_void) -> FfiAn
     }
 }
 
-#[cfg(any(test, not(feature = "legacy-ffi")))]
 unsafe extern "C" fn emane_c_statistic_free_any_string(_: *const c_char) {}
 
-#[cfg(any(test, not(feature = "legacy-ffi")))]
 unsafe extern "C" fn emane_c_statistic_clear(_: *mut std::ffi::c_void) {}
 
-#[cfg(any(test, not(feature = "legacy-ffi")))]
 unsafe extern "C" fn emane_c_statistic_table_clear(
     _: *mut std::ffi::c_void,
     _: *mut std::ffi::c_void,
 ) {
 }
 
-#[cfg(any(test, not(feature = "legacy-ffi")))]
 unsafe extern "C" fn emane_c_statistic_table_get_values(
     _: *mut std::ffi::c_void,
     out_labels: *mut FfiStringArray,
@@ -168,7 +134,6 @@ unsafe extern "C" fn emane_c_statistic_table_get_values(
     }
 }
 
-#[cfg(any(test, not(feature = "legacy-ffi")))]
 unsafe extern "C" fn emane_c_statistic_table_free_values(
     _: FfiStringArray,
     _: *mut FfiTableRow,
@@ -185,7 +150,24 @@ pub struct StatisticInfo {
 
 enum StatisticSource {
     Legacy(VoidPtr),
-    NativeU64 { handle: u64, value: Arc<AtomicU64> },
+    NativeU64 {
+        handle: u64,
+        value: Arc<AtomicU64>,
+    },
+    NativeF64 {
+        handle: u64,
+        value: Arc<AtomicU64>,
+    },
+    NativeAverage {
+        handle: u64,
+        value: Arc<Mutex<NativeAverage>>,
+    },
+}
+
+#[derive(Default)]
+struct NativeAverage {
+    sum: f64,
+    count: u64,
 }
 
 pub struct StatisticTableInfo {
@@ -203,13 +185,32 @@ enum StatisticTableSource {
         handle: u64,
         table: Arc<Mutex<RFSignalTable>>,
     },
+    NativeTable {
+        handle: u64,
+        table: Arc<Mutex<NativeTable>>,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub enum NativeTableValue {
+    UInt64(u64),
+    Double(f64),
+    String(String),
+}
+
+struct NativeTable {
+    labels: Vec<String>,
+    rows: BTreeMap<Vec<u64>, Vec<NativeTableValue>>,
+    generation: u64,
 }
 
 pub struct StatisticService {
     stats: HashMap<u16, HashMap<String, StatisticInfo>>,
     tables: HashMap<u16, HashMap<String, StatisticTableInfo>>,
     native_counters: HashMap<u64, Arc<AtomicU64>>,
+    native_averages: HashMap<u64, Arc<Mutex<NativeAverage>>>,
     native_rf_signal_tables: HashMap<u64, Arc<Mutex<RFSignalTable>>>,
+    native_tables: HashMap<u64, Arc<Mutex<NativeTable>>>,
     next_native_handle: u64,
 }
 
@@ -220,7 +221,9 @@ fn get_statistic_service() -> &'static Mutex<StatisticService> {
             stats: HashMap::new(),
             tables: HashMap::new(),
             native_counters: HashMap::new(),
+            native_averages: HashMap::new(),
             native_rf_signal_tables: HashMap::new(),
+            native_tables: HashMap::new(),
             next_native_handle: 1,
         })
     })
@@ -257,6 +260,26 @@ fn statistic_value(info: &StatisticInfo) -> FfiAny {
             d_value: 0.0,
             s_value: std::ptr::null(),
         },
+        StatisticSource::NativeF64 { value, .. } => FfiAny {
+            any_type: 10,
+            i64_value: 0,
+            u64_value: 0,
+            d_value: f64::from_bits(value.load(Ordering::Relaxed)),
+            s_value: std::ptr::null(),
+        },
+        StatisticSource::NativeAverage { value, .. } => {
+            let average = value.lock().ok();
+            FfiAny {
+                any_type: 10,
+                i64_value: 0,
+                u64_value: 0,
+                d_value: average
+                    .as_ref()
+                    .filter(|value| value.count != 0)
+                    .map_or(0.0, |value| value.sum / value.count as f64),
+                s_value: std::ptr::null(),
+            }
+        }
     }
 }
 
@@ -264,6 +287,14 @@ fn clear_statistic(info: &StatisticInfo) {
     match &info.source {
         StatisticSource::Legacy(pointer) => unsafe { emane_c_statistic_clear(pointer.0) },
         StatisticSource::NativeU64 { value, .. } => value.store(0, Ordering::Relaxed),
+        StatisticSource::NativeF64 { value, .. } => {
+            value.store(0.0f64.to_bits(), Ordering::Relaxed)
+        }
+        StatisticSource::NativeAverage { value, .. } => {
+            if let Ok(mut value) = value.lock() {
+                *value = NativeAverage::default();
+            }
+        }
     }
 }
 
@@ -308,6 +339,115 @@ pub fn increment_native_counter(handle: u64, amount: u64) -> bool {
         return false;
     };
     value.fetch_add(amount, Ordering::Relaxed);
+    true
+}
+
+pub fn maximize_native_counter(handle: u64, value: u64) -> bool {
+    let Ok(service) = get_statistic_service().lock() else {
+        return false;
+    };
+    let Some(counter) = service.native_counters.get(&handle) else {
+        return false;
+    };
+    counter.fetch_max(value, Ordering::Relaxed);
+    true
+}
+
+pub fn register_native_double(
+    build_id: u16,
+    name: &str,
+    description: &str,
+    clearable: bool,
+) -> Option<u64> {
+    if !valid_name(name) {
+        return None;
+    }
+    let mut service = get_statistic_service().lock().ok()?;
+    if service
+        .stats
+        .get(&build_id)
+        .is_some_and(|store| store.contains_key(name))
+    {
+        return None;
+    }
+    let handle = service.next_native_handle.max(1);
+    service.next_native_handle = handle.wrapping_add(1).max(1);
+    let value = Arc::new(AtomicU64::new(0.0f64.to_bits()));
+    service.native_counters.insert(handle, Arc::clone(&value));
+    service.stats.entry(build_id).or_default().insert(
+        name.to_string(),
+        StatisticInfo {
+            any_type: 10,
+            properties: u64::from(clearable),
+            description: description.to_string(),
+            source: StatisticSource::NativeF64 { handle, value },
+        },
+    );
+    Some(handle)
+}
+
+pub fn set_native_double(handle: u64, value: f64) -> bool {
+    if !value.is_finite() {
+        return false;
+    }
+    let Ok(service) = get_statistic_service().lock() else {
+        return false;
+    };
+    let Some(storage) = service.native_counters.get(&handle) else {
+        return false;
+    };
+    storage.store(value.to_bits(), Ordering::Relaxed);
+    true
+}
+
+pub fn register_native_average(
+    build_id: u16,
+    name: &str,
+    description: &str,
+    clearable: bool,
+) -> Option<u64> {
+    if !valid_name(name) {
+        return None;
+    }
+    let mut service = get_statistic_service().lock().ok()?;
+    if service
+        .stats
+        .get(&build_id)
+        .is_some_and(|store| store.contains_key(name))
+    {
+        return None;
+    }
+    let handle = service.next_native_handle.max(1);
+    service.next_native_handle = handle.wrapping_add(1).max(1);
+    let value = Arc::new(Mutex::new(NativeAverage::default()));
+    service.native_averages.insert(handle, Arc::clone(&value));
+    service.stats.entry(build_id).or_default().insert(
+        name.to_string(),
+        StatisticInfo {
+            any_type: 10,
+            properties: u64::from(clearable),
+            description: description.to_string(),
+            source: StatisticSource::NativeAverage { handle, value },
+        },
+    );
+    Some(handle)
+}
+
+pub fn sample_native_average(handle: u64, sample: f64) -> bool {
+    if !sample.is_finite() {
+        return false;
+    }
+    let Ok(service) = get_statistic_service().lock() else {
+        return false;
+    };
+    let Some(value) = service.native_averages.get(&handle) else {
+        return false;
+    };
+    let Ok(mut value) = value.lock() else {
+        return false;
+    };
+    value.sum += sample;
+    value.count = value.count.saturating_add(1);
     true
 }
 
@@ -388,6 +528,95 @@ pub fn update_native_rf_signal_table(
     true
 }
 
+pub fn register_native_table(
+    build_id: u16,
+    name: &str,
+    labels: &[&str],
+    description: &str,
+    clearable: bool,
+) -> Option<u64> {
+    if !valid_name(name) || labels.is_empty() {
+        return None;
+    }
+    let mut service = get_statistic_service().lock().ok()?;
+    if service
+        .tables
+        .get(&build_id)
+        .is_some_and(|store| store.contains_key(name))
+    {
+        return None;
+    }
+    let handle = service.next_native_handle.max(1);
+    service.next_native_handle = handle.wrapping_add(1).max(1);
+    let table = Arc::new(Mutex::new(NativeTable {
+        labels: labels.iter().map(|label| (*label).to_string()).collect(),
+        rows: BTreeMap::new(),
+        generation: 0,
+    }));
+    service.native_tables.insert(handle, Arc::clone(&table));
+    service.tables.entry(build_id).or_default().insert(
+        name.to_string(),
+        StatisticTableInfo {
+            properties: u64::from(clearable),
+            description: description.to_string(),
+            source: StatisticTableSource::NativeTable { handle, table },
+        },
+    );
+    Some(handle)
+}
+
+pub fn set_native_table_row(handle: u64, key: Vec<u64>, values: Vec<NativeTableValue>) -> bool {
+    let Ok(service) = get_statistic_service().lock() else {
+        return false;
+    };
+    let Some(table) = service.native_tables.get(&handle) else {
+        return false;
+    };
+    let Ok(mut table) = table.lock() else {
+        return false;
+    };
+    if values.len() != table.labels.len() {
+        return false;
+    }
+    table.rows.insert(key, values);
+    true
+}
+
+pub fn clear_native_table(handle: u64) -> bool {
+    let Ok(service) = get_statistic_service().lock() else {
+        return false;
+    };
+    let Some(table) = service.native_tables.get(&handle) else {
+        return false;
+    };
+    let Ok(mut table) = table.lock() else {
+        return false;
+    };
+    table.rows.clear();
+    table.generation = table.generation.wrapping_add(1);
+    true
+}
+
+pub fn remove_native_table_row(handle: u64, key: &[u64]) -> bool {
+    let Ok(service) = get_statistic_service().lock() else {
+        return false;
+    };
+    let Some(table) = service.native_tables.get(&handle) else {
+        return false;
+    };
+    let Ok(mut table) = table.lock() else {
+        return false;
+    };
+    table.rows.remove(key).is_some()
+}
+
+pub fn native_table_generation(handle: u64) -> Option<u64> {
+    let service = get_statistic_service().lock().ok()?;
+    let table = service.native_tables.get(&handle)?;
+    let generation = table.lock().ok()?.generation;
+    Some(generation)
+}
+
 pub fn unregister_native_statistics(build_id: u16) {
     let Ok(mut service) = get_statistic_service().lock() else {
         return;
@@ -398,17 +627,26 @@ pub fn unregister_native_statistics(build_id: u16) {
         .into_iter()
         .flat_map(|store| store.into_values())
         .filter_map(|info| match info.source {
-            StatisticSource::NativeU64 { handle, .. } => Some(handle),
+            StatisticSource::NativeU64 { handle, .. }
+            | StatisticSource::NativeF64 { handle, .. }
+            | StatisticSource::NativeAverage { handle, .. } => Some(handle),
             StatisticSource::Legacy(_) => None,
         })
         .collect();
     for handle in handles {
         service.native_counters.remove(&handle);
+        service.native_averages.remove(&handle);
     }
     if let Some(tables) = service.tables.remove(&build_id) {
         for info in tables.into_values() {
-            if let StatisticTableSource::NativeRfSignal { handle, .. } = info.source {
-                service.native_rf_signal_tables.remove(&handle);
+            match info.source {
+                StatisticTableSource::NativeRfSignal { handle, .. } => {
+                    service.native_rf_signal_tables.remove(&handle);
+                }
+                StatisticTableSource::NativeTable { handle, .. } => {
+                    service.native_tables.remove(&handle);
+                }
+                StatisticTableSource::Legacy { .. } => {}
             }
         }
     }
@@ -735,6 +973,81 @@ fn native_rf_signal_table_values(
     (ffi_labels, rows_ptr, rows_len)
 }
 
+fn native_table_values(
+    table: &Arc<Mutex<NativeTable>>,
+) -> (FfiStringArray, *mut FfiTableRow, usize) {
+    let Ok(table) = table.lock() else {
+        return (
+            FfiStringArray {
+                data: std::ptr::null(),
+                len: 0,
+            },
+            std::ptr::null_mut(),
+            0,
+        );
+    };
+    let mut label_pointers = table
+        .labels
+        .iter()
+        .filter_map(|label| CString::new(label.as_str()).ok())
+        .map(|label| label.into_raw() as *const c_char)
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    let labels = FfiStringArray {
+        data: label_pointers.as_mut_ptr(),
+        len: label_pointers.len(),
+    };
+    std::mem::forget(label_pointers);
+    let mut rows = table
+        .rows
+        .values()
+        .map(|row| {
+            let mut values = row
+                .iter()
+                .map(|value| match value {
+                    NativeTableValue::UInt64(value) => FfiAny {
+                        any_type: 8,
+                        i64_value: 0,
+                        u64_value: *value,
+                        d_value: 0.0,
+                        s_value: std::ptr::null(),
+                    },
+                    NativeTableValue::Double(value) => FfiAny {
+                        any_type: 10,
+                        i64_value: 0,
+                        u64_value: 0,
+                        d_value: *value,
+                        s_value: std::ptr::null(),
+                    },
+                    NativeTableValue::String(value) => FfiAny {
+                        any_type: 11,
+                        i64_value: 0,
+                        u64_value: 0,
+                        d_value: 0.0,
+                        s_value: CString::new(value.as_str())
+                            .map(CString::into_raw)
+                            .unwrap_or(std::ptr::null_mut()),
+                    },
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            let row = FfiTableRow {
+                values: FfiAnyArray {
+                    data: values.as_mut_ptr(),
+                    len: values.len(),
+                },
+            };
+            std::mem::forget(values);
+            row
+        })
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    let rows_length = rows.len();
+    let rows_pointer = rows.as_mut_ptr();
+    std::mem::forget(rows);
+    (labels, rows_pointer, rows_length)
+}
+
 unsafe fn free_native_table_values(
     labels: FfiStringArray,
     rows: *mut FfiTableRow,
@@ -803,6 +1116,10 @@ pub extern "C" fn emane_rs_statistic_query_table(
                         let (labels, rows, rows_len) = native_rf_signal_table_values(table);
                         (labels, rows, rows_len, true)
                     }
+                    StatisticTableSource::NativeTable { table, .. } => {
+                        let (labels, rows, rows_len) = native_table_values(table);
+                        (labels, rows, rows_len, true)
+                    }
                 };
 
                 res.push(FfiStatisticTableQueryItem {
@@ -838,6 +1155,10 @@ pub extern "C" fn emane_rs_statistic_query_table(
                         }
                         StatisticTableSource::NativeRfSignal { table, .. } => {
                             let (labels, rows, rows_len) = native_rf_signal_table_values(table);
+                            (labels, rows, rows_len, true)
+                        }
+                        StatisticTableSource::NativeTable { table, .. } => {
+                            let (labels, rows, rows_len) = native_table_values(table);
                             (labels, rows, rows_len, true)
                         }
                     };
@@ -917,6 +1238,12 @@ pub extern "C" fn emane_rs_statistic_clear_table(
                                 table.reset_all();
                             }
                         }
+                        StatisticTableSource::NativeTable { table, .. } => {
+                            if let Ok(mut table) = table.lock() {
+                                table.rows.clear();
+                                table.generation = table.generation.wrapping_add(1);
+                            }
+                        }
                     }
                 }
             }
@@ -948,6 +1275,12 @@ pub extern "C" fn emane_rs_statistic_clear_table(
                     StatisticTableSource::NativeRfSignal { table, .. } => {
                         if let Ok(mut table) = table.lock() {
                             table.reset_all();
+                        }
+                    }
+                    StatisticTableSource::NativeTable { table, .. } => {
+                        if let Ok(mut table) = table.lock() {
+                            table.rows.clear();
+                            table.generation = table.generation.wrapping_add(1);
                         }
                     }
                 }
@@ -1040,12 +1373,13 @@ pub extern "C" fn emane_rs_statistic_free_table_manifest(res: FfiStatisticTableM
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::build_id_service::emane_rs_buildid_assign;
     use std::ffi::CString;
     use std::ptr;
 
     #[test]
     fn test_register_statistic() {
-        let build_id = 1;
+        let build_id = emane_rs_buildid_assign();
         let s_name = CString::new("test.stat1").unwrap();
         let s_desc = CString::new("Test desc 1").unwrap();
         let mut err_buf = [0i8; 256];
@@ -1067,8 +1401,29 @@ mod tests {
     }
 
     #[test]
+    fn native_average_clear_resets_sample_history() {
+        let build_id = emane_rs_buildid_assign();
+        let handle = register_native_average(build_id, "test.average", "average", true).unwrap();
+        assert!(sample_native_average(handle, 10.0));
+        assert!(sample_native_average(handle, 30.0));
+        {
+            let service = get_statistic_service().lock().unwrap();
+            let info = &service.stats[&build_id]["test.average"];
+            assert_eq!(statistic_value(info).d_value, 20.0);
+            clear_statistic(info);
+            assert_eq!(statistic_value(info).d_value, 0.0);
+        }
+        assert!(sample_native_average(handle, 90.0));
+        let service = get_statistic_service().lock().unwrap();
+        assert_eq!(
+            statistic_value(&service.stats[&build_id]["test.average"]).d_value,
+            90.0
+        );
+    }
+
+    #[test]
     fn test_register_duplicate_statistic() {
-        let build_id = 2;
+        let build_id = emane_rs_buildid_assign();
         let s_name = CString::new("test.stat2").unwrap();
         let s_desc = CString::new("Test desc 2").unwrap();
         let mut err_buf = [0i8; 256];
@@ -1102,7 +1457,7 @@ mod tests {
 
     #[test]
     fn native_rf_signal_table_is_manifested_queried_and_clearable() {
-        let build_id = 60_001;
+        let build_id = emane_rs_buildid_assign();
         let handle = register_native_rf_signal_table(build_id, 1).unwrap();
         assert!(configure_native_rf_signal_table(handle, true, true));
         assert!(update_native_rf_signal_table(
@@ -1164,8 +1519,40 @@ mod tests {
     }
 
     #[test]
+    fn native_table_owner_can_remove_an_individual_row() {
+        let build_id = emane_rs_buildid_assign();
+        let handle = register_native_table(build_id, "Neighbors", &["NEM"], "", false).unwrap();
+        assert!(set_native_table_row(
+            handle,
+            vec![2],
+            vec![NativeTableValue::UInt64(2)],
+        ));
+        assert!(set_native_table_row(
+            handle,
+            vec![3],
+            vec![NativeTableValue::UInt64(3)],
+        ));
+        assert!(remove_native_table_row(handle, &[2]));
+        assert!(!remove_native_table_row(handle, &[2]));
+
+        let empty = FfiStringArray {
+            data: ptr::null(),
+            len: 0,
+        };
+        let mut error = [0i8; 128];
+        let result =
+            emane_rs_statistic_query_table(build_id, empty, error.as_mut_ptr(), error.len());
+        let table = unsafe { &*result.data };
+        assert_eq!(table.rows_len, 1);
+        let row = unsafe { &*table.rows };
+        assert_eq!(unsafe { &*row.values.data }.u64_value, 3);
+        emane_rs_statistic_free_table_query_result(result);
+        unregister_native_statistics(build_id);
+    }
+
+    #[test]
     fn test_register_invalid_name() {
-        let build_id = 3;
+        let build_id = emane_rs_buildid_assign();
         let s_name = CString::new("invalid name!").unwrap();
         let s_desc = CString::new("Test desc 3").unwrap();
         let mut err_buf = [0i8; 256];
@@ -1187,7 +1574,7 @@ mod tests {
 
     #[test]
     fn test_register_table() {
-        let build_id = 4;
+        let build_id = emane_rs_buildid_assign();
         let s_name = CString::new("test.table1").unwrap();
         let s_desc = CString::new("Test table desc 1").unwrap();
         let mut err_buf = [0i8; 256];
@@ -1210,7 +1597,7 @@ mod tests {
 
     #[test]
     fn test_clear_statistic_not_clearable() {
-        let build_id = 5;
+        let build_id = emane_rs_buildid_assign();
         let s_name = CString::new("test.statnotclearable").unwrap();
         let s_desc = CString::new("Test desc").unwrap();
         let mut err_buf = [0i8; 256];
@@ -1241,7 +1628,7 @@ mod tests {
 
     #[test]
     fn test_clear_statistic_unknown() {
-        let build_id = 6;
+        let build_id = emane_rs_buildid_assign();
         let s_name = CString::new("unknown.stat").unwrap();
         let mut err_buf = [0i8; 256];
 
@@ -1272,7 +1659,7 @@ mod tests {
 
     #[test]
     fn test_query_statistic_unknown() {
-        let build_id = 7;
+        let build_id = emane_rs_buildid_assign();
         let s_name = CString::new("unknown.stat").unwrap();
         let mut err_buf = [0i8; 256];
 
@@ -1304,7 +1691,7 @@ mod tests {
 
     #[test]
     fn test_manifests() {
-        let build_id = 8;
+        let build_id = emane_rs_buildid_assign();
         let s_name = CString::new("manifest.stat").unwrap();
         let s_desc = CString::new("Manifest desc").unwrap();
         let mut err_buf = [0i8; 256];
@@ -1333,7 +1720,7 @@ mod tests {
 
     #[test]
     fn native_counter_registers_queries_clears_and_unregisters() {
-        let build_id = 90;
+        let build_id = emane_rs_buildid_assign();
         let handle = register_native_counter(build_id, "numPackets", "Packet count", true)
             .expect("counter registration");
         assert!(increment_native_counter(handle, 3));

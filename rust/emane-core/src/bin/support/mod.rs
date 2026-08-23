@@ -1,4 +1,5 @@
 use emane_core::agents::gpsdlocation::GpsdLocationAgent;
+use emane_core::application_runtime::{consume_option, prepare, RuntimeOptions};
 use emane_core::event_service::{
     emane_rs_event_service_mcast_close, emane_rs_event_service_mcast_open,
     emane_rs_event_service_process_loop, emane_rs_event_service_register_event,
@@ -204,6 +205,20 @@ fn run_generators(
         if library != "eelgenerator" && library != "emanegeneel" {
             return Err(format!("unsupported event generator {library}"));
         }
+        if let Some(name) = params
+            .keys()
+            .find(|name| !matches!(name.as_str(), "inputfile" | "loader"))
+        {
+            return Err(format!("EEL generator has unknown parameter {name}"));
+        }
+        for required in ["inputfile", "loader"] {
+            let count = params.get(required).map_or(0, Vec::len);
+            if !(1..=1024).contains(&count) {
+                return Err(format!(
+                    "EEL generator parameter {required} requires 1 through 1024 values"
+                ));
+            }
+        }
         let base = definition_path.parent().unwrap_or(Path::new(""));
         let inputs = params
             .get("inputfile")
@@ -321,8 +336,7 @@ fn run_agents(
         if library != "gpsdlocationagent" {
             return Err(format!("unsupported event agent {library}"));
         }
-        let pseudo_terminal = single(&params, "pseudoterminalfile")
-            .ok_or_else(|| "gpsdlocationagent requires pseudoterminalfile".to_string())?;
+        let pseudo_terminal = single(&params, "pseudoterminalfile").unwrap_or("/tmp/gps.pty");
         let agent = Arc::new(Mutex::new(GpsdLocationAgent::new(nem_id)));
         agent.lock().unwrap().start(pseudo_terminal)?;
         let build_id = 50_000u16
@@ -344,10 +358,13 @@ fn run_agents(
     let receiver =
         thread::spawn(move || emane_rs_event_service_process_loop(receive_uuid.as_ptr()));
     while !SHUTDOWN.load(Ordering::Relaxed) {
+        thread::sleep(Duration::from_secs(1));
+        if SHUTDOWN.load(Ordering::Relaxed) {
+            break;
+        }
         for agent in &runtime.agents {
             agent.lock().unwrap().process_timed_event();
         }
-        thread::sleep(Duration::from_secs(1));
     }
     emane_rs_event_service_mcast_close();
     let _ = receiver.join();
@@ -379,8 +396,13 @@ pub fn run_event_application(expected_root: &str, component_tag: &str) -> Result
     let mut config = None;
     let mut start_time = None;
     let mut next_day = false;
+    let mut runtime_options = RuntimeOptions::default();
     let mut index = 1;
     while index < args.len() {
+        if consume_option(&args, &mut index, &mut runtime_options)? {
+            index += 1;
+            continue;
+        }
         match args[index].as_str() {
             "-h" | "--help" => {
                 println!("usage: {} [OPTIONS] CONFIG_URL", args[0]);
@@ -398,14 +420,6 @@ pub fn run_event_application(expected_root: &str, component_tag: &str) -> Result
                 start_time = Some(parse_start_time(value)?);
             }
             "-n" | "--nextday" => next_day = true,
-            "-d" | "--daemonize" | "-r" | "--realtime" | "--syslog" => {}
-            "-f" | "--logfile" | "-l" | "--loglevel" | "--pidfile" | "-p" | "--priority"
-            | "--uuidfile" => {
-                index += 1;
-                if index == args.len() {
-                    return Err(format!("{} requires a value", args[index - 1]));
-                }
-            }
             option if option.starts_with('-') => return Err(format!("unknown option {option}")),
             value => {
                 if config.replace(value.to_string()).is_some() {
@@ -448,6 +462,13 @@ pub fn run_event_application(expected_root: &str, component_tag: &str) -> Result
         ));
     }
 
+    let uuid = instance_uuid();
+    let application = Path::new(&args[0])
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(expected_root);
+    prepare(application, &runtime_options, uuid)?;
+
     if let Some(target) = start_time {
         let now = unsafe { libc::time(std::ptr::null_mut()) };
         let mut local: libc::tm = unsafe { std::mem::zeroed() };
@@ -471,7 +492,6 @@ pub fn run_event_application(expected_root: &str, component_tag: &str) -> Result
         "{} started with {} {} component(s)",
         expected_root, component_count, component_tag
     );
-    let uuid = instance_uuid();
     match expected_root {
         "eventservice" => run_generators(root, path, uuid),
         "eventdaemon" => run_agents(root, path, uuid),

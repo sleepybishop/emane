@@ -57,7 +57,7 @@ impl EelInputParser {
 
             if arg_start < arg_end {
                 let arg = std::str::from_utf8(&bytes[arg_start..arg_end])
-                    .unwrap()
+                    .map_err(|error| format!("Invalid UTF-8 argument: {error}"))?
                     .to_string();
                 args.push(arg);
             } else if is_quote {
@@ -83,10 +83,12 @@ impl EelInputParser {
         }
 
         if args.len() < 3 {
-            return Ok(Some((0.0, String::new(), String::new(), vec![]))); // Will be handled as false in C++ wrapper
+            return Ok(None);
         }
 
-        let f_event_time = args[0].parse::<f32>().unwrap_or(0.0);
+        let f_event_time = args[0]
+            .parse::<f32>()
+            .map_err(|error| format!("Invalid event time {}: {error}", args[0]))?;
         let s_module_id = args[1].clone();
         let s_event_type = args[2].clone();
         let input_args = args[3..].to_vec();
@@ -167,5 +169,41 @@ pub extern "C" fn emane_rs_eel_input_parser_free_strings(
             }
             drop(Box::from_raw(slice as *mut _));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EelInputParser;
+
+    #[test]
+    fn parses_records_quotes_and_comments() {
+        assert_eq!(
+            EelInputParser::parse(" 0.5 nem:1 location 1,2,3 # ignored").unwrap(),
+            Some((
+                0.5,
+                "nem:1".to_string(),
+                "location".to_string(),
+                vec!["1,2,3".to_string()],
+            ))
+        );
+        assert_eq!(
+            EelInputParser::parse("1 nem:2 commeffect \"nem:3,1,2,3\"").unwrap(),
+            Some((
+                1.0,
+                "nem:2".to_string(),
+                "commeffect".to_string(),
+                vec!["nem:3,1,2,3".to_string()],
+            ))
+        );
+        assert_eq!(EelInputParser::parse("# comment").unwrap(), None);
+        assert_eq!(EelInputParser::parse("1 nem:1").unwrap(), None);
+    }
+
+    #[test]
+    fn rejects_bad_time_and_bad_quotes() {
+        assert!(EelInputParser::parse("soon nem:1 location 1,2,3").is_err());
+        assert!(EelInputParser::parse("1 nem:1 location \"unterminated").is_err());
+        assert!(EelInputParser::parse("1 nem:1 locat\"ion args").is_err());
     }
 }

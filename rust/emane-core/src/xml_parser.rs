@@ -59,7 +59,7 @@ impl std::fmt::Display for ConfigurationError {
 }
 impl std::error::Error for ConfigurationError {}
 
-fn parse_params(node: Node<'_, '_>) -> Result<ParamMap, ConfigurationError> {
+pub fn parse_params(node: Node<'_, '_>) -> Result<ParamMap, ConfigurationError> {
     let mut params = ParamMap::new();
     for child in node.children().filter(|c| c.is_element()) {
         let name = child.tag_name().name();
@@ -265,16 +265,27 @@ pub fn parse_nem(file_path: &Path, node: Node<'_, '_>) -> Result<NemConfig, Conf
         let macs = positions("mac");
         let phys = positions("phy");
 
-        if transports.len() != 1 || macs.len() != 1 || phys.len() != 1 {
+        let expected_transports = usize::from(!config.external_transport);
+        if transports.len() != expected_transports || macs.len() != 1 || phys.len() != 1 {
             return Err(ConfigurationError::ValidationError(format!(
-                "NEM id {} must contain exactly one transport, mac, and phy layer",
-                id
+                "NEM id {} must contain exactly {} transport, one mac, and one phy layer",
+                id, expected_transports
             )));
         }
-        if !(transports[0] < macs[0] && macs[0] < phys[0]) {
+        let valid_order = if config.external_transport {
+            macs[0] < phys[0]
+        } else {
+            transports[0] < macs[0] && macs[0] < phys[0]
+        };
+        if !valid_order {
             return Err(ConfigurationError::ValidationError(format!(
-                "NEM id {} layer order must be transport -> mac -> phy (with optional shims)",
-                id
+                "NEM id {} layer order must be {}mac -> phy (with optional shims)",
+                id,
+                if config.external_transport {
+                    ""
+                } else {
+                    "transport -> "
+                }
             )));
         }
         if let Some(layer) = config.layers.iter().find(|layer| {

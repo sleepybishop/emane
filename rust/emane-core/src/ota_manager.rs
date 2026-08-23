@@ -1,13 +1,18 @@
-use libc::{setsockopt, SOL_SOCKET, SO_BINDTODEVICE};
 use prost::Message;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::CStr;
-use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
-use std::os::fd::AsRawFd;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::os::raw::{c_char, c_void};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
+
+use crate::application_runtime::format_uuid;
+use crate::common::multicast;
+use crate::statistics::{
+    increment_native_counter, native_table_generation, register_native_counter,
+    register_native_table, set_native_table_row, NativeTableValue,
+};
 
 pub use crate::protobufs::emane_message as ota;
 
@@ -35,6 +40,181 @@ struct PartsData {
     uuid: [u8; 16],
 }
 
+#[derive(Hash, Eq, PartialEq, Clone, Copy)]
+struct PacketStatisticKey {
+    uuid: [u8; 16],
+    source: u16,
+}
+
+#[derive(Hash, Eq, PartialEq, Clone, Copy)]
+struct EventStatisticKey {
+    uuid: [u8; 16],
+    event_id: u16,
+}
+
+struct OtaStatistics {
+    downstream_packets: u64,
+    upstream_packets: u64,
+    missing_parts: u64,
+    packet_table: u64,
+    event_tx: u64,
+    event_rx: u64,
+    event_table: u64,
+    packet_row_limit: usize,
+    event_row_limit: usize,
+    packet_generation: u64,
+    event_generation: u64,
+    packet_rows: HashMap<PacketStatisticKey, [u64; 3]>,
+    event_rows: HashMap<EventStatisticKey, [u64; 2]>,
+}
+
+impl OtaStatistics {
+    fn register() -> Self {
+        let downstream_packets = register_native_counter(
+            0,
+            "numOTAChannelDownstreamPackets",
+            "Number of downstream OTA channel packets.",
+            true,
+        )
+        .unwrap_or(0);
+        let upstream_packets = register_native_counter(
+            0,
+            "numOTAChannelUpstreamPackets",
+            "Number of upstream OTA channel packets.",
+            true,
+        )
+        .unwrap_or(0);
+        let missing_parts = register_native_counter(
+            0,
+            "numOTAChannelUpstreamPacketsDroppedMissingPart",
+            "Number of upstream OTA channel packets dropped due to a missing part.",
+            true,
+        )
+        .unwrap_or(0);
+        let packet_table = register_native_table(
+            0,
+            "OTAChannelPacketCountTable",
+            &[
+                "Src",
+                "Emulator UUID",
+                "Num Pkts Tx",
+                "Num Pkts Rx",
+                "Pkts Rx Drop Miss Part",
+            ],
+            "OTA packet count table.",
+            true,
+        )
+        .unwrap_or(0);
+        let event_tx = register_native_counter(
+            0,
+            "numOTAEventsTx",
+            "Number of events transmitted over the OTA channel.",
+            true,
+        )
+        .unwrap_or(0);
+        let event_rx = register_native_counter(
+            0,
+            "numOTAEventsRx",
+            "Number of events received over the OTA channel.",
+            true,
+        )
+        .unwrap_or(0);
+        let event_table = register_native_table(
+            0,
+            "OTAEventCountTable",
+            &["Src", "Emulator UUID", "Num Events Tx", "Num Events Rx"],
+            "OTA Event count table.",
+            true,
+        )
+        .unwrap_or(0);
+        Self {
+            downstream_packets,
+            upstream_packets,
+            missing_parts,
+            packet_table,
+            event_tx,
+            event_rx,
+            event_table,
+            packet_row_limit: 0,
+            event_row_limit: 0,
+            packet_generation: native_table_generation(packet_table).unwrap_or(0),
+            event_generation: native_table_generation(event_table).unwrap_or(0),
+            packet_rows: HashMap::new(),
+            event_rows: HashMap::new(),
+        }
+    }
+
+    fn packet(&mut self, key: PacketStatisticKey, column: usize) {
+        let counter = [
+            self.downstream_packets,
+            self.upstream_packets,
+            self.missing_parts,
+        ][column];
+        let _ = increment_native_counter(counter, 1);
+        let generation =
+            native_table_generation(self.packet_table).unwrap_or(self.packet_generation);
+        if generation != self.packet_generation {
+            self.packet_rows.clear();
+            self.packet_generation = generation;
+        }
+        if !self.packet_rows.contains_key(&key) && self.packet_rows.len() >= self.packet_row_limit {
+            return;
+        }
+        let counts = self.packet_rows.entry(key).or_default();
+        counts[column] = counts[column].saturating_add(1);
+        let _ = set_native_table_row(
+            self.packet_table,
+            statistic_key(key.uuid, key.source),
+            vec![
+                NativeTableValue::UInt64(u64::from(key.source)),
+                NativeTableValue::String(format_uuid(key.uuid)),
+                NativeTableValue::UInt64(counts[0]),
+                NativeTableValue::UInt64(counts[1]),
+                NativeTableValue::UInt64(counts[2]),
+            ],
+        );
+    }
+
+    fn event(&mut self, key: EventStatisticKey, receive: bool) {
+        let _ = increment_native_counter(
+            if receive {
+                self.event_rx
+            } else {
+                self.event_tx
+            },
+            1,
+        );
+        let generation = native_table_generation(self.event_table).unwrap_or(self.event_generation);
+        if generation != self.event_generation {
+            self.event_rows.clear();
+            self.event_generation = generation;
+        }
+        if !self.event_rows.contains_key(&key) && self.event_rows.len() >= self.event_row_limit {
+            return;
+        }
+        let counts = self.event_rows.entry(key).or_default();
+        counts[usize::from(receive)] = counts[usize::from(receive)].saturating_add(1);
+        let _ = set_native_table_row(
+            self.event_table,
+            statistic_key(key.uuid, key.event_id),
+            vec![
+                NativeTableValue::UInt64(u64::from(key.event_id)),
+                NativeTableValue::String(format_uuid(key.uuid)),
+                NativeTableValue::UInt64(counts[0]),
+                NativeTableValue::UInt64(counts[1]),
+            ],
+        );
+    }
+}
+
+fn statistic_key(uuid: [u8; 16], id: u16) -> Vec<u64> {
+    vec![
+        u64::from_be_bytes(uuid[..8].try_into().unwrap()),
+        u64::from_be_bytes(uuid[8..].try_into().unwrap()),
+        u64::from(id),
+    ]
+}
+
 pub struct OtaManager {
     socket: Option<UdpSocket>,
     uuid: [u8; 16],
@@ -49,6 +229,7 @@ pub struct OtaManager {
     running: bool,
     upstream_packets: u64,
     reassembly_timeouts: u64,
+    statistics: OtaStatistics,
 }
 
 pub type OtaPacketCallback = extern "C" fn(
@@ -91,6 +272,7 @@ impl OtaManager {
             running: false,
             upstream_packets: 0,
             reassembly_timeouts: 0,
+            statistics: OtaStatistics::register(),
         }
     }
 }
@@ -99,6 +281,12 @@ static OTA_MANAGER: OnceLock<Mutex<OtaManager>> = OnceLock::new();
 
 pub fn get_ota_manager() -> &'static Mutex<OtaManager> {
     OTA_MANAGER.get_or_init(|| Mutex::new(OtaManager::new()))
+}
+
+pub fn configure_statistics(packet_row_limit: u32, event_row_limit: u32) {
+    let mut manager = get_ota_manager().lock().unwrap();
+    manager.statistics.packet_row_limit = packet_row_limit as usize;
+    manager.statistics.event_row_limit = event_row_limit as usize;
 }
 
 #[no_mangle]
@@ -169,44 +357,48 @@ pub extern "C" fn emane_rs_ota_manager_open(
         uuid_arr.copy_from_slice(std::slice::from_raw_parts(uuid, 16));
     }
 
-    let Ok(group_addr) = group_addr_c.parse::<SocketAddrV4>() else {
+    let Ok(group_addr) = group_addr_c.parse::<SocketAddr>() else {
         return false;
     };
-    let ip = *group_addr.ip();
-    let port = group_addr.port();
-    let Ok(socket) = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)) else {
+    let domain = if group_addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let Ok(socket) = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP)) else {
         return false;
     };
     if socket.set_reuse_address(true).is_err() {
         return false;
     }
 
-    let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
-    if socket.bind(&addr.into()).is_err() {
-        return false;
-    }
-
-    if ip.is_multicast()
-        && (socket
-            .join_multicast_v4(&ip, &Ipv4Addr::UNSPECIFIED)
-            .is_err()
-            || socket.set_multicast_loop_v4(loopback).is_err()
-            || socket.set_multicast_ttl_v4(ttl as u32).is_err())
-    {
-        return false;
-    }
-
-    if !device_c.is_empty() {
-        let mut dev_bytes = device_c.into_bytes();
-        dev_bytes.push(0);
-        unsafe {
-            if setsockopt(
-                socket.as_raw_fd(),
-                SOL_SOCKET,
-                SO_BINDTODEVICE,
-                dev_bytes.as_ptr() as *const c_void,
-                dev_bytes.len() as libc::socklen_t,
-            ) != 0
+    match group_addr {
+        SocketAddr::V4(group) => {
+            let bind = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), group.port());
+            if socket.bind(&bind.into()).is_err()
+                || multicast::configure(
+                    &socket,
+                    (*group.ip()).into(),
+                    &device_c,
+                    u32::from(ttl),
+                    loopback,
+                )
+                .is_err()
+            {
+                return false;
+            }
+        }
+        SocketAddr::V6(group) => {
+            let bind = SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), group.port());
+            if socket.bind(&bind.into()).is_err()
+                || multicast::configure(
+                    &socket,
+                    (*group.ip()).into(),
+                    &device_c,
+                    u32::from(ttl),
+                    loopback,
+                )
+                .is_err()
             {
                 return false;
             }
@@ -222,7 +414,7 @@ pub extern "C" fn emane_rs_ota_manager_open(
     manager.ota_mtu = ota_mtu;
     manager.part_check_threshold = Duration::from_secs(part_check_threshold_secs as u64);
     manager.part_timeout_threshold = Duration::from_secs(part_timeout_threshold_secs as u64);
-    manager.group_addr = Some(std::net::SocketAddr::V4(SocketAddrV4::new(ip, port)));
+    manager.group_addr = Some(group_addr);
     manager.part_store.clear();
     manager.running = true;
     true
@@ -453,6 +645,11 @@ pub extern "C" fn emane_rs_ota_manager_process_loop() {
                     manager.reassembly_timeouts = manager
                         .reassembly_timeouts
                         .saturating_add(expired.len() as u64);
+                    for (uuid, source) in expired {
+                        manager
+                            .statistics
+                            .packet(PacketStatisticKey { uuid, source }, 2);
+                    }
                 }
             }
             Err(error)
@@ -509,6 +706,13 @@ fn handle_ota_message(
                     &serialization.data,
                     0,
                 );
+                get_ota_manager().lock().unwrap().statistics.event(
+                    EventStatisticKey {
+                        uuid: *remote_uuid,
+                        event_id,
+                    },
+                    true,
+                );
             }
         }
         offset += events_size;
@@ -532,6 +736,13 @@ fn handle_ota_message(
         let users: Vec<OtaUser> = {
             let mut manager = get_ota_manager().lock().unwrap();
             manager.upstream_packets = manager.upstream_packets.saturating_add(1);
+            manager.statistics.packet(
+                PacketStatisticKey {
+                    uuid: *remote_uuid,
+                    source,
+                },
+                1,
+            );
             manager.nem_users.values().flatten().copied().collect()
         };
 
@@ -718,6 +929,22 @@ pub extern "C" fn emane_rs_ota_manager_send_ota_packet(
         sent_bytes += payload_size;
     }
 
+    let mut manager = get_ota_manager().lock().unwrap();
+    manager
+        .statistics
+        .packet(PacketStatisticKey { uuid, source }, 0);
+    if events_len > 0 {
+        if let Ok(data) = ota::event::Data::decode(events_slice) {
+            for serialization in data.serializations {
+                if let Ok(event_id) = u16::try_from(serialization.event_id) {
+                    manager
+                        .statistics
+                        .event(EventStatisticKey { uuid, event_id }, false);
+                }
+            }
+        }
+    }
+
     true
 }
 #[cfg(test)]
@@ -871,6 +1098,70 @@ mod tests {
         );
         assert!(sent);
         emane_rs_ota_manager_close();
+    }
+
+    #[test]
+    fn test_ota_ipv6_open_and_send() {
+        let _guard = test_guard();
+        let Ok(reservation) = UdpSocket::bind("[::1]:0") else {
+            return;
+        };
+        let port = reservation.local_addr().unwrap().port();
+        drop(reservation);
+        let group_addr = CString::new(format!("[::1]:{port}")).unwrap();
+        let device = CString::new("").unwrap();
+        let uuid = [0u8; 16];
+        assert!(emane_rs_ota_manager_open(
+            group_addr.as_ptr(),
+            device.as_ptr(),
+            1,
+            true,
+            uuid.as_ptr(),
+            0,
+            2,
+            5,
+        ));
+        let packet_data = [1, 2, 3];
+        assert!(emane_rs_ota_manager_send_ota_packet(
+            1,
+            2,
+            packet_data.as_ptr(),
+            packet_data.len(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            0,
+        ));
+        emane_rs_ota_manager_close();
+    }
+
+    #[test]
+    fn ota_statistic_row_limits_match_the_legacy_contract() {
+        let _guard = test_guard();
+        let mut manager = get_ota_manager().lock().unwrap();
+        manager.statistics.packet_rows.clear();
+        manager.statistics.packet_row_limit = 1;
+        manager.statistics.packet(
+            PacketStatisticKey {
+                uuid: [1; 16],
+                source: 1,
+            },
+            0,
+        );
+        manager.statistics.packet(
+            PacketStatisticKey {
+                uuid: [2; 16],
+                source: 2,
+            },
+            1,
+        );
+        assert_eq!(manager.statistics.packet_rows.len(), 1);
+        assert_eq!(
+            manager.statistics.packet_rows.values().next(),
+            Some(&[1, 0, 0])
+        );
+        manager.statistics.packet_row_limit = 0;
+        manager.statistics.packet_rows.clear();
     }
 
     #[test]

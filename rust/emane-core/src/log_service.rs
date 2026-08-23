@@ -9,6 +9,7 @@ use std::time::SystemTime;
 struct LoggerState {
     level: i32, // 0 = NONE, 1 = ABORT, 2 = ERROR, 3 = INFO, 4 = DEBUG
     file: Option<File>,
+    syslog: bool,
 }
 
 fn get_logger() -> &'static Mutex<LoggerState> {
@@ -17,6 +18,7 @@ fn get_logger() -> &'static Mutex<LoggerState> {
         Mutex::new(LoggerState {
             level: 1, // ABORT_LEVEL default
             file: None,
+            syslog: false,
         })
     })
 }
@@ -58,7 +60,20 @@ pub extern "C" fn emane_rs_log(level: i32, msg: *const c_char) {
     );
 
     let mut state = get_logger().lock().unwrap();
-    if let Some(ref mut f) = state.file {
+    if state.syslog {
+        let Ok(message) = std::ffi::CString::new(msg_str.as_ref()) else {
+            return;
+        };
+        let priority = match level {
+            1 => libc::LOG_CRIT,
+            2 => libc::LOG_ERR,
+            3 => libc::LOG_INFO,
+            _ => libc::LOG_DEBUG,
+        };
+        unsafe {
+            libc::syslog(priority, c"%s".as_ptr(), message.as_ptr());
+        }
+    } else if let Some(ref mut f) = state.file {
         let _ = f.write_all(formatted.as_bytes());
     } else {
         print!("{}", formatted);
@@ -80,7 +95,29 @@ pub extern "C" fn emane_rs_log_redirect(file: *const c_char) {
     if let Ok(f) = File::create(f_str.as_ref()) {
         let mut state = get_logger().lock().unwrap();
         state.file = Some(f);
+        state.syslog = false;
     }
+}
+
+pub fn redirect_to_syslog(application: &str) -> Result<(), String> {
+    let application = std::ffi::CString::new(application)
+        .map_err(|_| "syslog application name contains a NUL byte".to_string())?;
+    unsafe {
+        libc::openlog(application.as_ptr(), libc::LOG_PID, libc::LOG_DAEMON);
+    }
+    // openlog retains the identifier pointer on some implementations. Passing
+    // null makes libc use the executable name and avoids retaining Rust-owned
+    // storage after this call.
+    unsafe {
+        libc::closelog();
+        libc::openlog(std::ptr::null(), libc::LOG_PID, libc::LOG_DAEMON);
+    }
+    let mut state = get_logger()
+        .lock()
+        .map_err(|_| "logger lock poisoned".to_string())?;
+    state.file = None;
+    state.syslog = true;
+    Ok(())
 }
 
 #[no_mangle]

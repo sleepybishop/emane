@@ -24,10 +24,24 @@ pub struct FfiNEMLayerComponentMap {
     pub len: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NEMLayerComponent {
     pub build_id: u16,
     pub layer_type: i32,
     pub plugin_name: String,
+}
+
+pub fn native_layer_manifest() -> Vec<(u16, Vec<NEMLayerComponent>)> {
+    let Ok(service) = get_build_id_service().lock() else {
+        return Vec::new();
+    };
+    let mut nems = service
+        .nem_layer_components
+        .iter()
+        .map(|(nem_id, components)| (*nem_id, components.clone()))
+        .collect::<Vec<_>>();
+    nems.sort_by_key(|(nem_id, _)| *nem_id);
+    nems
 }
 
 pub struct BuildIdService {
@@ -69,8 +83,11 @@ impl BuildIdService {
     }
 
     pub fn assign_build_id(&mut self) -> u16 {
-        self.next_build_id += 1;
-        self.next_build_id
+        let Some(next) = self.next_build_id.checked_add(1) else {
+            return 0;
+        };
+        self.next_build_id = next;
+        next
     }
 }
 

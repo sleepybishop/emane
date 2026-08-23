@@ -76,17 +76,15 @@ impl LocationLoader {
                 return Err("LoaderLocation gps unkown altitude type".to_string());
             }
 
-            let entry = self.cache.entry(module_id).or_default();
-            entry.has_position = true;
-            entry.lat = lat;
-            entry.lon = lon;
-            entry.alt = alt;
-
-            let delta_entry = self.delta_cache.entry(module_id).or_default();
-            delta_entry.has_position = true;
-            delta_entry.lat = lat;
-            delta_entry.lon = lon;
-            delta_entry.alt = alt;
+            let snapshot = {
+                let entry = self.cache.entry(module_id).or_default();
+                entry.has_position = true;
+                entry.lat = lat;
+                entry.lon = lon;
+                entry.alt = alt;
+                entry.clone()
+            };
+            self.delta_cache.insert(module_id, snapshot);
         } else if event_type == "orientation" {
             if args.is_empty() {
                 return Err("EELLoaderLocation orientation missing arguments".to_string());
@@ -109,17 +107,15 @@ impl LocationLoader {
                 return Err("EELLoaderLocation orientation unkown or unsupported keyword. Only degrees and relative keywords supported.".to_string());
             }
 
-            let entry = self.cache.entry(module_id).or_default();
-            entry.has_orientation = true;
-            entry.roll = roll;
-            entry.pitch = pitch;
-            entry.yaw = yaw;
-
-            let delta_entry = self.delta_cache.entry(module_id).or_default();
-            delta_entry.has_orientation = true;
-            delta_entry.roll = roll;
-            delta_entry.pitch = pitch;
-            delta_entry.yaw = yaw;
+            let snapshot = {
+                let entry = self.cache.entry(module_id).or_default();
+                entry.has_orientation = true;
+                entry.roll = roll;
+                entry.pitch = pitch;
+                entry.yaw = yaw;
+                entry.clone()
+            };
+            self.delta_cache.insert(module_id, snapshot);
         } else if event_type == "velocity" {
             if args.is_empty() {
                 return Err("EELLoaderLocation velocity missing arguments".to_string());
@@ -146,17 +142,15 @@ impl LocationLoader {
                 return Err("EELLoaderLocation velocity unkown or unsupported keyword. Only degrees, relative, mps and azimuth keywords supported.".to_string());
             }
 
-            let entry = self.cache.entry(module_id).or_default();
-            entry.has_velocity = true;
-            entry.azimuth = azimuth;
-            entry.elevation = elevation;
-            entry.magnitude = magnitude;
-
-            let delta_entry = self.delta_cache.entry(module_id).or_default();
-            delta_entry.has_velocity = true;
-            delta_entry.azimuth = azimuth;
-            delta_entry.elevation = elevation;
-            delta_entry.magnitude = magnitude;
+            let snapshot = {
+                let entry = self.cache.entry(module_id).or_default();
+                entry.has_velocity = true;
+                entry.azimuth = azimuth;
+                entry.elevation = elevation;
+                entry.magnitude = magnitude;
+                entry.clone()
+            };
+            self.delta_cache.insert(module_id, snapshot);
         }
 
         Ok(())
@@ -277,4 +271,53 @@ pub extern "C" fn emane_location_loader_get_events(
 ) {
     let loader = unsafe { &mut *ptr };
     loader.get_events(mode, callback_data, cb);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    extern "C" fn collect(
+        context: *mut c_void,
+        _: u16,
+        _: u16,
+        data: *const u8,
+        len: usize,
+    ) {
+        let output = unsafe { &mut *(context as *mut Vec<Vec<u8>>) };
+        output.push(unsafe { std::slice::from_raw_parts(data, len) }.to_vec());
+    }
+
+    #[test]
+    fn delta_orientation_preserves_current_position() {
+        let mut loader = LocationLoader::new();
+        loader
+            .load(
+                "nem",
+                7,
+                "location",
+                &["gps".to_string(), "10,20,30,msl".to_string()],
+            )
+            .unwrap();
+        let mut output: Vec<Vec<u8>> = Vec::new();
+        loader.get_events(0, (&mut output as *mut Vec<Vec<u8>>).cast(), collect);
+        output.clear();
+
+        loader
+            .load(
+                "nem",
+                7,
+                "orientation",
+                &["1,2,3,degrees".to_string()],
+            )
+            .unwrap();
+        loader.get_events(0, (&mut output as *mut Vec<Vec<u8>>).cast(), collect);
+        let event = emane_message::LocationEvent::decode(output[0].as_slice()).unwrap();
+        let location = &event.locations[0];
+        assert_eq!(location.nem_id, 7);
+        assert_eq!(location.position.latitude_degrees, 10.0);
+        assert_eq!(location.position.longitude_degrees, 20.0);
+        assert_eq!(location.position.altitude_meters, 30.0);
+        assert_eq!(location.orientation.as_ref().unwrap().roll_degrees, 2.0);
+    }
 }

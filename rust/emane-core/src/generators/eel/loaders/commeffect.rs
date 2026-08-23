@@ -151,9 +151,7 @@ impl CommEffectLoader {
             }
         }
 
-        if mode == 0 {
-            self.delta_cache.clear();
-        }
+        self.delta_cache.clear();
     }
 }
 

@@ -1,7 +1,7 @@
 use emane_core::nem_manager::resolve_plugin_path;
 use emane_core::plugin_interface::{
     FfiConfigItem, FfiConfigRequest, FfiConfigStringArray, FfiControlMessage, FfiFrameworkService,
-    FfiPacket, PluginApi, PluginEntryFunc, PLUGIN_ABI_VERSION,
+    FfiPacket, FfiStatisticValue, PluginApi, PluginEntryFunc, PLUGIN_ABI_VERSION,
 };
 use libloading::{Library, Symbol};
 use std::ffi::{c_void, CStr, CString};
@@ -39,7 +39,39 @@ extern "C" fn register_counter(
 extern "C" fn increment_counter(_: *mut c_void, _: u64, _: u64) -> bool {
     false
 }
+extern "C" fn register_double(
+    _: *mut c_void,
+    _: *const std::os::raw::c_char,
+    _: *const std::os::raw::c_char,
+    _: bool,
+) -> u64 {
+    0
+}
+extern "C" fn set_double(_: *mut c_void, _: u64, _: f64) -> bool {
+    false
+}
+extern "C" fn register_table(
+    _: *mut c_void,
+    _: *const std::os::raw::c_char,
+    _: *const *const std::os::raw::c_char,
+    _: usize,
+    _: *const std::os::raw::c_char,
+    _: bool,
+) -> u64 {
+    0
+}
+extern "C" fn set_table_row(
+    _: *mut c_void,
+    _: u64,
+    _: *const u64,
+    _: usize,
+    _: *const FfiStatisticValue,
+    _: usize,
+) -> bool {
+    false
+}
 extern "C" fn neighbor_tx(_: *mut c_void, _: u16, _: u64, _: u64) {}
+extern "C" fn neighbor_status(_: *mut c_void) {}
 extern "C" fn neighbor_rx(_: *mut c_void, _: u16, _: u64, _: f64, _: f64, _: u64, _: u64, _: u64) {}
 extern "C" fn queue(_: *mut c_void, _: u16, _: u32, _: u32, _: u32, _: u64) {}
 extern "C" fn publish(_: *mut c_void, _: u64, _: u64, _: u64, _: u64) {}
@@ -64,6 +96,24 @@ extern "C" fn update_rf(
 }
 extern "C" fn publish_event(_: *mut c_void, _: u16, _: *const u8, _: usize) -> bool {
     true
+}
+extern "C" fn register_descriptor(
+    _: *mut c_void,
+    _: i32,
+    _: u32,
+    _: *mut c_void,
+    _: emane_core::plugin_interface::FfiFileDescriptorCallback,
+) -> u64 {
+    0
+}
+extern "C" fn unregister_descriptor(_: *mut c_void, _: u64) -> bool {
+    false
+}
+extern "C" fn remove_table_row(_: *mut c_void, _: u64, _: *const u64, _: usize) -> bool {
+    false
+}
+extern "C" fn table_generation_noop(_: *mut c_void, _: u64) -> u64 {
+    0
 }
 
 fn main() -> Result<(), String> {
@@ -96,14 +146,27 @@ fn main() -> Result<(), String> {
         log,
         register_counter,
         increment_counter,
+        maximize_counter: increment_counter,
+        register_double,
+        set_double,
+        register_average: register_double,
+        sample_average: set_double,
+        register_table,
+        set_table_row,
+        clear_table: unregister_descriptor,
+        remove_table_row,
+        table_generation: table_generation_noop,
         update_neighbor_tx: neighbor_tx,
         update_neighbor_rx: neighbor_rx,
+        update_neighbor_status: neighbor_status,
         update_queue_metric: queue,
         publish_r2ri: publish,
         register_rf_signal_table: register_rf,
         configure_rf_signal_table: configure_rf,
         update_rf_signal_table: update_rf,
         publish_event,
+        register_file_descriptor: register_descriptor,
+        unregister_file_descriptor: unregister_descriptor,
     };
     let instance = (api.init)(42, &framework);
     if instance.is_null() {

@@ -1,5 +1,7 @@
 use libc::{
-    gmtime_r, grantpt, posix_openpt, ptsname_r, time, time_t, tm, unlockpt, write, O_NOCTTY, O_RDWR,
+    cfsetispeed, cfsetospeed, gmtime_r, grantpt, open, posix_openpt, ptsname_r, tcgetattr,
+    tcsetattr, time, time_t, tm, unlockpt, write, B4800, CLOCAL, CREAD, CRTSCTS, CS8, CSIZE,
+    CSTOPB, O_NOCTTY, O_RDWR, PARENB, PARMRK, PARODD, TCSANOW, VMIN,
 };
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_double, c_void};
@@ -96,11 +98,49 @@ impl GpsdLocationAgent {
                 .to_string_lossy()
                 .into_owned();
 
-            // Create symlink
-            let _ = std::fs::remove_file(&self.pseudo_terminal_file);
-            if let Err(error) = std::os::unix::fs::symlink(&pts_str, &self.pseudo_terminal_file) {
+            let pts_path = std::ffi::CString::new(pts_str.as_str())
+                .map_err(|_| "pseudo-terminal name contains a NUL byte".to_string())?;
+            let slave_pty = open(pts_path.as_ptr(), O_RDWR | O_NOCTTY);
+            if slave_pty < 0 {
                 self.stop();
-                return Err(format!("failed to create pseudo-terminal link: {error}"));
+                return Err(format!(
+                    "failed to open pseudo-terminal slave: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            let mut terminal: libc::termios = std::mem::zeroed();
+            let configured = tcgetattr(slave_pty, &mut terminal) == 0;
+            if configured {
+                terminal.c_iflag = 0;
+                terminal.c_oflag = 0;
+                terminal.c_lflag = 0;
+                terminal.c_cflag &=
+                    !(PARENB | PARODD | CRTSCTS | CSIZE | CSTOPB | PARENB | PARODD | CS8);
+                terminal.c_cflag |= CREAD | CLOCAL;
+                terminal.c_iflag &= !(PARMRK | libc::INPCK);
+                terminal.c_cc[VMIN] = 1;
+                cfsetispeed(&mut terminal, B4800);
+                cfsetospeed(&mut terminal, B4800);
+            }
+            let configure_result = configured && tcsetattr(slave_pty, TCSANOW, &terminal) == 0;
+            libc::close(slave_pty);
+            if !configure_result {
+                self.stop();
+                return Err(format!(
+                    "failed to configure pseudo-terminal slave: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+
+            // The legacy agent writes the slave path without its leading '/'
+            // to a regular discovery file consumed by gpsd launch scripts.
+            let _ = std::fs::remove_file(&self.pseudo_terminal_file);
+            let discovery_name = pts_str.strip_prefix('/').unwrap_or(&pts_str);
+            if let Err(error) =
+                std::fs::write(&self.pseudo_terminal_file, format!("{discovery_name}\n"))
+            {
+                self.stop();
+                return Err(format!("failed to write pseudo-terminal file: {error}"));
             }
         }
         Ok(())
@@ -237,8 +277,8 @@ impl GpsdLocationAgent {
         self.lon_degrees = lon;
         self.alt_meters = alt;
         self.have_initial_position = true;
-        self.have_initial_velocity = velocity.is_some();
         if let Some((azimuth, magnitude)) = velocity {
+            self.have_initial_velocity = true;
             self.azm_degrees = azimuth;
             self.mag_mps = magnitude;
         }
@@ -293,4 +333,39 @@ pub extern "C" fn emane_rs_gpsd_agent_update_location(
 pub extern "C" fn emane_rs_gpsd_agent_process_timed_event(ptr: *mut GpsdLocationAgent) {
     let agent = unsafe { &mut *ptr };
     agent.process_timed_event();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GpsdLocationAgent;
+
+    #[test]
+    fn location_without_velocity_preserves_last_velocity() {
+        let mut agent = GpsdLocationAgent::new(1);
+        agent.update_location(1.0, 2.0, 3.0, Some((45.0, 6.0)));
+        agent.update_location(4.0, 5.0, 6.0, None);
+        assert!(agent.have_initial_velocity);
+        assert_eq!(agent.azm_degrees, 45.0);
+        assert_eq!(agent.mag_mps, 6.0);
+    }
+
+    #[test]
+    fn start_writes_legacy_pty_discovery_file() {
+        let filename = std::env::temp_dir().join(format!(
+            "emane-gpsd-agent-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let mut agent = GpsdLocationAgent::new(1);
+        agent.start(filename.to_str().unwrap()).unwrap();
+        assert!(std::fs::metadata(&filename).unwrap().is_file());
+        let discovery = std::fs::read_to_string(&filename).unwrap();
+        assert!(discovery.starts_with("dev/pts/"));
+        assert!(discovery.ends_with('\n'));
+        agent.stop();
+        assert!(!filename.exists());
+    }
 }

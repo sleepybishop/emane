@@ -3,6 +3,13 @@ use std::ffi::c_void;
 use std::os::raw::c_char;
 use std::sync::{Mutex, OnceLock};
 
+use crate::application_runtime::format_uuid;
+use crate::common::multicast;
+use crate::statistics::{
+    increment_native_counter, native_table_generation, register_native_counter,
+    register_native_table, set_native_table_row, NativeTableValue,
+};
+
 pub type EventCallback =
     extern "C" fn(context: *mut c_void, event_id: u16, data: *const u8, len: usize);
 
@@ -162,7 +169,6 @@ pub fn route_serialized_event(nem_id: u16, event_id: u16, data: &[u8], ignore_ne
 
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
-use std::os::unix::io::AsRawFd;
 
 fn get_event_socket() -> &'static Mutex<Option<UdpSocket>> {
     static EVENT_SOCKET: OnceLock<Mutex<Option<UdpSocket>>> = OnceLock::new();
@@ -176,6 +182,92 @@ pub struct EventServiceState {
     pub running: bool,
     pub transmitted: u64,
     pub received: u64,
+    statistics: EventChannelStatistics,
+}
+
+#[derive(Hash, Eq, PartialEq, Clone, Copy)]
+struct EventStatisticKey {
+    uuid: [u8; 16],
+    event_id: u16,
+}
+
+struct EventChannelStatistics {
+    transmitted: u64,
+    received: u64,
+    table: u64,
+    row_limit: usize,
+    generation: u64,
+    rows: HashMap<EventStatisticKey, [u64; 2]>,
+}
+
+impl EventChannelStatistics {
+    fn register() -> Self {
+        let transmitted = register_native_counter(
+            0,
+            "numEventChannelEventsTx",
+            "Number of events transmitted over the event channel.",
+            true,
+        )
+        .unwrap_or(0);
+        let received = register_native_counter(
+            0,
+            "numEventChannelEventsRx",
+            "Number of events received over the event channel.",
+            true,
+        )
+        .unwrap_or(0);
+        let table = register_native_table(
+            0,
+            "EventChannelEventCountTable",
+            &["Src", "Emulator UUID", "Num Events Tx", "Num Events Rx"],
+            "EventChannel Event count table.",
+            true,
+        )
+        .unwrap_or(0);
+        Self {
+            transmitted,
+            received,
+            table,
+            row_limit: 0,
+            generation: native_table_generation(table).unwrap_or(0),
+            rows: HashMap::new(),
+        }
+    }
+
+    fn update(&mut self, key: EventStatisticKey, receive: bool) {
+        let _ = increment_native_counter(
+            if receive {
+                self.received
+            } else {
+                self.transmitted
+            },
+            1,
+        );
+        let generation = native_table_generation(self.table).unwrap_or(self.generation);
+        if generation != self.generation {
+            self.rows.clear();
+            self.generation = generation;
+        }
+        if !self.rows.contains_key(&key) && self.rows.len() >= self.row_limit {
+            return;
+        }
+        let counts = self.rows.entry(key).or_default();
+        counts[usize::from(receive)] = counts[usize::from(receive)].saturating_add(1);
+        let _ = set_native_table_row(
+            self.table,
+            vec![
+                u64::from_be_bytes(key.uuid[..8].try_into().unwrap()),
+                u64::from_be_bytes(key.uuid[8..].try_into().unwrap()),
+                u64::from(key.event_id),
+            ],
+            vec![
+                NativeTableValue::UInt64(u64::from(key.event_id)),
+                NativeTableValue::String(format_uuid(key.uuid)),
+                NativeTableValue::UInt64(counts[0]),
+                NativeTableValue::UInt64(counts[1]),
+            ],
+        );
+    }
 }
 
 fn get_event_service_state() -> &'static Mutex<EventServiceState> {
@@ -188,8 +280,14 @@ fn get_event_service_state() -> &'static Mutex<EventServiceState> {
             running: false,
             transmitted: 0,
             received: 0,
+            statistics: EventChannelStatistics::register(),
         })
     })
+}
+
+pub fn configure_statistics(row_limit: u32) {
+    let mut state = get_event_service_state().lock().unwrap();
+    state.statistics.row_limit = row_limit as usize;
 }
 
 #[no_mangle]
@@ -227,18 +325,20 @@ pub extern "C" fn emane_rs_event_service_mcast_open(
         return false;
     }
 
-    if sock_addr.is_ipv4() {
-        if socket.set_multicast_ttl_v4(ttl as u32).is_err() {
-            return false;
-        }
-        if socket.set_multicast_loop_v4(loopback).is_err() {
-            return false;
-        }
+    if !sock_addr.ip().is_multicast()
+        || multicast::configure(
+            &socket,
+            sock_addr.ip(),
+            &device_name(device),
+            ttl as u32,
+            loopback,
+        )
+        .is_err()
+    {
+        return false;
+    }
 
-        let ip = match sock_addr.ip() {
-            std::net::IpAddr::V4(ip) => ip,
-            _ => return false,
-        };
+    if sock_addr.is_ipv4() {
         let bind_addr = SocketAddr::new(
             std::net::IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             sock_addr.port(),
@@ -246,51 +346,13 @@ pub extern "C" fn emane_rs_event_service_mcast_open(
         if socket.bind(&socket2::SockAddr::from(bind_addr)).is_err() {
             return false;
         }
-        if socket
-            .join_multicast_v4(&ip, &Ipv4Addr::new(0, 0, 0, 0))
-            .is_err()
-        {
-            return false;
-        }
     } else {
-        if socket.set_multicast_loop_v6(loopback).is_err() {
-            return false;
-        }
         let bind_addr = SocketAddr::new(
             std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
             sock_addr.port(),
         );
         if socket.bind(&socket2::SockAddr::from(bind_addr)).is_err() {
             return false;
-        }
-        let ip = match sock_addr.ip() {
-            std::net::IpAddr::V6(ip) => ip,
-            _ => return false,
-        };
-        if socket.join_multicast_v6(&ip, 0).is_err() {
-            return false;
-        }
-    }
-
-    if !device.is_null() {
-        let dev_str = unsafe { std::ffi::CStr::from_ptr(device) };
-        let bytes = dev_str.to_bytes();
-        if !bytes.is_empty() {
-            let mut dev_name = [0u8; libc::IFNAMSIZ];
-            let len = std::cmp::min(bytes.len(), libc::IFNAMSIZ - 1);
-            dev_name[..len].copy_from_slice(&bytes[..len]);
-            unsafe {
-                if libc::setsockopt(
-                    socket.as_raw_fd(),
-                    libc::SOL_SOCKET,
-                    libc::SO_BINDTODEVICE,
-                    dev_name.as_ptr() as *const libc::c_void,
-                    (len + 1) as libc::socklen_t,
-                ) < 0
-                {
-                    return false;
-                }
-            }
         }
     }
 
@@ -306,6 +368,16 @@ pub extern "C" fn emane_rs_event_service_mcast_open(
     state.running = true;
 
     true
+}
+
+fn device_name(device: *const c_char) -> String {
+    if device.is_null() {
+        String::new()
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(device) }
+            .to_string_lossy()
+            .into_owned()
+    }
 }
 
 #[no_mangle]
@@ -367,6 +439,15 @@ pub extern "C" fn emane_rs_event_service_send_event_multicast(
                 if sock.send_to(&final_buf, sock_addr).is_ok() {
                     let mut state = get_event_service_state().lock().unwrap();
                     state.transmitted = state.transmitted.saturating_add(1);
+                    let mut source_uuid = [0u8; 16];
+                    source_uuid.copy_from_slice(unsafe { std::slice::from_raw_parts(uuid, 16) });
+                    state.statistics.update(
+                        EventStatisticKey {
+                            uuid: source_uuid,
+                            event_id,
+                        },
+                        false,
+                    );
                 }
             }
         }
@@ -422,6 +503,15 @@ pub extern "C" fn emane_rs_event_service_process_loop(local_uuid: *const u8) {
 
                                 let mut state = get_event_service_state().lock().unwrap();
                                 state.received = state.received.saturating_add(1);
+                                let mut source_uuid = [0u8; 16];
+                                source_uuid.copy_from_slice(&msg.uuid);
+                                state.statistics.update(
+                                    EventStatisticKey {
+                                        uuid: source_uuid,
+                                        event_id: recv_event_id,
+                                    },
+                                    true,
+                                );
                             }
                         }
                     }
@@ -476,5 +566,35 @@ pub extern "C" fn emane_rs_event_service_send_event(
             seq_num,
             c_addr.as_ptr(),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_statistic_row_limit_matches_the_legacy_contract() {
+        let mut state = get_event_service_state().lock().unwrap();
+        state.statistics.rows.clear();
+        state.statistics.row_limit = 1;
+        state.statistics.update(
+            EventStatisticKey {
+                uuid: [1; 16],
+                event_id: 100,
+            },
+            false,
+        );
+        state.statistics.update(
+            EventStatisticKey {
+                uuid: [2; 16],
+                event_id: 101,
+            },
+            true,
+        );
+        assert_eq!(state.statistics.rows.len(), 1);
+        assert_eq!(state.statistics.rows.values().next(), Some(&[1, 0]));
+        state.statistics.row_limit = 0;
+        state.statistics.rows.clear();
     }
 }

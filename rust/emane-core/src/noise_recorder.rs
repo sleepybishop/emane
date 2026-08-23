@@ -374,6 +374,22 @@ impl NoiseRecorder {
 
         if end_of_reception_bin >= start_of_reception_bin {
             let duration_bin_count = end_of_reception_bin - start_of_reception_bin + 1;
+
+            // Once a reception starts at least one full wheel beyond the
+            // newest stored reception, every value currently on the wheel is
+            // stale. Reset the valid range before computing gaps; otherwise a
+            // long idle period is mistaken for a gap that must be cleared and
+            // Wheel::set is asked to clear more slots than the wheel contains.
+            // This mirrors the legacy NoiseRecorder implementation.
+            if self
+                .max_end_of_reception_bin
+                .saturating_add(self.total_wheel_bins)
+                <= start_of_reception_bin
+            {
+                self.max_end_of_reception_bin = 0;
+                self.min_start_of_reception_bin = 0;
+            }
+
             let mut gap_bin_duration_count = 0;
             let mut within_min_sor_max_eor_bin_count = 0;
             let mut before_min_sor_bin_duration_count = 0;
@@ -819,4 +835,28 @@ pub extern "C" fn emane_rs_noise_recorder_dump(
     let data = vec.as_mut_ptr();
     std::mem::forget(vec);
     data
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NoiseRecorder;
+
+    #[test]
+    fn update_resets_stale_wheel_after_long_idle_period() {
+        let mut recorder = NoiseRecorder::new(10, 10, 10, 100, 0.0, 2_400_000_000, 1_000_000, 0);
+
+        recorder.update(0, 1_000, 0, 0, 20, 1.0, &[1], 0, 0, 0, false);
+
+        // This starts more than one complete wheel after the previous EoR.
+        // The old Rust port tried to clear the entire intervening gap and
+        // panicked because that gap was larger than the wheel.
+        recorder.update(0, 2_000, 0, 0, 20, 2.0, &[2], 0, 0, 0, false);
+
+        assert_eq!(recorder.min_start_of_reception_bin, 200);
+        assert_eq!(recorder.max_end_of_reception_bin, 201);
+
+        let wheel = recorder.dump();
+        assert_eq!(wheel[200 % recorder.total_wheel_bins as usize], 2.0);
+        assert_eq!(wheel[201 % recorder.total_wheel_bins as usize], 2.0);
+    }
 }

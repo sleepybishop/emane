@@ -39,7 +39,7 @@ impl AntennaProfileLoader {
             }
 
             let profile_id = params[0]
-                .parse::<u32>()
+                .parse::<u16>()
                 .map_err(|e| format!("EELEventGenerator: Parameter conversion error. {}", e))?;
             let azimuth = params[1]
                 .parse::<f64>()
@@ -50,7 +50,7 @@ impl AntennaProfileLoader {
 
             let profile = EmaneRsAntennaProfile {
                 nem_id: module_id as u32,
-                profile_id,
+                profile_id: u32::from(profile_id),
                 antenna_azimuth_degrees: azimuth,
                 antenna_elevation_degrees: elevation,
             };
@@ -108,9 +108,7 @@ impl AntennaProfileLoader {
             }
         }
 
-        if mode == 0 {
-            self.delta_cache.clear();
-        }
+        self.delta_cache.clear();
     }
 }
 
