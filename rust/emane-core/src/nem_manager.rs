@@ -2568,6 +2568,14 @@ pub fn resolve_plugin_path(name: &str) -> Result<PathBuf, String> {
                 }
             } else {
                 directories.push(parent.to_path_buf());
+                // A Make installation places executables in PREFIX/bin and
+                // EMANE plugins in PREFIX/lib/emane. Search relative to the
+                // executable so non-system prefixes work without setting
+                // EMANE_PLUGIN_PATH or modifying the dynamic loader config.
+                if let Some(prefix) = parent.parent() {
+                    directories.push(prefix.join("lib/emane"));
+                    directories.push(prefix.join("lib64/emane"));
+                }
             }
         }
     }
@@ -6624,6 +6632,7 @@ mod tests {
     use super::*;
     use crate::plugin_interface::{FfiPacketInfo, FfiSlice};
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::Mutex as StdMutex;
 
     static LOCAL_OTA_HITS: AtomicUsize = AtomicUsize::new(0);
     static BYPASS_STACK_HITS: AtomicUsize = AtomicUsize::new(0);
@@ -6635,6 +6644,9 @@ mod tests {
     static PHY_CAPTURE_TX_POWER_BITS: AtomicU64 = AtomicU64::new(0);
     static PHY_CAPTURE_TX_GAIN_BITS: AtomicU64 = AtomicU64::new(0);
     static R2RI_CAPTURE_COUNT: AtomicUsize = AtomicUsize::new(0);
+    // Dynamically loaded model libraries contain process-global state. Keep
+    // tests that load them from racing each other inside one test process.
+    static DYNAMIC_PLUGIN_TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
     #[test]
     fn timed_event_expiration_distinguishes_relative_and_stale_absolute_time() {
@@ -8267,6 +8279,7 @@ mod tests {
 
     #[test]
     fn dynamic_rfpipe_updates_aggregated_native_signal_table() {
+        let _guard = DYNAMIC_PLUGIN_TEST_LOCK.lock().unwrap();
         use crate::statistics::{
             emane_rs_statistic_clear_table, emane_rs_statistic_free_table_query_result,
             emane_rs_statistic_query_table, FfiStringArray,
@@ -8620,6 +8633,7 @@ mod tests {
 
     #[test]
     fn dynamic_plugin_can_be_loaded_and_run_in_stack() {
+        let _guard = DYNAMIC_PLUGIN_TEST_LOCK.lock().unwrap();
         let Ok(plugin) = resolve_plugin_path("dummy-mac") else {
             // Package-only test invocations do not necessarily build sibling
             // cdylibs; the workspace smoke test covers that configuration.
@@ -8653,6 +8667,7 @@ mod tests {
 
     #[test]
     fn dynamic_bypass_stack_delivers_between_two_nems() {
+        let _guard = DYNAMIC_PLUGIN_TEST_LOCK.lock().unwrap();
         let (Ok(mac), Ok(phy)) = (
             resolve_plugin_path("bypassmaclayer"),
             resolve_plugin_path("bypassphylayer"),

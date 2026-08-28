@@ -39,10 +39,19 @@ import sys
 import re
 import glob
 import textwrap
+from pathlib import Path
 from . import ControlPortClient
 from . import ControlPortException
 from . import Manifest
 from . import ManifestException
+
+
+def _defaultManifestPath():
+    modulePath = Path(__file__).resolve()
+    for parent in modulePath.parents:
+        if parent.name in ('lib', 'lib64'):
+            return str(parent.parent / 'share' / 'emane' / 'manifest')
+    return '/usr/share/emane/manifest'
 
 class EMANEShell(cmd.Cmd):
     def __init__(self,host,port):
@@ -68,7 +77,7 @@ class EMANEShell(cmd.Cmd):
                 self._mapping[nem][name] = component[0]
                 self._manifest[nem].append((component[0],name,component[2]))
 
-        manifestpath = os.getenv('EMANEMANIFESTPATH','/usr/share/emane/manifest')
+        manifestpath = os.getenv('EMANEMANIFESTPATH', _defaultManifestPath())
 
         for directory in manifestpath.split(':'):
             for manifestXML in glob.glob("%s/*.xml" % directory):
@@ -540,7 +549,7 @@ class EMANEShell(cmd.Cmd):
                     component != 'mac' and \
                     component != 'transport' and \
                     component != 'all' and \
-                    not (re.match('^shim\d+$', component) and component in self._shims):
+                    not (re.match(r'^shim\d+$', component) and component in self._shims):
                 print("error: invalid component layer:",args[index])
                 return
 
@@ -774,7 +783,7 @@ class EMANEShell(cmd.Cmd):
                     component != 'mac' and \
                     component != 'transport' and \
                     component != 'all' and \
-                    not (re.match('^shim\d+$', component) and component in self._shims):
+                    not (re.match(r'^shim\d+$', component) and component in self._shims):
                 print("error: invalid component layer:",args[index])
                 return
 
@@ -916,7 +925,7 @@ class EMANEShell(cmd.Cmd):
                                 arg == 'mac' or \
                                 arg == 'transport' or \
                                 arg == 'all' or \
-                                (re.match('^shim\d+$', arg) and arg in self._shims):
+                                (re.match(r'^shim\d+$', arg) and arg in self._shims):
                             layer = arg
                             skip = True
                             break

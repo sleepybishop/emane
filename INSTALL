@@ -6,20 +6,57 @@ EMANE is now built using Rust and Cargo. The legacy GNU Autotools (`configure` /
 Basic Installation
 ==================
 
-1. Ensure you have the Rust toolchain installed (e.g., via `rustup`).
-2. Run the following command from the root of the repository to build the workspace:
+1. Ensure you have the Rust toolchain, Python 3, pip, setuptools, wheel,
+   Protocol Buffers compiler (`protoc`), and the Python `lxml` and `protobuf`
+   packages installed.
+2. Run the following commands from the root of the repository:
 
-   cargo build --release
+   make prepare-install
+   sudo make install
 
-3. To install the binaries (like `emane`, `emaneinfo`, etc.), run:
+`make prepare-install` performs all compilation as the invoking user: it builds
+the release workspace, generates the plugin manifests, builds the Python wheel,
+and stages the Python installation. `sudo make install` only copies prepared
+artifacts and does not invoke Cargo, `protoc`, or pip as root.
 
-   cargo install --path rust/emane-core
+`make install` installs the Rust executables, model plugin libraries, DTD and
+schema files, generated plugin manifests, and the Python utilities. A plain
+`cargo install` is not sufficient for EMANE because Cargo does not install
+workspace `cdylib` plugins or runtime data files.
+
+The default prefix is `/usr`. To install under another prefix:
+
+   make prepare-install PREFIX=/opt/emane
+   sudo make install PREFIX=/opt/emane
+
+The executables find plugins relative to that prefix, so `/opt/emane/bin/emane`
+will automatically search `/opt/emane/lib/emane`.
+
+Packaging and Staged Installation
+=================================
+
+Package builders can stage the installation without writing to the host:
+
+   make prepare-install
+   make install DESTDIR=/tmp/emane-package-root PREFIX=/usr
+   make installcheck DESTDIR=/tmp/emane-package-root PREFIX=/usr
+
+The resulting layout is:
+
+   PREFIX/bin                  Rust and Python executables
+   PREFIX/lib/emane            Rust model plugin libraries
+   PREFIX/share/emane/dtd      XML DTDs and entities
+   PREFIX/share/emane/schema   XML schemas
+   PREFIX/share/emane/manifest generated plugin manifests
+
+`BINDIR`, `LIBDIR`, `DATADIR`, `DTDDIR`, `SCHEMADIR`, and `MANIFESTDIR` can
+also be overridden independently for distribution packaging.
 
 Developing and Testing
 ======================
 
 To run the test suite across the workspace:
 
-   cargo test --workspace
+   make test
 
 For more information, please consult the EMANE Wiki or the Rust/Cargo documentation.

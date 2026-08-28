@@ -62,7 +62,6 @@ doc/html
 # emane shell
 src/python/build
 src/python/dist
-src/python/emane/shell/schema/manifest.xsd
 src/python/setup.py
 src/python/MANIFEST
 

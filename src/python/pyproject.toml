@@ -8,7 +8,7 @@ version = "1.5.3"
 description = "EMANE modules and utilities"
 authors = [{ name = "Adjacent Link", email = "emane@adjacentlink.com" }]
 license = { text = "BSD" }
-dependencies = ["protobuf"]
+dependencies = ["lxml", "protobuf"]
 
 [tool.setuptools.packages.find]
 where = ["."]

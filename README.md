@@ -16,6 +16,19 @@ enable shared code emulation.
 EMANE has been completely rewritten in **Rust** to provide memory safety, fearless concurrency, and massive performance improvements over the legacy C++ architecture. 
 It uses a pure-Rust `cdylib` architecture for its plugins and natively handles packet routing, statistics, and RF spectrum monitoring.
 
+### Build and install
+
+```sh
+make prepare-install
+sudo make install
+```
+
+The default prefix is `/usr`. For a custom prefix, pass the same `PREFIX` to
+both commands, for example `make prepare-install PREFIX=/opt/emane` followed by
+`sudo make install PREFIX=/opt/emane`. See [INSTALL](INSTALL) for the installed
+layout and staged packaging instructions. `cargo install` alone does not
+install EMANE's model plugins, manifests, schemas, or Python tools.
+
 Need more information?
 ==
 Visit the EMANE Wiki:
