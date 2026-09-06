@@ -334,6 +334,11 @@ impl TdmaMac {
             "TxSlotErrorMissed",
             "TxSlotErrorTooBig",
             "TxFrameSent",
+            "TxComponentBytes",
+            "TxWireBytes",
+            "TxAirtimeMicroseconds",
+            "TxQueueOverflowPackets",
+            "TxQueueOverflowBytes",
             "RxSlotValid",
             "RxSlotErrorMissed",
             "RxSlotErrorRxDuringIdle",
@@ -1737,6 +1742,17 @@ fn transmit_slot(mac: &TdmaMac, absolute_slot: u64) {
         messages.len(),
     );
     mac.increment("TxFrameSent", 1);
+    mac.increment(
+        "TxComponentBytes",
+        items.iter().fold(0u64, |total, item| {
+            total.saturating_add(u64::try_from(item.bytes.len()).unwrap_or(u64::MAX))
+        }),
+    );
+    mac.increment(
+        "TxWireBytes",
+        u64::try_from(payload.len().saturating_add(FRAME_OVERHEAD_BYTES)).unwrap_or(u64::MAX),
+    );
+    mac.increment("TxAirtimeMicroseconds", tx.duration_microseconds);
     (mac.framework.update_neighbor_tx)(
         mac.framework.framework_ctx,
         destination,
@@ -1773,6 +1789,11 @@ extern "C" fn downstream(
     let index = priority_to_queue(packet.info.priority);
     if state.queue_depth == 0 {
         state.queue_statistics[index].overflow += 1;
+        mac.increment("TxQueueOverflowPackets", 1);
+        mac.increment(
+            "TxQueueOverflowBytes",
+            u64::try_from(packet.payload.len()).unwrap_or(u64::MAX),
+        );
         record_packet_drop(
             mac,
             &mut state,
@@ -1794,6 +1815,11 @@ extern "C" fn downstream(
             .remove(dropped_position)
             .expect("a full TDMA queue must contain a packet");
         state.queue_statistics[index].overflow += 1;
+        mac.increment("TxQueueOverflowPackets", 1);
+        mac.increment(
+            "TxQueueOverflowBytes",
+            u64::try_from(dropped.packet.payload.len()).unwrap_or(u64::MAX),
+        );
         record_packet_drop(
             mac,
             &mut state,
@@ -2420,6 +2446,7 @@ mod tests {
         assert_eq!(properties.bandwidth_hz, transmission.bandwidth);
         assert_eq!(properties.tx_power_dbm, transmission.power);
         assert_eq!(properties.tx_time_microseconds, transmission.tx_time);
+        assert_eq!(properties.duration_microseconds, 171);
     }
 
     #[test]
