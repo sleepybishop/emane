@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<platform name="guide-ieee80211abg-01-rust-validation">
+  <param name="eventservicegroup" value="224.1.2.85:45985"/>
+  <param name="eventservicedevice" value="lo"/>
+  <param name="eventserviceloopback" value="true"/>
+  <param name="otamanagergroup" value="224.1.2.86:45986"/>
+  <param name="otamanagerdevice" value="lo"/>
+  <param name="otamanagerloopback" value="true"/>
+  <param name="controlportendpoint" value="127.0.0.1:47285"/>
+
+  <nem id="1">
+    <transport plugin="virtualtransport">
+      <param name="device" value="guide-wf1"/>
+      <param name="arpmodeenable" value="true"/>
+      <param name="arpcacheenable" value="true"/>
+    </transport>
+    <mac plugin="ieee80211abg">
+      <param name="mode" value="3"/>
+      <param name="enablepromiscuousmode" value="false"/>
+      <param name="distance" value="1000"/>
+      <param name="unicastrate" value="12"/>
+      <param name="multicastrate" value="12"/>
+      <param name="rtsthreshold" value="0"/>
+      <param name="pcrcurveuri" value="ieee80211abg-pcr.xml"/>
+      <param name="flowcontrolenable" value="false"/>
+      <param name="flowcontroltokens" value="10"/>
+    </mac>
+    <phy plugin="emanephy">
+      <param name="bandwidth" value="20M"/>
+      <param name="frequency" value="2400000000"/>
+      <param name="frequencyofinterest" value="2400000000"/>
+      <param name="subid" value="1"/>
+      <param name="systemnoisefigure" value="4.0"/>
+      <param name="txpower" value="0.0"/>
+      <param name="fixedantennagain" value="0.0"/>
+      <param name="fixedantennagainenable" value="true"/>
+      <param name="noisemode" value="outofband"/>
+      <param name="noisebinsize" value="20"/>
+      <param name="propagationmodel" value="precomputed"/>
+    </phy>
+  </nem>
+
+  <nem id="2">
+    <transport plugin="virtualtransport">
+      <param name="device" value="guide-wf2"/>
+      <param name="arpmodeenable" value="true"/>
+      <param name="arpcacheenable" value="true"/>
+    </transport>
+    <mac plugin="ieee80211abg">
+      <param name="mode" value="3"/>
+      <param name="enablepromiscuousmode" value="false"/>
+      <param name="distance" value="1000"/>
+      <param name="unicastrate" value="12"/>
+      <param name="multicastrate" value="12"/>
+      <param name="rtsthreshold" value="0"/>
+      <param name="pcrcurveuri" value="ieee80211abg-pcr.xml"/>
+      <param name="flowcontrolenable" value="false"/>
+      <param name="flowcontroltokens" value="10"/>
+    </mac>
+    <phy plugin="emanephy">
+      <param name="bandwidth" value="20M"/>
+      <param name="frequency" value="2400000000"/>
+      <param name="frequencyofinterest" value="2400000000"/>
+      <param name="subid" value="1"/>
+      <param name="systemnoisefigure" value="4.0"/>
+      <param name="txpower" value="0.0"/>
+      <param name="fixedantennagain" value="0.0"/>
+      <param name="fixedantennagainenable" value="true"/>
+      <param name="noisemode" value="outofband"/>
+      <param name="noisebinsize" value="20"/>
+      <param name="propagationmodel" value="precomputed"/>
+    </phy>
+  </nem>
+
+  <nem id="3">
+    <transport plugin="virtualtransport">
+      <param name="device" value="guide-wf3"/>
+      <param name="arpmodeenable" value="true"/>
+      <param name="arpcacheenable" value="true"/>
+    </transport>
+    <mac plugin="ieee80211abg">
+      <param name="mode" value="3"/>
+      <param name="enablepromiscuousmode" value="false"/>
+      <param name="distance" value="1000"/>
+      <param name="unicastrate" value="12"/>
+      <param name="multicastrate" value="12"/>
+      <param name="rtsthreshold" value="0"/>
+      <param name="pcrcurveuri" value="ieee80211abg-pcr.xml"/>
+      <param name="flowcontrolenable" value="false"/>
+      <param name="flowcontroltokens" value="10"/>
+    </mac>
+    <phy plugin="emanephy">
+      <param name="bandwidth" value="20M"/>
+      <param name="frequency" value="2400000000"/>
+      <param name="frequencyofinterest" value="2400000000"/>
+      <param name="subid" value="1"/>
+      <param name="systemnoisefigure" value="4.0"/>
+      <param name="txpower" value="0.0"/>
+      <param name="fixedantennagain" value="0.0"/>
+      <param name="fixedantennagainenable" value="true"/>
+      <param name="noisemode" value="outofband"/>
+      <param name="noisebinsize" value="20"/>
+      <param name="propagationmodel" value="precomputed"/>
+    </phy>
+  </nem>
+
+</platform>

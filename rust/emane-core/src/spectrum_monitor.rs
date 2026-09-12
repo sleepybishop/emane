@@ -266,6 +266,34 @@ impl SpectrumMonitor {
         }
     }
 
+    /// Query a completed interval without panicking on stale or invalid requests.
+    pub fn reception_noise(
+        &self,
+        now: i64,
+        query: &emane_plugin_api::FfiSpectrumQuery,
+    ) -> Option<emane_plugin_api::FfiSpectrumResult> {
+        let duration = i64::try_from(query.duration_microseconds).ok()?;
+        if duration <= 0 || duration > self.max_duration || !query.rx_power_dbm.is_finite() {
+            return None;
+        }
+        let recorder = self.noise_recorder_map.get(&query.frequency_hz)?;
+        let (bins, _) = recorder.try_get(now, duration, query.start_time_microseconds)?;
+        let maximum = bins
+            .into_iter()
+            .fold(self.d_receiver_sensitivity_milli_watt, f64::max);
+        let signal_in_noise = self.mode == NoiseMode::All;
+        let noise = if signal_in_noise {
+            maximum - 10.0_f64.powf(query.rx_power_dbm / 10.0)
+        } else {
+            maximum
+        }
+        .max(self.d_receiver_sensitivity_milli_watt);
+        Some(emane_plugin_api::FfiSpectrumResult {
+            noise_floor_dbm: 10.0 * noise.log10(),
+            signal_in_noise,
+        })
+    }
+
     pub fn request_filter_i(
         &self,
         now: i64,
@@ -1914,5 +1942,70 @@ mod tests {
             8,
             &[0.0, 0.0, 0.0, 0.0, 5.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         );
+    }
+    #[test]
+    fn completed_reception_query_includes_late_interference() {
+        use emane_plugin_api::FfiSpectrumQuery;
+        let mut monitor = monitor(NoiseMode::OutOfBand);
+        let query = FfiSpectrumQuery {
+            frequency_hz: FREQUENCY,
+            start_time_microseconds: 1_000,
+            duration_microseconds: 1_000,
+            rx_power_dbm: 0.0,
+            antenna_index: 0,
+        };
+        assert!(monitor.reception_noise(1_500, &query).is_none());
+        let before = monitor.reception_noise(2_000, &query).unwrap();
+        let segment = FfiFrequencySegment {
+            frequency_hz: FREQUENCY,
+            rx_power_dbm: 0.0,
+            duration_microsec: 500,
+            offset_microsec: 0,
+        };
+        monitor.update(
+            1_500,
+            1_500,
+            0,
+            0.0,
+            &[segment],
+            BANDWIDTH,
+            &[1.0],
+            false,
+            &[3],
+            9,
+            0,
+            0,
+            std::ptr::null(),
+            0,
+        );
+        let after = monitor.reception_noise(2_000, &query).unwrap();
+        assert_eq!(before.noise_floor_dbm, -30.0);
+        assert_eq!(after.noise_floor_dbm, 0.0);
+        assert!(!after.signal_in_noise);
+        for query in [
+            FfiSpectrumQuery {
+                frequency_hz: 0,
+                ..query
+            },
+            FfiSpectrumQuery {
+                duration_microseconds: u64::MAX,
+                ..query
+            },
+            FfiSpectrumQuery {
+                duration_microseconds: 0,
+                ..query
+            },
+            FfiSpectrumQuery {
+                start_time_microseconds: i64::MAX,
+                ..query
+            },
+            FfiSpectrumQuery {
+                rx_power_dbm: f64::NAN,
+                ..query
+            },
+        ] {
+            assert!(monitor.reception_noise(2_000, &query).is_none());
+        }
+        assert!(monitor.reception_noise(1_000_000, &query).is_none());
     }
 }

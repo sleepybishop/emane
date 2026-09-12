@@ -1204,6 +1204,14 @@ pub extern "C" fn emane_plugin_create() -> *const PluginApi {
 
 #[cfg(test)]
 mod tests {
+    extern "C" fn spectrum_unavailable(
+        _: *mut c_void,
+        _: *const emane_plugin_api::FfiSpectrumQuery,
+        _: *mut emane_plugin_api::FfiSpectrumResult,
+    ) -> bool {
+        false
+    }
+
     use super::*;
     use std::ffi::c_char;
 
@@ -1478,6 +1486,7 @@ mod tests {
             publish_event: capture_publish_event,
             register_file_descriptor: capture_register_descriptor,
             unregister_file_descriptor: capture_unregister_descriptor,
+            query_spectrum: spectrum_unavailable,
         };
         let plugin = init(1, &framework);
         let request = FfiConfigRequest {

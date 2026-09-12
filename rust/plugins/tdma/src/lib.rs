@@ -2,8 +2,9 @@ mod pcr;
 
 use emane_plugin_api::{
     FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket, FfiPacketInfo, FfiSlice,
-    FfiStatisticValue, FlowControlToken, FrequencyOfInterest, ModelHeader, PluginApi, RxProperties,
-    TxProperties, CONTROL_FLOW_CONTROL_TOKEN, CONTROL_FREQUENCY_INTEREST, CONTROL_MODEL_HEADER,
+    FfiSpectrumQuery, FfiStatisticValue, FlowControlToken, FrequencyOfInterest, ModelHeader,
+    PluginApi, RxFrequencySegments, RxProperties, TxProperties, CONTROL_FLOW_CONTROL_TOKEN,
+    CONTROL_FREQUENCY_INTEREST, CONTROL_MODEL_HEADER, CONTROL_RX_FREQUENCY_SEGMENTS,
     CONTROL_RX_PROPERTIES, CONTROL_TX_PROPERTIES, MAC_REGISTRATION_TDMA, PLUGIN_ABI_VERSION,
     STATISTIC_VALUE_F64, STATISTIC_VALUE_STRING, STATISTIC_VALUE_U64,
 };
@@ -20,11 +21,8 @@ const TIMER_RX_COMPLETE: u32 = 2;
 const TIMER_REASSEMBLY_CHECK: u32 = 3;
 const TIMER_NEIGHBOR_STATUS: u32 = 4;
 const BROADCAST_NEM: u16 = u16::MAX;
-const FRAME_OVERHEAD_BYTES: usize = 64;
-// Capacity accounting reserves FRAME_OVERHEAD_BYTES per aggregated component.
-// The first component also needs the outer protobuf framing and PHY envelope.
-// This bound covers maximum-width protobuf fields; see the regression test.
-const WIRE_ENCODING_RESERVE_BYTES: usize = 80;
+// Diagnostic estimate of the outer PHY envelope; never charged to slot capacity.
+const PHY_ENVELOPE_BYTES: usize = 64;
 
 #[derive(Clone, PartialEq, Message)]
 struct ScheduleEvent {
@@ -216,6 +214,14 @@ struct QueuedPacket {
     fragment_index: u16,
 }
 
+struct PendingReception {
+    info: FfiPacketInfo,
+    wire: TdmaBaseModelMessage,
+    model_sequence: u64,
+    packet_len: usize,
+    spectrum_query: FfiSpectrumQuery,
+}
+
 struct Reassembly {
     info: FfiPacketInfo,
     message_type: TdmaMessageType,
@@ -252,6 +258,7 @@ enum PacketDropReason {
     Destination = 2,
     QueueOverflow = 3,
     BadControl = 4,
+    BadSpectrumQuery = 5,
     FlowControl = 6,
     TooBig = 7,
     TooLong = 8,
@@ -305,8 +312,7 @@ struct State {
     frame_sequence: u64,
     next_tx_slot: Option<u64>,
     reassembly: HashMap<(u16, u8, u64), Reassembly>,
-    pending_rx: HashMap<u64, OwnedPacket>,
-    next_rx_id: u64,
+    pending_rx: BTreeMap<u64, PendingReception>,
     timers: HashMap<u64, u32>,
     random_state: u64,
     started: bool,
@@ -524,8 +530,7 @@ impl TdmaMac {
                 frame_sequence: 0,
                 next_tx_slot: None,
                 reassembly: HashMap::new(),
-                pending_rx: HashMap::new(),
-                next_rx_id: 0,
+                pending_rx: BTreeMap::new(),
                 timers: HashMap::new(),
                 random_state: 0xD1B5_4A32_D192_ED03 ^ u64::from(id),
                 started: false,
@@ -1349,6 +1354,7 @@ extern "C" fn stop(plugin: *mut c_void) {
         let mut state = mac.state.lock().unwrap();
         state.started = false;
         state.next_tx_slot = None;
+        state.pending_rx.clear();
         state.timers.drain().map(|(timer, _)| timer).collect()
     };
     for timer in timers {
@@ -1470,13 +1476,19 @@ struct Transmission {
     tx_time: i64,
 }
 
-fn tx_properties(transmission: &Transmission, payload_len: usize) -> TxProperties {
+fn tx_properties(
+    transmission: &Transmission,
+    component_bytes: usize,
+    slot_duration_us: u64,
+) -> TxProperties {
     TxProperties {
         frequency_hz: transmission.frequency,
         bandwidth_hz: transmission.bandwidth,
         tx_power_dbm: transmission.power,
-        duration_microseconds: ((payload_len + FRAME_OVERHEAD_BYTES) as u128 * 8_000_000)
-            .div_ceil(u128::from(transmission.rate)) as u64,
+        // C++ models only component data, not protobuf or PHY framing bytes.
+        duration_microseconds: ((component_bytes as u128 * 8_000_000)
+            / u128::from(transmission.rate))
+        .min(u128::from(slot_duration_us.saturating_sub(1))) as u64,
         offset_microseconds: 0,
         tx_time_microseconds: transmission.tx_time,
         antenna_index: 0,
@@ -1509,11 +1521,7 @@ fn take_transmission(
     let capacity = (u128::from(data_rate_bps) * u128::from(usable_us) / 8_000_000)
         .min(usize::MAX as u128) as usize;
     let index = queue_index(state, service_class, destination)?;
-    let available = capacity.saturating_sub(
-        FRAME_OVERHEAD_BYTES
-            .saturating_add(WIRE_ENCODING_RESERVE_BYTES)
-            .saturating_add(used),
-    );
+    let available = capacity.saturating_sub(used);
     if available == 0 {
         return None;
     }
@@ -1605,7 +1613,7 @@ fn transmit_slot(mac: &TdmaMac, absolute_slot: u64) {
         return;
     }
     update_tx_slot_status(mac, absolute_slot, now, TxSlotStatus::Valid);
-    let (items, flow_update, frame_sequence) = {
+    let (items, flow_update, frame_sequence, slot_duration_us) = {
         let mut state = mac.state.lock().unwrap();
         let Some(schedule) = state.schedule.as_ref() else {
             return;
@@ -1621,13 +1629,14 @@ fn transmit_slot(mac: &TdmaMac, absolute_slot: u64) {
             )
             / 8_000_000)
             .min(usize::MAX as u128) as usize;
+        let slot_duration_us = schedule.slot_duration_us;
         let aggregate = state.aggregation_enable;
         let threshold = state.aggregation_threshold;
         let previous_tokens = state.available_tokens;
         let mut used = 0usize;
         let mut items = Vec::new();
         while let Some(item) = take_transmission(mac, &mut state, absolute_slot, used) {
-            used = used.saturating_add(item.bytes.len() + FRAME_OVERHEAD_BYTES);
+            used = used.saturating_add(item.bytes.len());
             let stop = !aggregate
                 || item.more
                 || used >= capacity
@@ -1657,7 +1666,7 @@ fn transmit_slot(mac: &TdmaMac, absolute_slot: u64) {
         if !items.is_empty() {
             state.frame_sequence = state.frame_sequence.wrapping_add(1);
         }
-        (items, flow_update, frame_sequence)
+        (items, flow_update, frame_sequence, slot_duration_us)
     };
     if let Some(tokens) = flow_update {
         send_flow_update(mac, tokens);
@@ -1703,7 +1712,8 @@ fn transmit_slot(mac: &TdmaMac, absolute_slot: u64) {
         flags: 0,
     }
     .encode();
-    let tx = tx_properties(first, payload.len());
+    let component_bytes = items.iter().map(|item| item.bytes.len()).sum();
+    let tx = tx_properties(first, component_bytes, slot_duration_us);
     let tx_data = tx.encode();
     let messages = [
         FfiControlMessage {
@@ -1750,7 +1760,7 @@ fn transmit_slot(mac: &TdmaMac, absolute_slot: u64) {
     );
     mac.increment(
         "TxWireBytes",
-        u64::try_from(payload.len().saturating_add(FRAME_OVERHEAD_BYTES)).unwrap_or(u64::MAX),
+        u64::try_from(payload.len().saturating_add(PHY_ENVELOPE_BYTES)).unwrap_or(u64::MAX),
     );
     mac.increment("TxAirtimeMicroseconds", tx.duration_microseconds);
     (mac.framework.update_neighbor_tx)(
@@ -1900,6 +1910,7 @@ extern "C" fn upstream(
     };
     let mut header = None;
     let mut rx = None;
+    let mut segments = None;
     for message in messages {
         let Some(data) = control_payload(message) else {
             return;
@@ -1907,10 +1918,14 @@ extern "C" fn upstream(
         match message.msg_type {
             CONTROL_MODEL_HEADER => header = ModelHeader::decode(data),
             CONTROL_RX_PROPERTIES => rx = RxProperties::decode(data),
+            CONTROL_RX_FREQUENCY_SEGMENTS => segments = RxFrequencySegments::decode(data),
             _ => {}
         }
     }
     let mut state = mac.state.lock().unwrap();
+    if !state.started {
+        return;
+    }
     let Some(model) = header else {
         record_all_message_drops(
             mac,
@@ -1955,9 +1970,11 @@ extern "C" fn upstream(
         return;
     };
     let now = now_us();
-    let start_of_reception = rx
-        .tx_time_microseconds
-        .saturating_add(i64::try_from(rx.propagation_microseconds).unwrap_or(i64::MAX));
+    let spectrum_query = FfiSpectrumQuery::from_rx(
+        rx,
+        segments.as_ref().and_then(|value| value.segments.first()),
+    );
+    let start_of_reception = spectrum_query.start_time_microseconds;
     let end_of_reception = start_of_reception
         .saturating_add(i64::try_from(rx.duration_microseconds).unwrap_or(i64::MAX));
     // Reception occupies [start, end).  When a frame ends exactly at the slot
@@ -2050,18 +2067,7 @@ extern "C" fn upstream(
         }
         Slot::Rx { frequency_hz } => *frequency_hz,
     };
-    if !state.pending_rx.is_empty() {
-        update_rx_slot_status(
-            mac,
-            &mut state,
-            current_slot,
-            current_slot,
-            now,
-            RxSlotStatus::Lock,
-        );
-        return;
-    }
-    if frequency_hz != rx.frequency_hz {
+    if frequency_hz != spectrum_query.frequency_hz {
         update_rx_slot_status(
             mac,
             &mut state,
@@ -2079,20 +2085,29 @@ extern "C" fn upstream(
         );
         return;
     }
-    let sinr = rx.rx_power_dbm - rx.noise_floor_dbm;
-    if let Some(pcr) = &state.pcr {
-        let probability = pcr.probability(wire.data_rate_bps, sinr, packet.payload.len());
-        if random_unit(&mut state.random_state) > probability {
-            record_all_message_drops(
-                mac,
-                &mut state,
-                packet.info.source,
-                &wire.messages,
-                PacketDropReason::Sinr,
-            );
-            return;
+    let pending = PendingReception {
+        info: packet.info,
+        wire,
+        model_sequence: model.sequence,
+        packet_len: serialization_len,
+        spectrum_query,
+    };
+    if let Some(previous) = state.pending_rx.get_mut(&current_slot) {
+        // Match C++: earliest modeled SOR wins, independent of arrival order or PCR.
+        if start_of_reception < previous.spectrum_query.start_time_microseconds {
+            *previous = pending;
         }
+        update_rx_slot_status(
+            mac,
+            &mut state,
+            current_slot,
+            current_slot,
+            now,
+            RxSlotStatus::Lock,
+        );
+        return;
     }
+    state.pending_rx.insert(current_slot, pending);
     update_rx_slot_status(
         mac,
         &mut state,
@@ -2101,11 +2116,66 @@ extern "C" fn upstream(
         now,
         RxSlotStatus::Valid,
     );
+    let slot_end = schedule.slot_start(current_slot.saturating_add(1));
+    drop(state);
+    let timer = schedule_timer(
+        mac,
+        slot_end,
+        TIMER_RX_COMPLETE,
+        &current_slot.to_be_bytes(),
+    );
+    let mut state = mac.state.lock().unwrap();
+    if timer != 0 {
+        state.timers.insert(timer, TIMER_RX_COMPLETE);
+    } else if let Some(pending) = state.pending_rx.remove(&current_slot) {
+        record_all_message_drops(
+            mac,
+            &mut state,
+            pending.info.source,
+            &pending.wire.messages,
+            PacketDropReason::BadControl,
+        );
+    }
+}
+
+fn complete_receive(mac: &TdmaMac, absolute_slot: u64) {
+    let mut state = mac.state.lock().unwrap();
+    let Some(pending) = state.pending_rx.remove(&absolute_slot) else {
+        return;
+    };
+    if !state.started {
+        return;
+    }
+    let Some(spectrum) = mac.framework.reception_noise(&pending.spectrum_query) else {
+        record_all_message_drops(
+            mac,
+            &mut state,
+            pending.info.source,
+            &pending.wire.messages,
+            PacketDropReason::BadSpectrumQuery,
+        );
+        return;
+    };
+    let now = now_us();
+    let info = pending.info;
+    let spectrum_query = pending.spectrum_query;
+    let noise_floor_dbm = spectrum.noise_floor_dbm;
+    let wire = pending.wire;
+    let sinr = spectrum_query.rx_power_dbm - noise_floor_dbm;
+    if let Some(pcr) = &state.pcr {
+        let probability = pcr.probability(wire.data_rate_bps, sinr, pending.packet_len);
+        if random_unit(&mut state.random_state) > probability {
+            record_all_message_drops(
+                mac,
+                &mut state,
+                info.source,
+                &wire.messages,
+                PacketDropReason::Sinr,
+            );
+            return;
+        }
+    }
     expire_reassembly(mac, &mut state, now);
-    let delivery = rx
-        .tx_time_microseconds
-        .saturating_add(i64::try_from(rx.propagation_microseconds).unwrap_or(i64::MAX))
-        .saturating_add(i64::try_from(rx.duration_microseconds).unwrap_or(i64::MAX));
     let mut deliveries = Vec::new();
     for message in wire.messages {
         let Some(message_type) = TdmaMessageType::try_from(message.message_type).ok() else {
@@ -2122,7 +2192,7 @@ extern "C" fn upstream(
                 mac,
                 &mut state,
                 packet_queue(message_type, priority),
-                packet.info.source,
+                info.source,
                 destination,
                 message.data.len(),
                 PacketDropReason::Destination,
@@ -2132,14 +2202,14 @@ extern "C" fn upstream(
         let info = FfiPacketInfo {
             destination,
             priority,
-            ..packet.info
+            ..info
         };
         let complete = if let Some(fragment) = message.fragment {
             let offset = fragment.offset as usize;
             if offset.saturating_add(message.data.len()) > 64 << 20 {
                 continue;
             }
-            let key = (packet.info.source, priority, fragment.sequence);
+            let key = (info.source, priority, fragment.sequence);
             let entry = state.reassembly.entry(key).or_insert_with(|| Reassembly {
                 info,
                 message_type,
@@ -2194,7 +2264,7 @@ extern "C" fn upstream(
             mac,
             &mut state,
             packet_queue(message_type, complete.info.priority),
-            packet.info.source,
+            info.source,
             complete.info.destination,
             complete.payload.len(),
             true,
@@ -2202,35 +2272,21 @@ extern "C" fn upstream(
         if message_type == TdmaMessageType::Control {
             continue;
         }
-        state.next_rx_id = state.next_rx_id.wrapping_add(1);
-        let id = state.next_rx_id;
-        state.pending_rx.insert(id, complete);
-        deliveries.push(id);
+        deliveries.push(complete);
     }
     drop(state);
     (mac.framework.update_neighbor_rx)(
         mac.framework.framework_ctx,
-        packet.info.source,
-        model.sequence,
+        info.source,
+        pending.model_sequence,
         sinr,
-        rx.noise_floor_dbm,
+        noise_floor_dbm,
         now.max(0) as u64,
-        rx.duration_microseconds,
+        spectrum_query.duration_microseconds,
         wire.data_rate_bps,
     );
-    for id in deliveries {
-        let timer = schedule_timer(mac, delivery.max(now), TIMER_RX_COMPLETE, &id.to_be_bytes());
-        if timer == 0 {
-            if let Some(packet) = mac.state.lock().unwrap().pending_rx.remove(&id) {
-                send_upstream(mac, packet);
-            }
-        } else {
-            mac.state
-                .lock()
-                .unwrap()
-                .timers
-                .insert(timer, TIMER_RX_COMPLETE);
-        }
+    for packet in deliveries {
+        send_upstream(mac, packet);
     }
 }
 
@@ -2259,11 +2315,7 @@ extern "C" fn timed(plugin: *mut c_void, timer_id: u64, event: u32, data: *const
             transmit_slot(mac, value);
             schedule_next_tx(mac, false);
         }
-        TIMER_RX_COMPLETE => {
-            if let Some(packet) = mac.state.lock().unwrap().pending_rx.remove(&value) {
-                send_upstream(mac, packet);
-            }
-        }
+        TIMER_RX_COMPLETE => complete_receive(mac, value),
         TIMER_REASSEMBLY_CHECK => {
             let mut state = mac.state.lock().unwrap();
             if !state.started {
@@ -2439,14 +2491,14 @@ mod tests {
             tx_time: 123,
         };
 
-        let properties = tx_properties(&transmission, 128);
+        let properties = tx_properties(&transmission, 128, 1_000);
 
         assert_eq!(properties.sub_id, 0);
         assert_eq!(properties.frequency_hz, transmission.frequency);
         assert_eq!(properties.bandwidth_hz, transmission.bandwidth);
         assert_eq!(properties.tx_power_dbm, transmission.power);
         assert_eq!(properties.tx_time_microseconds, transmission.tx_time);
-        assert_eq!(properties.duration_microseconds, 171);
+        assert_eq!(properties.duration_microseconds, 113);
     }
 
     #[test]
@@ -2563,43 +2615,7 @@ mod tests {
         let decoded = TdmaBaseModelMessage::decode(message.encode_to_vec().as_slice()).unwrap();
         assert_eq!(decoded, message);
     }
-
-    #[test]
-    fn wire_encoding_reserve_covers_maximum_protobuf_overhead() {
-        for count in 1..=64usize {
-            let messages = (0..count)
-                .map(|_| TdmaMessage {
-                    message_type: TdmaMessageType::Data as i32,
-                    destination: u32::MAX,
-                    priority: u32::MAX,
-                    data: vec![0; 2_048],
-                    fragment: Some(TdmaFragment {
-                        more: true,
-                        index: u32::MAX,
-                        offset: u32::MAX,
-                        sequence: u64::MAX,
-                    }),
-                })
-                .collect::<Vec<_>>();
-            let data_bytes = messages
-                .iter()
-                .map(|message| message.data.len())
-                .sum::<usize>();
-            let encoded = TdmaBaseModelMessage {
-                absolute_slot_index: u64::MAX,
-                data_rate_bps: u64::MAX,
-                messages,
-            }
-            .encoded_len()
-            .saturating_add(2)
-            .saturating_add(FRAME_OVERHEAD_BYTES);
-            let reserved = data_bytes
-                .saturating_add(count.saturating_mul(FRAME_OVERHEAD_BYTES))
-                .saturating_add(WIRE_ENCODING_RESERVE_BYTES);
-            assert!(
-                encoded <= reserved,
-                "{count} component(s) require {encoded} bytes but reserve only {reserved}"
-            );
-        }
-    }
 }
+
+#[cfg(test)]
+mod regression_tests;

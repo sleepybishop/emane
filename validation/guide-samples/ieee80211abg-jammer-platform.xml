@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<platform name="guide-ieee80211abg-01-rust-jammer-validation">
+  <param name="eventservicegroup" value="224.1.2.85:45985"/>
+  <param name="eventservicedevice" value="lo"/>
+  <param name="eventserviceloopback" value="true"/>
+  <param name="otamanagergroup" value="224.1.2.86:45986"/>
+  <param name="otamanagerdevice" value="lo"/>
+  <param name="otamanagerloopback" value="true"/>
+  <param name="controlportendpoint" value="127.0.0.1:47286"/>
+
+  <!-- The guide's external continuous-tone jammer is represented by the
+       Rust PHY API test shim with continuous 10 ms transmissions. -->
+  <nem id="4" type="unstructured">
+    <transport plugin="virtualtransport">
+      <param name="device" value="guide-jam4"/>
+      <param name="arpmodeenable" value="true"/>
+      <param name="arpcacheenable" value="true"/>
+    </transport>
+    <shim plugin="phyapitestshim">
+      <param name="packetsize" value="128"/>
+      <param name="packetrate" value="100"/>
+      <param name="destination" value="65535"/>
+      <param name="bandwidth" value="20M"/>
+      <paramlist name="frequency">
+        <item value="2390000000:0.01:0"/>
+      </paramlist>
+      <param name="txpower" value="-20"/>
+    </shim>
+    <phy plugin="emanephy">
+      <param name="bandwidth" value="20M"/>
+      <param name="frequency" value="2390000000"/>
+      <param name="frequencyofinterest" value="2390000000"/>
+      <param name="subid" value="2"/>
+      <param name="systemnoisefigure" value="4.0"/>
+      <param name="txpower" value="-20"/>
+      <param name="fixedantennagain" value="0.0"/>
+      <param name="fixedantennagainenable" value="true"/>
+      <param name="noisemode" value="all"/>
+      <param name="noisebinsize" value="20"/>
+      <param name="propagationmodel" value="precomputed"/>
+    </phy>
+  </nem>
+</platform>

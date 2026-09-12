@@ -167,6 +167,7 @@ fn main() -> Result<(), String> {
         publish_event,
         register_file_descriptor: register_descriptor,
         unregister_file_descriptor: unregister_descriptor,
+        query_spectrum: spectrum_unavailable,
     };
     let instance = (api.init)(42, &framework);
     if instance.is_null() {
@@ -225,4 +226,13 @@ fn main() -> Result<(), String> {
     };
     println!("loaded {name} from {}", path.display());
     Ok(())
+}
+
+#[allow(dead_code)]
+extern "C" fn spectrum_unavailable(
+    _: *mut c_void,
+    _: *const emane_plugin_api::FfiSpectrumQuery,
+    _: *mut emane_plugin_api::FfiSpectrumResult,
+) -> bool {
+    false
 }

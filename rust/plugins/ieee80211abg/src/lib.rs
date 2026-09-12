@@ -2,10 +2,10 @@ mod pcr_manager;
 
 use emane_plugin_api::{
     CommonLayerCounters, FfiConfigRequest, FfiControlMessage, FfiFrameworkService, FfiPacket,
-    FfiPacketInfo, FfiSlice, FfiStatisticValue, FlowControlToken, ModelHeader, PluginApi,
-    RxProperties, TxProperties, CONTROL_FLOW_CONTROL_TOKEN, CONTROL_MODEL_HEADER,
-    CONTROL_RX_PROPERTIES, CONTROL_TX_PROPERTIES, MAC_REGISTRATION_IEEE80211ABG,
-    PLUGIN_ABI_VERSION, STATISTIC_VALUE_U64,
+    FfiPacketInfo, FfiSlice, FfiSpectrumQuery, FfiStatisticValue, FlowControlToken, ModelHeader,
+    PluginApi, RxFrequencySegments, RxProperties, TxProperties, CONTROL_FLOW_CONTROL_TOKEN,
+    CONTROL_MODEL_HEADER, CONTROL_RX_FREQUENCY_SEGMENTS, CONTROL_RX_PROPERTIES,
+    CONTROL_TX_PROPERTIES, MAC_REGISTRATION_IEEE80211ABG, PLUGIN_ABI_VERSION, STATISTIC_VALUE_U64,
 };
 use pcr_manager::PCRManager;
 use prost::Message;
@@ -136,9 +136,8 @@ struct PendingRx {
     packet: OwnedPacket,
     source: u16,
     sequence: u64,
-    probability: f32,
+    spectrum_query: FfiSpectrumQuery,
     rx_power_dbm: f64,
-    noise_floor_dbm: f64,
     retries: u8,
     rate_index: u8,
     category: usize,
@@ -825,7 +824,7 @@ fn mode_parameters(mode: u8) -> (u64, u64, u64) {
 fn slot_size_microseconds(mode: u8, distance_meters: u32) -> u64 {
     let (base, _, _) = mode_parameters(mode);
     let numerator = u64::from(distance_meters).saturating_mul(1_000_000);
-    let propagation = numerator.saturating_add(299_792_457) / 299_792_458;
+    let propagation = numerator / 299_792_458;
     base.saturating_add(propagation)
 }
 
@@ -850,7 +849,6 @@ fn packet_duration(mode: u8, length: usize, rate_index: u8, broadcast: bool, rts
         .saturating_mul(8)
         .saturating_add(272 + acknowledgement_bits))
     .saturating_mul(1_000)
-    .saturating_add(rate - 1)
         / rate;
     let mut duration = if broadcast {
         preamble.saturating_add(data)
@@ -861,12 +859,8 @@ fn packet_duration(mode: u8, length: usize, rate_index: u8, broadcast: bool, rts
             .saturating_add(data)
     };
     if rts_cts {
-        // The legacy model accounts for RTS and CTS as two 160-bit control
-        // headers. The ACK is already included in the unicast duration.
-        let control_bits = 320u64;
-        duration = duration
-            .saturating_add(2 * preamble)
-            .saturating_add(control_bits.saturating_mul(1_000).saturating_add(rate - 1) / rate);
+        // C++ truncates each RTS and CTS duration separately.
+        duration = duration.saturating_add(2 * cts_duration(mode, rate_index));
     }
     duration.max(1)
 }
@@ -874,7 +868,7 @@ fn packet_duration(mode: u8, length: usize, rate_index: u8, broadcast: bool, rts
 fn cts_duration(mode: u8, rate_index: u8) -> u64 {
     let (_, _, preamble) = mode_parameters(mode);
     let rate = u64::from(DATA_RATES_KBPS[usize::from(rate_index)]);
-    preamble.saturating_add(160_000_u64.saturating_add(rate - 1) / rate)
+    preamble.saturating_add(160_000_u64 / rate)
 }
 
 fn encode_flags(rate_index: u8, retries: u8) -> u16 {
@@ -1221,9 +1215,10 @@ fn calculate_tx_delay(state: &mut State, pending: &PendingTx, now: i64) -> (i64,
             .clamp(0.0, u64::MAX as f64) as u64;
         if f64::from(random_unit(state)) <= delay_factor {
             let nodes = (random_node_delay * estimated_neighbors).floor() as u64;
-            pre_delay = nodes
-                .saturating_mul(average_duration)
-                .saturating_sub(overhead);
+            pre_delay = nodes.saturating_mul(average_duration);
+            if pre_delay > overhead {
+                pre_delay -= overhead;
+            }
         }
         post_delay = (delay_factor.powi(2) * (estimated_neighbors - 1.0) * average_duration as f64)
             .clamp(0.0, u64::MAX as f64) as u64;
@@ -1290,27 +1285,39 @@ fn estimated_common_neighbors(state: &State, source: u16) -> f64 {
         .round()
 }
 
-fn collision_noise_power(state: &State, source: u16, common: bool) -> f64 {
+fn collision_noise_power(state: &mut State, source: u16, common: bool) -> f64 {
+    let draw = f64::from(random_unit(state));
     let Some(remote) = state.neighbor_lists.get(&source) else {
         return 0.0;
     };
-    let (power, packets) = state
+    let mut neighbors: Vec<_> = state
         .channel_activity
         .iter()
-        .filter(|(neighbor, _)| {
-            **neighbor != source && (remote.neighbors.contains(neighbor) == common)
+        .filter(|(neighbor, activity)| {
+            **neighbor != source
+                && **neighbor != state.local_id
+                && activity.previous_utilization_microseconds != 0
+                && (remote.neighbors.contains(neighbor) == common)
         })
-        .fold((0.0, 0_u64), |(power, packets), (_, activity)| {
-            (
-                power + activity.previous_rx_power_milliwatts,
-                packets.saturating_add(activity.previous_packets),
-            )
-        });
-    if packets == 0 {
-        0.0
-    } else {
-        power / packets as f64
+        .collect();
+    // C++ uses a map ordered by NEM ID for the cumulative distribution.
+    neighbors.sort_unstable_by_key(|(neighbor, _)| **neighbor);
+    let total = neighbors
+        .iter()
+        .map(|(_, activity)| activity.previous_utilization_microseconds as f64)
+        .sum::<f64>();
+    let mut cumulative = 0.0;
+    for (index, (_, activity)) in neighbors.iter().enumerate() {
+        cumulative += activity.previous_utilization_microseconds as f64 / total;
+        if draw <= cumulative || index + 1 == neighbors.len() {
+            return if activity.previous_packets == 0 {
+                0.0
+            } else {
+                activity.previous_rx_power_milliwatts / activity.previous_packets as f64
+            };
+        }
     }
+    0.0
 }
 
 fn check_rx_collision(state: &mut State, source: u16, category: usize, retries: u8) -> u8 {
@@ -1520,6 +1527,23 @@ fn send_downstream(
             len: payload.len(),
         },
     };
+    let (capacity, depth, discards) = {
+        let mut state = mac.state.lock().unwrap();
+        let category = pending.category;
+        (
+            state.categories[category].queue_size,
+            state.queues[category].len(),
+            std::mem::take(&mut state.queue_discards[category]),
+        )
+    };
+    (mac.framework.update_queue_metric)(
+        mac.framework.framework_ctx,
+        pending.category as u16,
+        capacity as u32,
+        depth as u32,
+        discards,
+        now_us().saturating_sub(pending.acquired_at).max(0) as u64,
+    );
     mac.counters[pending.category].downstream_tx_packet(
         mac.framework,
         pending.packet.info.source,
@@ -1543,7 +1567,13 @@ fn send_downstream(
     );
 }
 
-fn send_cts(mac: &Ieee80211Mac, destination: u16, sequence: u64, rate_index: u8) {
+fn send_cts(
+    mac: &Ieee80211Mac,
+    destination: u16,
+    sequence: u64,
+    rate_index: u8,
+    data_duration: u64,
+) {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
@@ -1571,7 +1601,6 @@ fn send_cts(mac: &Ieee80211Mac, destination: u16, sequence: u64, rate_index: u8)
         sequence: Some(sequence),
         phase: TxPhase::Idle,
     };
-    let mode = mac.state.lock().unwrap().mode;
     send_downstream(
         mac,
         &pending,
@@ -1584,7 +1613,7 @@ fn send_cts(mac: &Ieee80211Mac, destination: u16, sequence: u64, rate_index: u8)
             flags: encode_flags(rate_index, 0),
         },
         destination,
-        cts_duration(mode, rate_index),
+        data_duration,
     );
 }
 
@@ -1859,6 +1888,82 @@ fn complete_receive(mac: &Ieee80211Mac, id: u64) {
         let Some(pending) = state.pending_rx.remove(&id) else {
             return;
         };
+        if !state.started {
+            return;
+        }
+        let Some(spectrum) = mac.framework.reception_noise(&pending.spectrum_query) else {
+            record_packet_drop(
+                mac,
+                &mut state,
+                pending.category,
+                pending.source,
+                pending.packet.info.destination,
+                pending.packet.payload.len(),
+                PacketDropReason::BadSpectrumQuery,
+                true,
+            );
+            return;
+        };
+        if spectrum.signal_in_noise {
+            record_packet_drop(
+                mac,
+                &mut state,
+                pending.category,
+                pending.source,
+                pending.packet.info.destination,
+                pending.packet.payload.len(),
+                PacketDropReason::BadControl,
+                true,
+            );
+            return;
+        }
+        let noise_floor_dbm = spectrum.noise_floor_dbm;
+        let now = pending.acquired_at;
+        if pending.message_type == MSG_TYPE_UNICAST_CTS_CTRL {
+            if record_channel_activity(
+                &mut state,
+                pending.source,
+                now,
+                0,
+                Some(pending.rx_power_dbm),
+                pending.category,
+            ) {
+                mac.set_neighbor_row(mac.one_hop_neighbor_table, pending.source);
+                mac.maximize(
+                    "numOneHopNbrHighWaterMark",
+                    state.channel_activity.len() as u64,
+                );
+                publish_one_hop_neighbors(mac, &state);
+            }
+            if record_two_hop_activity(
+                &mut state,
+                pending.packet.info.destination,
+                now,
+                pending.duration_microseconds,
+            ) {
+                mac.set_neighbor_row(mac.two_hop_neighbor_table, pending.packet.info.destination);
+                mac.maximize(
+                    "numTwoHopNbrHighWaterMark",
+                    state.two_hop_activity.len() as u64,
+                );
+            }
+        } else {
+            if record_channel_activity(
+                &mut state,
+                pending.source,
+                now,
+                pending.duration_microseconds,
+                Some(pending.rx_power_dbm),
+                pending.category,
+            ) {
+                mac.set_neighbor_row(mac.one_hop_neighbor_table, pending.source);
+                mac.maximize(
+                    "numOneHopNbrHighWaterMark",
+                    state.channel_activity.len() as u64,
+                );
+                publish_one_hop_neighbors(mac, &state);
+            }
+        }
         if pending.message_type == MSG_TYPE_UNICAST_CTS_CTRL {
             return;
         }
@@ -1867,7 +1972,12 @@ fn complete_receive(mac: &Ieee80211Mac, id: u64) {
             let sequence = state.sequence;
             state.sequence = state.sequence.wrapping_add(1);
             state.current_eot = state.current_eot.max(now_us().saturating_add(1));
-            (pending.source, sequence, state.unicast_rate_index)
+            (
+                pending.source,
+                sequence,
+                state.unicast_rate_index,
+                pending.duration_microseconds,
+            )
         });
 
         let duplicate = is_duplicate(
@@ -1878,7 +1988,7 @@ fn complete_receive(mac: &Ieee80211Mac, id: u64) {
         );
         let mut reception_ok = false;
         let mut accepted_sinr = 0.0;
-        let mut accepted_noise = pending.noise_floor_dbm;
+        let mut accepted_noise = noise_floor_dbm;
         let mut drop_reason = duplicate.then_some(PacketDropReason::Duplicate);
         if !duplicate {
             for attempt in 0..=pending.retries {
@@ -1910,9 +2020,9 @@ fn complete_receive(mac: &Ieee80211Mac, id: u64) {
                     continue;
                 }
 
-                let mut noise_milliwatts = 10.0f64.powf(pending.noise_floor_dbm / 10.0);
+                let mut noise_milliwatts = 10.0f64.powf(noise_floor_dbm / 10.0);
                 if collision & COLLISION_NOISE_COMMON_RX != 0 {
-                    noise_milliwatts += collision_noise_power(&state, pending.source, true);
+                    noise_milliwatts += collision_noise_power(&mut state, pending.source, true);
                     mac.increment(
                         if broadcast {
                             "numUpstreamBroadcastDataNoiseRxCommon"
@@ -1923,7 +2033,7 @@ fn complete_receive(mac: &Ieee80211Mac, id: u64) {
                     );
                 }
                 if collision & COLLISION_NOISE_HIDDEN_RX != 0 {
-                    noise_milliwatts += collision_noise_power(&state, pending.source, false);
+                    noise_milliwatts += collision_noise_power(&mut state, pending.source, false);
                     mac.increment(
                         if broadcast {
                             "numUpstreamBroadcastDataNoiseHiddenRx"
@@ -1938,7 +2048,7 @@ fn complete_receive(mac: &Ieee80211Mac, id: u64) {
                 } else {
                     f64::NEG_INFINITY
                 };
-                let probability = state.pcr.as_ref().map_or(pending.probability, |pcr| {
+                let probability = state.pcr.as_ref().map_or(0.0, |pcr| {
                     pcr.get_pcr(
                         (pending.rx_power_dbm - adjusted_noise_dbm) as f32,
                         pending.packet.payload.len(),
@@ -2004,8 +2114,8 @@ fn complete_receive(mac: &Ieee80211Mac, id: u64) {
             neighbor_metric,
         )
     };
-    if let Some((destination, sequence, rate_index)) = cts {
-        send_cts(mac, destination, sequence, rate_index);
+    if let Some((destination, sequence, rate_index, duration)) = cts {
+        send_cts(mac, destination, sequence, rate_index, duration);
     }
     if let Some((packet, category, acquired_at)) = packet {
         send_upstream(mac, packet, category, acquired_at);
@@ -2307,7 +2417,7 @@ extern "C" fn process_downstream(
         return;
     };
     let now = now_us();
-    let (ready, category, depth, max_depth, discards) = {
+    {
         let mut state = mac.state.lock().unwrap();
         let category = dscp_to_category(packet.info.priority, state.wmm);
         mac.counters[category].downstream_rx_packet(
@@ -2375,17 +2485,8 @@ extern "C" fn process_downstream(
                 false,
             );
             state.queue_discards[category] = state.queue_discards[category].saturating_add(1);
-            let discards = state.queue_discards[category];
             let update = state.flow_control.then_some(state.available_tokens);
             drop(state);
-            (mac.framework.update_queue_metric)(
-                mac.framework.framework_ctx,
-                category as u16,
-                0,
-                0,
-                discards,
-                0,
-            );
             if let Some(tokens) = update {
                 send_flow_update(mac, tokens);
             }
@@ -2441,27 +2542,8 @@ extern "C" fn process_downstream(
             &format!("numHighWaterMax{category}"),
             config.queue_size as u64,
         );
-        (
-            now,
-            category,
-            state.queues[category].len(),
-            config.queue_size,
-            state.queue_discards[category],
-        )
-    };
-    (mac.framework.update_queue_metric)(
-        mac.framework.framework_ctx,
-        category as u16,
-        u32::try_from(max_depth).unwrap_or(u32::MAX),
-        u32::try_from(depth).unwrap_or(u32::MAX),
-        discards,
-        0,
-    );
-    if ready <= now {
-        drive(mac, now);
-    } else {
-        schedule_transmit(mac, ready);
     }
+    drive(mac, now);
 }
 
 extern "C" fn process_upstream(
@@ -2536,7 +2618,7 @@ extern "C" fn process_upstream(
     let Some(message_type) = internal_message_type(wire_header.message_type) else {
         return;
     };
-    if usize::from(rate_index) >= DATA_RATES_KBPS.len() {
+    if rate_index == 0 || usize::from(rate_index) >= DATA_RATES_KBPS.len() {
         return;
     }
     packet.info.source = source;
@@ -2550,61 +2632,20 @@ extern "C" fn process_upstream(
         message_type,
         flags: encode_flags(rate_index, retries),
     };
+    let segments = find_control(message_views, CONTROL_RX_FREQUENCY_SEGMENTS)
+        .and_then(RxFrequencySegments::decode);
+    let spectrum_query = FfiSpectrumQuery::from_rx(
+        rx,
+        segments.as_ref().and_then(|value| value.segments.first()),
+    );
     let now = now_us();
     let (id, when) = {
         let mut state = mac.state.lock().unwrap();
         let rx_category = dscp_to_category(packet.info.priority, state.wmm);
-        if header.message_type == MSG_TYPE_UNICAST_CTS_CTRL {
-            if record_channel_activity(
-                &mut state,
-                packet.info.source,
-                now,
-                0,
-                Some(rx.rx_power_dbm),
-                rx_category,
-            ) {
-                mac.set_neighbor_row(mac.one_hop_neighbor_table, packet.info.source);
-                mac.maximize(
-                    "numOneHopNbrHighWaterMark",
-                    state.channel_activity.len() as u64,
-                );
-                publish_one_hop_neighbors(mac, &state);
-            }
-            if record_two_hop_activity(
-                &mut state,
-                packet.info.destination,
-                now,
-                rx.duration_microseconds,
-            ) {
-                mac.set_neighbor_row(mac.two_hop_neighbor_table, packet.info.destination);
-                mac.maximize(
-                    "numTwoHopNbrHighWaterMark",
-                    state.two_hop_activity.len() as u64,
-                );
-            }
-        } else {
-            if record_channel_activity(
-                &mut state,
-                packet.info.source,
-                now,
-                rx.duration_microseconds,
-                Some(rx.rx_power_dbm),
-                rx_category,
-            ) {
-                mac.set_neighbor_row(mac.one_hop_neighbor_table, packet.info.source);
-                mac.maximize(
-                    "numOneHopNbrHighWaterMark",
-                    state.channel_activity.len() as u64,
-                );
-                publish_one_hop_neighbors(mac, &state);
-            }
-        }
         if !state.started {
             return;
         }
-        let start_of_reception = rx
-            .tx_time_microseconds
-            .saturating_add(i64::try_from(rx.propagation_microseconds).unwrap_or(i64::MAX));
+        let start_of_reception = spectrum_query.start_time_microseconds;
         let end_of_reception = start_of_reception
             .saturating_add(i64::try_from(rx.duration_microseconds).unwrap_or(i64::MAX));
         if header.message_type == MSG_TYPE_UNICAST_RTS_CTS_DATA {
@@ -2612,13 +2653,6 @@ extern "C" fn process_upstream(
         } else if header.message_type == MSG_TYPE_UNICAST_CTS_CTRL {
             mac.increment("numUpstreamUnicastRtsCtsRxFromPhy", 1);
         }
-        let probability = state.pcr.as_ref().map_or(1.0, |pcr| {
-            pcr.get_pcr(
-                (rx.rx_power_dbm - rx.noise_floor_dbm) as f32,
-                packet.payload.len(),
-                rate_index.into(),
-            )
-        });
         state.next_rx_id = state.next_rx_id.wrapping_add(1).max(1);
         let id = state.next_rx_id;
         let destination = packet.info.destination;
@@ -2630,9 +2664,8 @@ extern "C" fn process_upstream(
                 source: packet.info.source,
                 packet,
                 sequence: header.sequence,
-                probability,
-                rx_power_dbm: rx.rx_power_dbm,
-                noise_floor_dbm: rx.noise_floor_dbm,
+                spectrum_query,
+                rx_power_dbm: spectrum_query.rx_power_dbm,
                 retries,
                 rate_index,
                 category: rx_category,
@@ -2809,6 +2842,14 @@ pub extern "C" fn emane_plugin_create() -> *const PluginApi {
 
 #[cfg(test)]
 mod tests {
+    extern "C" fn spectrum_unavailable(
+        _: *mut c_void,
+        _: *const emane_plugin_api::FfiSpectrumQuery,
+        _: *mut emane_plugin_api::FfiSpectrumResult,
+    ) -> bool {
+        false
+    }
+
     use super::*;
     use std::sync::Mutex;
 
@@ -2961,7 +3002,7 @@ mod tests {
         true
     }
 
-    fn test_mac() -> Ieee80211Mac {
+    pub(super) fn test_mac() -> Ieee80211Mac {
         Ieee80211Mac::new(
             1,
             FfiFrameworkService {
@@ -2996,6 +3037,7 @@ mod tests {
                 publish_event: publish_event_callback,
                 register_file_descriptor: register_descriptor_callback,
                 unregister_file_descriptor: unregister_descriptor_callback,
+                query_spectrum: spectrum_unavailable,
             },
         )
     }
@@ -3176,3 +3218,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod regression_tests;

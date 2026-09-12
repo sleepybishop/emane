@@ -18,22 +18,6 @@ pub struct PCRManager {
     precision_factor: i32,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::PCRManager;
-
-    #[test]
-    fn loads_all_rates_from_the_guide_fixture() {
-        let uri = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../validation/guide-samples/ieee80211abg-pcr.xml");
-        let mut manager = PCRManager::new();
-        manager.load(uri.to_str().unwrap()).unwrap();
-        for rate in 1..=12 {
-            assert!(manager.contains_rate(rate));
-        }
-    }
-}
-
 impl PCRManager {
     pub fn new() -> Self {
         Self {
@@ -46,8 +30,14 @@ impl PCRManager {
     pub fn load(&mut self, uri: &str) -> Result<(), String> {
         let uri = uri.strip_prefix("file://").unwrap_or(uri);
         let content = fs::read_to_string(uri).map_err(|e| format!("Failed to read file: {}", e))?;
-        let doc = roxmltree::Document::parse(&content)
-            .map_err(|e| format!("Failed to parse XML: {}", e))?;
+        let doc = roxmltree::Document::parse_with_options(
+            &content,
+            roxmltree::ParsingOptions {
+                allow_dtd: true,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| format!("Failed to parse XML: {}", e))?;
 
         let root = doc.root_element();
         if !root.has_tag_name("pcr") {
@@ -227,4 +217,20 @@ pub extern "C" fn emane_rs_ieee80211abg_pcrmanager_get_pcr(
 ) -> f32 {
     let mgr = unsafe { &*(mgr as *mut PCRManager) };
     mgr.get_pcr(sinr, packet_len, data_rate_index)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PCRManager;
+
+    #[test]
+    fn loads_all_rates_from_the_legacy_fixture() {
+        let uri = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/ieee80211abg-pcr.xml");
+        let mut manager = PCRManager::new();
+        manager.load(uri.to_str().unwrap()).unwrap();
+        for rate in 1..=12 {
+            assert!(manager.contains_rate(rate));
+        }
+    }
 }

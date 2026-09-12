@@ -1132,7 +1132,8 @@ fn read_u64(data: &[u8], offset: &mut usize) -> Option<u64> {
 // floating-point statistics. Version 10 adds typed native statistic tables;
 // version 11 lets their owners clear rows when model state is replaced;
 // version 12 adds removal of individual table rows.
-pub const PLUGIN_ABI_VERSION: u32 = 13;
+// Version 14 adds completed-reception spectrum queries.
+pub const PLUGIN_ABI_VERSION: u32 = 14;
 
 pub const STATISTIC_VALUE_U64: u32 = 1;
 pub const STATISTIC_VALUE_F64: u32 = 2;
@@ -1178,6 +1179,42 @@ pub struct FfiControlMessage {
 pub struct FfiPacket {
     pub info: FfiPacketInfo,
     pub payload: FfiSlice,
+}
+
+/// A local spectrum query, made after the requested reception interval has ended.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct FfiSpectrumQuery {
+    pub frequency_hz: u64,
+    pub start_time_microseconds: i64,
+    pub duration_microseconds: u64,
+    pub rx_power_dbm: f64,
+    /// Receive antenna index; zero selects the default SISO monitor.
+    pub antenna_index: u16,
+}
+
+impl FfiSpectrumQuery {
+    pub fn from_rx(rx: RxProperties, segment: Option<&RxFrequencySegment>) -> Self {
+        Self {
+            frequency_hz: segment.map_or(rx.frequency_hz, |segment| segment.frequency_hz),
+            start_time_microseconds: rx
+                .tx_time_microseconds
+                .saturating_add(i64::try_from(rx.propagation_microseconds).unwrap_or(i64::MAX))
+                .saturating_add(segment.map_or(0, |segment| {
+                    i64::try_from(segment.offset_microseconds).unwrap_or(i64::MAX)
+                })),
+            duration_microseconds: rx.duration_microseconds.max(1),
+            rx_power_dbm: segment.map_or(rx.rx_power_dbm, |segment| segment.rx_power_dbm),
+            antenna_index: 0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FfiSpectrumResult {
+    pub noise_floor_dbm: f64,
+    pub signal_in_noise: bool,
 }
 
 #[repr(C)]
@@ -1323,6 +1360,19 @@ pub struct FfiFrameworkService {
         callback: FfiFileDescriptorCallback,
     ) -> u64,
     pub unregister_file_descriptor: extern "C" fn(ctx: *mut c_void, handle: u64) -> bool,
+    /// Returns false for unavailable, expired or incomplete spectrum windows.
+    pub query_spectrum: extern "C" fn(
+        ctx: *mut c_void,
+        query: *const FfiSpectrumQuery,
+        result: *mut FfiSpectrumResult,
+    ) -> bool,
+}
+
+impl FfiFrameworkService {
+    pub fn reception_noise(self, query: &FfiSpectrumQuery) -> Option<FfiSpectrumResult> {
+        let mut result = FfiSpectrumResult::default();
+        (self.query_spectrum)(self.framework_ctx, query, &mut result).then_some(result)
+    }
 }
 
 unsafe impl Send for FfiFrameworkService {}

@@ -2670,6 +2670,14 @@ pub extern "C" fn emane_plugin_create() -> *const PluginApi {
 
 #[cfg(test)]
 mod tests {
+    extern "C" fn spectrum_unavailable(
+        _: *mut c_void,
+        _: *const emane_plugin_api::FfiSpectrumQuery,
+        _: *mut emane_plugin_api::FfiSpectrumResult,
+    ) -> bool {
+        false
+    }
+
     use super::*;
     use std::sync::Mutex;
 
@@ -2882,6 +2890,7 @@ mod tests {
             publish_event: publish_event_noop,
             register_file_descriptor: register_descriptor_noop,
             unregister_file_descriptor: unregister_descriptor_noop,
+            query_spectrum: spectrum_unavailable,
         }
     }
 

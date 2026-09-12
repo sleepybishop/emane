@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<platform name="guide-tdma-01-rust-validation">
+  <param name="eventservicegroup" value="224.1.2.83:45983"/>
+  <param name="eventservicedevice" value="lo"/>
+  <param name="eventserviceloopback" value="true"/>
+  <param name="otamanagergroup" value="224.1.2.84:45984"/>
+  <param name="otamanagerdevice" value="lo"/>
+  <param name="otamanagerloopback" value="true"/>
+  <param name="controlportendpoint" value="127.0.0.1:47283"/>
+
+  <nem id="1">
+    <transport plugin="virtualtransport">
+      <param name="device" value="guide-td1"/>
+      <param name="arpmodeenable" value="true"/>
+      <param name="arpcacheenable" value="true"/>
+    </transport>
+    <mac plugin="tdma">
+      <param name="fragmentcheckthreshold" value="2"/>
+      <param name="fragmenttimeoutthreshold" value="5"/>
+      <param name="neighbormetricdeletetime" value="60.0"/>
+      <param name="neighbormetricupdateinterval" value="1.0"/>
+      <param name="queue.aggregationenable" value="true"/>
+      <param name="queue.aggregationslotthreshold" value="90.0"/>
+      <param name="queue.depth" value="255"/>
+      <param name="queue.fragmentationenable" value="true"/>
+      <param name="queue.strictdequeueenable" value="false"/>
+      <param name="pcrcurveuri" value="tdma-pcr.xml"/>
+    </mac>
+    <phy plugin="emanephy">
+      <param name="fixedantennagain" value="0.0"/>
+      <param name="fixedantennagainenable" value="true"/>
+      <param name="bandwidth" value="1M"/>
+      <param name="noisemode" value="all"/>
+      <param name="propagationmodel" value="precomputed"/>
+      <param name="systemnoisefigure" value="4.0"/>
+      <param name="subid" value="7"/>
+      <param name="fading.model" value="none"/>
+    </phy>
+  </nem>
+
+  <nem id="2">
+    <transport plugin="virtualtransport">
+      <param name="device" value="guide-td2"/>
+      <param name="arpmodeenable" value="true"/>
+      <param name="arpcacheenable" value="true"/>
+    </transport>
+    <mac plugin="tdma">
+      <param name="fragmentcheckthreshold" value="2"/>
+      <param name="fragmenttimeoutthreshold" value="5"/>
+      <param name="neighbormetricdeletetime" value="60.0"/>
+      <param name="neighbormetricupdateinterval" value="1.0"/>
+      <param name="queue.aggregationenable" value="true"/>
+      <param name="queue.aggregationslotthreshold" value="90.0"/>
+      <param name="queue.depth" value="255"/>
+      <param name="queue.fragmentationenable" value="true"/>
+      <param name="queue.strictdequeueenable" value="false"/>
+      <param name="pcrcurveuri" value="tdma-pcr.xml"/>
+    </mac>
+    <phy plugin="emanephy">
+      <param name="fixedantennagain" value="0.0"/>
+      <param name="fixedantennagainenable" value="true"/>
+      <param name="bandwidth" value="1M"/>
+      <param name="noisemode" value="all"/>
+      <param name="propagationmodel" value="precomputed"/>
+      <param name="systemnoisefigure" value="4.0"/>
+      <param name="subid" value="7"/>
+      <param name="fading.model" value="none"/>
+    </phy>
+  </nem>
+</platform>

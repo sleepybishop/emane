@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<platform name="guide-commeffect-01-rust-validation">
+  <param name="eventservicegroup" value="224.1.2.91:45991"/>
+  <param name="eventservicedevice" value="lo"/>
+  <param name="eventserviceloopback" value="true"/>
+  <param name="otamanagergroup" value="224.1.2.92:45992"/>
+  <param name="otamanagerdevice" value="lo"/>
+  <param name="otamanagerloopback" value="true"/>
+  <param name="controlportendpoint" value="127.0.0.1:47291"/>
+
+  <nem id="1" type="unstructured">
+    <transport plugin="rawtransport"><param name="device" value="guide-ce1"/></transport>
+    <shim plugin="commeffectshim">
+      <param name="defaultconnectivitymode" value="false"/>
+      <param name="enablepromiscuousmode" value="false"/>
+    </shim>
+  </nem>
+  <nem id="2" type="unstructured">
+    <transport plugin="rawtransport"><param name="device" value="guide-ce2"/></transport>
+    <shim plugin="commeffectshim">
+      <param name="defaultconnectivitymode" value="false"/>
+      <param name="enablepromiscuousmode" value="false"/>
+    </shim>
+  </nem>
+  <nem id="3" type="unstructured">
+    <transport plugin="rawtransport"><param name="device" value="guide-ce3"/></transport>
+    <shim plugin="commeffectshim">
+      <param name="defaultconnectivitymode" value="false"/>
+      <param name="enablepromiscuousmode" value="false"/>
+    </shim>
+  </nem>
+  <nem id="4" type="unstructured">
+    <transport plugin="rawtransport"><param name="device" value="guide-ce4"/></transport>
+    <shim plugin="commeffectshim">
+      <param name="defaultconnectivitymode" value="false"/>
+      <param name="enablepromiscuousmode" value="false"/>
+    </shim>
+  </nem>
+  <nem id="5" type="unstructured">
+    <transport plugin="rawtransport"><param name="device" value="guide-ce5"/></transport>
+    <shim plugin="commeffectshim">
+      <param name="defaultconnectivitymode" value="false"/>
+      <param name="enablepromiscuousmode" value="false"/>
+    </shim>
+  </nem>
+</platform>

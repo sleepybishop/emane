@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<platform name="guide-rfpipe-01-rust-validation">
+  <param name="eventservicegroup" value="224.1.2.81:45981"/>
+  <param name="eventservicedevice" value="lo"/>
+  <param name="eventserviceloopback" value="true"/>
+  <param name="otamanagergroup" value="224.1.2.82:45982"/>
+  <param name="otamanagerdevice" value="lo"/>
+  <param name="otamanagerloopback" value="true"/>
+  <param name="controlportendpoint" value="127.0.0.1:47281"/>
+
+  <nem id="1">
+    <transport plugin="virtualtransport">
+      <param name="device" value="guide-rf1"/>
+      <param name="arpmodeenable" value="true"/>
+      <param name="arpcacheenable" value="true"/>
+    </transport>
+    <mac plugin="rfpipe">
+      <param name="enablepromiscuousmode" value="false"/>
+      <param name="datarate" value="150M"/>
+      <param name="jitter" value="0"/>
+      <param name="delay" value="0"/>
+      <param name="flowcontrolenable" value="false"/>
+      <param name="flowcontroltokens" value="10"/>
+      <param name="pcrcurveuri" value="rfpipe-pcr.xml"/>
+    </mac>
+    <phy plugin="emanephy">
+      <param name="bandwidth" value="20M"/>
+      <param name="frequency" value="2400000000"/>
+      <param name="frequencyofinterest" value="2400000000"/>
+      <param name="subid" value="1"/>
+      <param name="systemnoisefigure" value="4.0"/>
+      <param name="txpower" value="0.0"/>
+      <param name="fixedantennagain" value="0.0"/>
+      <param name="fixedantennagainenable" value="true"/>
+      <param name="noisemode" value="outofband"/>
+      <param name="noisebinsize" value="20"/>
+      <param name="propagationmodel" value="precomputed"/>
+      <param name="compatibilitymode" value="1"/>
+    </phy>
+  </nem>
+
+  <nem id="2">
+    <transport plugin="virtualtransport">
+      <param name="device" value="guide-rf2"/>
+      <param name="arpmodeenable" value="true"/>
+      <param name="arpcacheenable" value="true"/>
+    </transport>
+    <mac plugin="rfpipe">
+      <param name="enablepromiscuousmode" value="false"/>
+      <param name="datarate" value="150M"/>
+      <param name="jitter" value="0"/>
+      <param name="delay" value="0"/>
+      <param name="flowcontrolenable" value="false"/>
+      <param name="flowcontroltokens" value="10"/>
+      <param name="pcrcurveuri" value="rfpipe-pcr.xml"/>
+    </mac>
+    <phy plugin="emanephy">
+      <param name="bandwidth" value="20M"/>
+      <param name="frequency" value="2400000000"/>
+      <param name="frequencyofinterest" value="2400000000"/>
+      <param name="subid" value="1"/>
+      <param name="systemnoisefigure" value="4.0"/>
+      <param name="txpower" value="0.0"/>
+      <param name="fixedantennagain" value="0.0"/>
+      <param name="fixedantennagainenable" value="true"/>
+      <param name="noisemode" value="outofband"/>
+      <param name="noisebinsize" value="20"/>
+      <param name="propagationmodel" value="precomputed"/>
+      <param name="compatibilitymode" value="1"/>
+    </phy>
+  </nem>
+</platform>

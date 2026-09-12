@@ -76,6 +76,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use emane_plugin_api::{FfiSpectrumQuery, FfiSpectrumResult};
+
 const BROADCAST_NEM: u16 = u16::MAX;
 
 #[derive(Clone, Copy)]
@@ -345,6 +347,7 @@ struct Runtime {
     invocations: RwLock<HashMap<u16, Vec<Invocation>>>,
     boundaries: RwLock<HashMap<u16, BoundaryRoute>>,
     phy_tx_sequences: Mutex<HashMap<u16, u16>>,
+    spectrum_monitors: RwLock<HashMap<(u16, u16), Weak<Mutex<SpectrumMonitor>>>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1734,6 +1737,55 @@ fn update_neighbor_metric_table(
     );
 }
 
+// Share only the monitor, never the mutable PHY state, with other layer queues.
+fn register_spectrum_monitors(state: &BuiltinState) {
+    let Some(runtime) =
+        context(state.framework.framework_ctx).and_then(|ctx| ctx.runtime.upgrade())
+    else {
+        return;
+    };
+    let Ok(mut monitors) = runtime.spectrum_monitors.write() else {
+        return;
+    };
+    monitors.retain(|(nem, _), _| *nem != state.id);
+    monitors.insert((state.id, 0), Arc::downgrade(&state.phy.monitor));
+    for (index, antenna) in &state.phy.receive_antennas {
+        monitors.insert((state.id, *index), Arc::downgrade(&antenna.monitor));
+    }
+}
+
+extern "C" fn query_spectrum(
+    ctx: *mut c_void,
+    query: *const FfiSpectrumQuery,
+    result: *mut FfiSpectrumResult,
+) -> bool {
+    let (Some(ctx), Some(query), Some(result)) =
+        (context(ctx), unsafe { query.as_ref() }, unsafe {
+            result.as_mut()
+        })
+    else {
+        return false;
+    };
+    let Some(runtime) = ctx.runtime.upgrade() else {
+        return false;
+    };
+    let monitor = runtime.spectrum_monitors.read().ok().and_then(|monitors| {
+        monitors
+            .get(&(ctx.nem_id, query.antenna_index))
+            .and_then(Weak::upgrade)
+    });
+    let Some(monitor) = monitor else { return false };
+    let Some(value) = monitor
+        .lock()
+        .ok()
+        .and_then(|monitor| monitor.reception_noise(unix_time_microseconds(), query))
+    else {
+        return false;
+    };
+    *result = value;
+    true
+}
+
 extern "C" fn update_queue_metric(
     ctx: *mut c_void,
     queue_id: u16,
@@ -2681,14 +2733,14 @@ struct PhyState {
     time_sync_threshold: i64,
     noise_max_clamp: bool,
     system_noise_figure_db: f64,
-    monitor: SpectrumMonitor,
+    monitor: Arc<Mutex<SpectrumMonitor>>,
     receive_antennas: HashMap<u16, ReceiveAntennaState>,
 }
 
 struct ReceiveAntennaState {
     antenna: MimoTxAntenna,
     frequencies_hz: Vec<u64>,
-    monitor: SpectrumMonitor,
+    monitor: Arc<Mutex<SpectrumMonitor>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2834,7 +2886,7 @@ impl PhyState {
             time_sync_threshold: 10_000,
             noise_max_clamp: false,
             system_noise_figure_db: 4.0,
-            monitor: SpectrumMonitor::new(),
+            monitor: Arc::new(Mutex::new(SpectrumMonitor::new())),
             receive_antennas: HashMap::new(),
         }
     }
@@ -2948,7 +3000,7 @@ impl PhyState {
 
     fn initialize_monitor(&mut self) {
         let sensitivity_mw = 10.0f64.powf(self.receiver_sensitivity_dbm() / 10.0);
-        self.monitor.initialize(
+        self.monitor.lock().unwrap().initialize(
             self.sub_id,
             &self.frequencies_of_interest,
             self.bandwidth_hz,
@@ -4313,6 +4365,7 @@ extern "C" fn builtin_configure(state: *mut c_void, request: *const c_void) -> b
             return false;
         }
         state.phy.initialize_monitor();
+        register_spectrum_monitors(state);
     }
     true
 }
@@ -4853,7 +4906,7 @@ extern "C" fn builtin_upstream(
                 .map(|transmitter| transmitter.nem_id)
                 .collect();
             let (tx_time, propagation, duration, report, report_in_band, sensitivity_mw) =
-                state.phy.monitor.update(
+                state.phy.monitor.lock().unwrap().update(
                     now,
                     tx.tx_time_microseconds,
                     propagation_microseconds,
@@ -4869,7 +4922,13 @@ extern "C" fn builtin_upstream(
                     std::ptr::null(),
                     0,
                 );
-            if state.phy.monitor.last_update_had_clamp_error() {
+            if state
+                .phy
+                .monitor
+                .lock()
+                .unwrap()
+                .last_update_had_clamp_error()
+            {
                 state.counters.upstream_drop_packet(
                     state.framework,
                     packet.info.source,
@@ -4914,7 +4973,7 @@ extern "C" fn builtin_upstream(
                 return;
             }
             let noise_floor_dbm = reception_noise_floor_dbm(
-                &state.phy.monitor,
+                &state.phy.monitor.lock().unwrap(),
                 now,
                 tx_time,
                 propagation,
@@ -5084,7 +5143,7 @@ extern "C" fn builtin_upstream(
                                         report,
                                         report_in_band,
                                         sensitivity,
-                                    ) = entry.monitor.update(
+                                    ) = entry.monitor.lock().unwrap().update(
                                         now,
                                         tx.tx_time_microseconds,
                                         combination_propagation,
@@ -5104,7 +5163,7 @@ extern "C" fn builtin_upstream(
                                         continue;
                                     }
                                     let noise_floor = reception_noise_floor_dbm(
-                                        &entry.monitor,
+                                        &entry.monitor.lock().unwrap(),
                                         now,
                                         info_tx_time,
                                         info_propagation,
@@ -5345,7 +5404,7 @@ extern "C" fn builtin_downstream(
                         ReceiveAntennaState {
                             antenna: add.antenna,
                             frequencies_hz: add.frequencies_hz,
-                            monitor,
+                            monitor: Arc::new(Mutex::new(monitor)),
                         },
                     );
                     state.phy.frequencies_of_interest = state
@@ -5367,6 +5426,7 @@ extern "C" fn builtin_downstream(
                 _ => {}
             }
         }
+        register_spectrum_monitors(state);
         if packet.is_null() {
             return;
         }
@@ -6087,6 +6147,7 @@ impl NemManager {
                 invocations: RwLock::new(HashMap::new()),
                 boundaries: RwLock::new(HashMap::new()),
                 phy_tx_sequences: Mutex::new(HashMap::new()),
+                spectrum_monitors: RwLock::new(HashMap::new()),
             }),
             layers: BTreeMap::new(),
             boundary_definitions: BTreeMap::new(),
@@ -6296,6 +6357,7 @@ impl NemManager {
             publish_event,
             register_file_descriptor,
             unregister_file_descriptor,
+            query_spectrum,
         };
         let plugin_context =
             with_component_execution(|| unsafe { ((*api).init)(nem_id, &framework) });
@@ -6994,6 +7056,7 @@ mod tests {
             publish_event,
             register_file_descriptor,
             unregister_file_descriptor,
+            query_spectrum,
         };
         let context = (capture_api().init)(nem_id, &framework);
         let queue = Box::new(NemQueuedLayer::new(nem_id));
@@ -7295,6 +7358,7 @@ mod tests {
             publish_event,
             register_file_descriptor,
             unregister_file_descriptor,
+            query_spectrum,
         };
         let context = builtin_init(1, &framework, BuiltinKind::Phy);
         assert!(!context.is_null());
@@ -7653,6 +7717,7 @@ mod tests {
             publish_event,
             register_file_descriptor,
             unregister_file_descriptor,
+            query_spectrum,
         };
         let context = builtin_init(1, &framework, BuiltinKind::Phy);
         assert!(!context.is_null());
@@ -8434,6 +8499,7 @@ mod tests {
             ])),
             boundaries: RwLock::new(HashMap::new()),
             phy_tx_sequences: Mutex::new(HashMap::new()),
+            spectrum_monitors: RwLock::new(HashMap::new()),
         };
         let payload = [1u8];
         let packet = FfiPacket {
@@ -8719,5 +8785,170 @@ mod tests {
         assert_eq!(BYPASS_STACK_HITS.load(Ordering::Relaxed), 1);
         assert_eq!(BYPASS_STACK_BYTES.load(Ordering::Relaxed), 15);
         manager.stop();
+    }
+    #[test]
+    fn framework_spectrum_queries_share_live_phy_monitor_and_isolate_nems() {
+        let mut manager = NemManager::new([29; 16]);
+        let config = vec![
+            ("subid".to_string(), vec!["7".to_string()]),
+            ("noisemode".to_string(), vec!["outofband".to_string()]),
+            ("frequency".to_string(), vec!["2.4G".to_string()]),
+            ("frequencyofinterest".to_string(), vec!["2.4G".to_string()]),
+            ("bandwidth".to_string(), vec!["1M".to_string()]),
+        ];
+        for id in [501, 502] {
+            manager
+                .add_layer_configured(id, "emanephy", 2, &config)
+                .unwrap();
+        }
+        let monitor = manager.runtime.spectrum_monitors.read().unwrap()[&(501, 0)]
+            .upgrade()
+            .unwrap();
+        let ctx =
+            &*manager.layers[&501][0]._framework_context as *const FrameworkContext as *mut c_void;
+        let other_ctx =
+            &*manager.layers[&502][0]._framework_context as *const FrameworkContext as *mut c_void;
+        let start = unix_time_microseconds() - 2_000;
+        let query = FfiSpectrumQuery {
+            frequency_hz: 2_400_000_000,
+            start_time_microseconds: start,
+            duration_microseconds: 1_000,
+            rx_power_dbm: -50.0,
+            antenna_index: 0,
+        };
+        let mut before = FfiSpectrumResult::default();
+        assert!(query_spectrum(ctx, &query, &mut before));
+        let mut monitor = monitor.lock().unwrap();
+        let segment = FfiFrequencySegment {
+            frequency_hz: 2_400_000_000,
+            rx_power_dbm: -60.0,
+            duration_microsec: 500,
+            offset_microsec: 0,
+        };
+        monitor.update(
+            start + 500,
+            start + 500,
+            0,
+            0.0,
+            &[segment],
+            1_000_000,
+            &[1e-6],
+            false,
+            &[3],
+            9,
+            0,
+            0,
+            std::ptr::null(),
+            0,
+        );
+        drop(monitor);
+        // Query from another layer thread without touching the mutable PHY state.
+        let ctx_address = ctx as usize;
+        let after = std::thread::spawn(move || {
+            let mut result = FfiSpectrumResult::default();
+            assert!(query_spectrum(
+                ctx_address as *mut c_void,
+                &query,
+                &mut result
+            ));
+            result
+        })
+        .join()
+        .unwrap();
+        assert!((after.noise_floor_dbm + 60.0).abs() < 1e-6);
+        assert!(after.noise_floor_dbm - before.noise_floor_dbm > 39.0);
+        let mut other = FfiSpectrumResult::default();
+        assert!(query_spectrum(other_ctx, &query, &mut other));
+        assert_eq!(other.noise_floor_dbm, before.noise_floor_dbm);
+        assert!(!query_spectrum(
+            ctx,
+            &FfiSpectrumQuery {
+                frequency_hz: 1,
+                ..query
+            },
+            &mut other
+        ));
+        assert!(!query_spectrum(
+            ctx,
+            &FfiSpectrumQuery {
+                antenna_index: 99,
+                ..query
+            },
+            &mut other
+        ));
+        assert!(!query_spectrum(ctx, std::ptr::null(), &mut other));
+    }
+    #[test]
+    fn dynamic_wifi_stack_uses_phy_spectrum_service_and_configured_sub_id() {
+        let _guard = DYNAMIC_PLUGIN_TEST_LOCK.lock().unwrap();
+        let Ok(plugin) = resolve_plugin_path("ieee80211abgmaclayer") else {
+            return;
+        };
+        if !plugin.exists() {
+            return;
+        }
+        BYPASS_STACK_HITS.store(0, Ordering::Relaxed);
+        BYPASS_STACK_BYTES.store(0, Ordering::Relaxed);
+        let mut manager = NemManager::new([30; 16]);
+        let pcr = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../plugins/ieee80211abg/tests/fixtures/ieee80211abg-pcr.xml");
+        for nem_id in [1, 2] {
+            add_capture_transport(&mut manager, nem_id);
+            if let Err(error) = manager.add_layer_configured(
+                nem_id,
+                plugin.to_str().unwrap(),
+                1,
+                &[(
+                    "pcrcurveuri".into(),
+                    vec![pcr.to_string_lossy().into_owned()],
+                )],
+            ) {
+                if error.contains("plugin ABI mismatch") {
+                    return;
+                }
+                panic!("{error}");
+            }
+            manager
+                .add_layer_configured(
+                    nem_id,
+                    "emanephy",
+                    2,
+                    &[
+                        ("subid".into(), vec!["7".into()]),
+                        ("noisemode".into(), vec!["outofband".into()]),
+                    ],
+                )
+                .unwrap();
+            let phy = manager.layers[&nem_id].last().unwrap().invocation;
+            let state = unsafe { &mut *(phy.context() as *mut BuiltinState) };
+            state
+                .phy
+                .pathloss
+                .insert(if nem_id == 1 { 2 } else { 1 }, HashMap::from([(0, 50.0)]));
+        }
+        manager.start().unwrap();
+        manager.post_start();
+        let payload = [5u8; 128];
+        let packet = FfiPacket {
+            info: FfiPacketInfo {
+                source: 1,
+                destination: 2,
+                priority: 0,
+                creation_time_sec: 0,
+                creation_time_usec: 0,
+            },
+            payload: FfiSlice {
+                data: payload.as_ptr(),
+                len: payload.len(),
+            },
+        };
+        manager.process_downstream(1, &packet, &[]).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while BYPASS_STACK_HITS.load(Ordering::Acquire) == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        manager.stop();
+        assert_eq!(BYPASS_STACK_HITS.load(Ordering::Relaxed), 1);
+        assert_eq!(BYPASS_STACK_BYTES.load(Ordering::Relaxed), 640);
     }
 }

@@ -574,6 +574,14 @@ impl NoiseRecorder {
     }
 
     pub fn get(&self, now: i64, duration: i64, start_time: i64) -> (Vec<f64>, i64) {
+        self.try_get(now, duration, start_time)
+            .expect("invalid spectrum window")
+    }
+
+    pub fn try_get(&self, now: i64, duration: i64, start_time: i64) -> Option<(Vec<f64>, i64)> {
+        if duration < 0 || now < 0 {
+            return None;
+        }
         let now_bin = self.timepoint_to_bin(now, true);
         let min_start_of_window_time =
             (now_bin - self.total_window_bins + 1) * self.bin_size_microseconds;
@@ -584,19 +592,17 @@ impl NoiseRecorder {
         if valid_start_time == -9223372036854775808 {
             // TIMEPOINT_MIN conceptually
             valid_start_time = min_start_of_window_time;
-        } else if valid_start_time < min_start_of_window_time {
-            panic!("window start time too far in the past");
-        } else if valid_start_time > now {
-            panic!("window start time in the future");
+        } else if valid_start_time < min_start_of_window_time || valid_start_time > now {
+            return None;
         }
 
         let start_time_bin = self.timepoint_to_bin(valid_start_time, false);
 
         let mut end_time = now;
         if valid_duration != 0 {
-            end_time = valid_start_time + valid_duration;
+            end_time = valid_start_time.checked_add(valid_duration)?;
             if end_time > now {
-                panic!("window end time in the future");
+                return None;
             }
         }
 
@@ -656,10 +662,10 @@ impl NoiseRecorder {
                 ]);
             }
         } else {
-            panic!("window start time invalid");
+            return None;
         }
 
-        (window, start_of_window_time)
+        Some((window, start_of_window_time))
     }
 
     pub fn dump(&self) -> Vec<f64> {

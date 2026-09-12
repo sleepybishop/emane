@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<platform name="guide-bentpipe-01-rust-validation">
+  <param name="eventservicegroup" value="224.1.2.87:45987"/>
+  <param name="eventservicedevice" value="lo"/>
+  <param name="eventserviceloopback" value="true"/>
+  <param name="otamanagergroup" value="224.1.2.88:45988"/>
+  <param name="otamanagerdevice" value="lo"/>
+  <param name="otamanagerloopback" value="true"/>
+  <param name="controlportendpoint" value="127.0.0.1:47287"/>
+
+  <nem id="1">
+    <transport plugin="virtualtransport">
+      <param name="device" value="guide-bp11"/>
+      <param name="arpmodeenable" value="true"/>
+      <param name="arpcacheenable" value="false"/>
+    </transport>
+    <mac plugin="bentpipe">
+      <paramlist name="antenna.defines"><item value="0:omni;0.5;0"/></paramlist>
+      <paramlist name="transponder.receive.frequency"><item value="0:29910000000"/></paramlist>
+      <paramlist name="transponder.receive.bandwidth"><item value="0:150M"/></paramlist>
+      <paramlist name="transponder.receive.antenna"><item value="0:0"/></paramlist>
+      <paramlist name="transponder.receive.action"><item value="0:process"/></paramlist>
+      <paramlist name="transponder.receive.enable"><item value="0:on"/></paramlist>
+      <paramlist name="transponder.transmit.pcrcurveindex"><item value="0:0"/></paramlist>
+      <paramlist name="transponder.transmit.frequency"><item value="0:29910000000"/></paramlist>
+      <paramlist name="transponder.transmit.bandwidth"><item value="0:150M"/></paramlist>
+      <paramlist name="transponder.transmit.antenna"><item value="0:0"/></paramlist>
+      <paramlist name="transponder.transmit.ubend.delay"><item value="0:na"/></paramlist>
+      <paramlist name="transponder.transmit.datarate"><item value="0:100M"/></paramlist>
+      <paramlist name="transponder.transmit.power"><item value="0:0"/></paramlist>
+      <paramlist name="transponder.transmit.tosmap"><item value="0:0-255"/></paramlist>
+      <paramlist name="transponder.transmit.slotperframe"><item value="0:na"/></paramlist>
+      <paramlist name="transponder.transmit.slotsize"><item value="0:na"/></paramlist>
+      <paramlist name="transponder.transmit.txslots"><item value="0:na"/></paramlist>
+      <paramlist name="transponder.transmit.mtu"><item value="0:2048"/></paramlist>
+      <paramlist name="transponder.transmit.enable"><item value="0:on"/></paramlist>
+      <param name="queue.aggregationenable" value="true"/>
+      <param name="queue.depth" value="255"/>
+      <param name="queue.fragmentationenable" value="true"/>
+      <param name="reassembly.fragmentcheckthreshold" value="2"/>
+      <param name="reassembly.fragmenttimeoutthreshold" value="5"/>
+      <param name="pcrcurveuri" value="bentpipe-pcr.xml"/>
+    </mac>
+    <phy plugin="emanephy">
+      <param name="bandwidth" value="20M"/>
+      <param name="frequency" value="29910000000"/>
+      <param name="frequencyofinterest" value="29910000000"/>
+      <param name="subid" value="1"/>
+      <param name="systemnoisefigure" value="4"/>
+      <param name="txpower" value="0"/>
+      <param name="fixedantennagain" value="0"/>
+      <param name="fixedantennagainenable" value="true"/>
+      <param name="noisemode" value="all"/>
+      <param name="noisebinsize" value="20"/>
+      <param name="propagationmodel" value="precomputed"/>
+      <param name="compatibilitymode" value="2"/>
+    </phy>
+  </nem>
+
+  <nem id="2">
+    <transport plugin="virtualtransport">
+      <param name="device" value="guide-bp12"/>
+      <param name="arpmodeenable" value="true"/>
+      <param name="arpcacheenable" value="false"/>
+    </transport>
+    <mac plugin="bentpipe">
+      <paramlist name="antenna.defines"><item value="0:omni;0;0"/></paramlist>
+      <paramlist name="transponder.receive.frequency"><item value="0:29910000000"/></paramlist>
+      <paramlist name="transponder.receive.bandwidth"><item value="0:150M"/></paramlist>
+      <paramlist name="transponder.receive.antenna"><item value="0:0"/></paramlist>
+      <paramlist name="transponder.receive.action"><item value="0:process"/></paramlist>
+      <paramlist name="transponder.receive.enable"><item value="0:on"/></paramlist>
+      <paramlist name="transponder.transmit.pcrcurveindex"><item value="0:0"/></paramlist>
+      <paramlist name="transponder.transmit.frequency"><item value="0:29910000000"/></paramlist>
+      <paramlist name="transponder.transmit.bandwidth"><item value="0:150M"/></paramlist>
+      <paramlist name="transponder.transmit.antenna"><item value="0:0"/></paramlist>
+      <paramlist name="transponder.transmit.ubend.delay"><item value="0:na"/></paramlist>
+      <paramlist name="transponder.transmit.datarate"><item value="0:100M"/></paramlist>
+      <paramlist name="transponder.transmit.power"><item value="0:0"/></paramlist>
+      <paramlist name="transponder.transmit.tosmap"><item value="0:0-255"/></paramlist>
+      <paramlist name="transponder.transmit.slotperframe"><item value="0:na"/></paramlist>
+      <paramlist name="transponder.transmit.slotsize"><item value="0:na"/></paramlist>
+      <paramlist name="transponder.transmit.txslots"><item value="0:na"/></paramlist>
+      <paramlist name="transponder.transmit.mtu"><item value="0:2048"/></paramlist>
+      <paramlist name="transponder.transmit.enable"><item value="0:on"/></paramlist>
+      <param name="queue.aggregationenable" value="true"/>
+      <param name="queue.depth" value="255"/>
+      <param name="queue.fragmentationenable" value="true"/>
+      <param name="reassembly.fragmentcheckthreshold" value="2"/>
+      <param name="reassembly.fragmenttimeoutthreshold" value="5"/>
+      <param name="pcrcurveuri" value="bentpipe-pcr.xml"/>
+    </mac>
+    <phy plugin="emanephy">
+      <param name="bandwidth" value="20M"/>
+      <param name="frequency" value="29910000000"/>
+      <param name="frequencyofinterest" value="29910000000"/>
+      <param name="subid" value="1"/>
+      <param name="systemnoisefigure" value="4"/>
+      <param name="txpower" value="0"/>
+      <param name="fixedantennagain" value="0"/>
+      <param name="fixedantennagainenable" value="true"/>
+      <param name="noisemode" value="all"/>
+      <param name="noisebinsize" value="20"/>
+      <param name="propagationmodel" value="precomputed"/>
+      <param name="compatibilitymode" value="2"/>
+    </phy>
+  </nem>
+</platform>
